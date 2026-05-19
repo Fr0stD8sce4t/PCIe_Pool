@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+from pathlib import Path
 import statistics
 
 import torch
@@ -10,6 +12,36 @@ import turbobus
 
 def parse_relay_gpus(value: str) -> list[int]:
     return [int(item) for item in value.split(",") if item.strip()]
+
+
+def profile_to_dict(profile) -> dict:
+    return {
+        "target_device": profile.target_device,
+        "direct_h2d_bw_gbps": profile.direct_h2d_bw_gbps,
+        "relays": [
+            {
+                "relay_device": relay.relay_device,
+                "target_device": relay.target_device,
+                "h2d_bw_gbps": relay.h2d_bw_gbps,
+                "p2p_bw_gbps": relay.p2p_bw_gbps,
+                "effective_bw_gbps": relay.effective_bw_gbps,
+                "p2p_enabled": relay.p2p_enabled,
+            }
+            for relay in profile.relays
+        ],
+    }
+
+
+def stats_to_dict(stats) -> dict:
+    return {
+        "bytes": stats.bytes,
+        "cuda_elapsed_ms": stats.cuda_elapsed_ms,
+        "submit_to_complete_ms": stats.submit_to_complete_ms,
+        "gib_per_second": stats.gib_per_second,
+        "submit_gib_per_second": stats.submit_gib_per_second,
+        "direct_chunks": stats.direct_chunks,
+        "relay_chunks": stats.relay_chunks,
+    }
 
 
 def run_mode(runtime: turbobus.Runtime, cpu, gpu, mode: str, warmup: int, iterations: int):
@@ -25,7 +57,8 @@ def run_mode(runtime: turbobus.Runtime, cpu, gpu, mode: str, warmup: int, iterat
         handle.wait()
         stats = handle.stats
         last_stats = stats
-        samples.append(stats.gib_per_second)
+        sample = stats_to_dict(stats)
+        samples.append(sample)
         print(
             "mode",
             mode,
@@ -41,9 +74,21 @@ def run_mode(runtime: turbobus.Runtime, cpu, gpu, mode: str, warmup: int, iterat
             stats.relay_chunks,
         )
 
-    median = statistics.median(samples) if samples else 0.0
+    sample_bandwidths = [sample["gib_per_second"] for sample in samples]
+    median = statistics.median(sample_bandwidths) if sample_bandwidths else 0.0
     print("mode", mode, "median_gib_per_second", median)
-    return median, last_stats
+    return {
+        "mode": mode,
+        "median_gib_per_second": median,
+        "samples": samples,
+        "last_stats": stats_to_dict(last_stats) if last_stats is not None else None,
+    }
+
+
+def write_json(path: str, result: dict) -> None:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
 
 
 def main() -> None:
@@ -56,6 +101,7 @@ def main() -> None:
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--iterations", type=int, default=5)
     parser.add_argument("--mode", choices=["pool", "direct", "relay", "all"], default="pool")
+    parser.add_argument("--json-output")
     parser.add_argument("--verify", action="store_true")
     args = parser.parse_args()
 
@@ -68,6 +114,22 @@ def main() -> None:
     options = turbobus.RuntimeOptions(chunk_bytes=args.chunk_bytes)
     runtime = turbobus.Runtime(target_gpu=args.target_gpu, relay_gpus=relays, options=options)
     profile = runtime.profile(args.profile_bytes)
+    result = {
+        "config": {
+            "target_gpu": args.target_gpu,
+            "relay_gpus": relays,
+            "bytes": args.bytes,
+            "chunk_bytes": args.chunk_bytes,
+            "profile_bytes": args.profile_bytes,
+            "warmup": args.warmup,
+            "iterations": args.iterations,
+            "mode": args.mode,
+        },
+        "profile": profile_to_dict(profile),
+        "modes": {},
+        "speedups": {},
+        "verify": None,
+    }
 
     print("target_gpu", args.target_gpu)
     print("relay_gpus", ",".join(str(relay) for relay in relays))
@@ -92,20 +154,29 @@ def main() -> None:
     modes = ["direct", "relay", "pool"] if args.mode == "all" else [args.mode]
     medians = {}
     for mode in modes:
-        median, _ = run_mode(runtime, cpu, gpu, mode, args.warmup, args.iterations)
+        mode_result = run_mode(runtime, cpu, gpu, mode, args.warmup, args.iterations)
+        median = mode_result["median_gib_per_second"]
         medians[mode] = median
+        result["modes"][mode] = mode_result
 
     if args.mode == "all":
         direct = medians.get("direct", 0.0)
         relay = medians.get("relay", 0.0)
         pool = medians.get("pool", 0.0)
         if direct > 0.0:
-            print("pool_over_direct_median", pool / direct)
+            result["speedups"]["pool_over_direct_median"] = pool / direct
+            print("pool_over_direct_median", result["speedups"]["pool_over_direct_median"])
         if relay > 0.0:
-            print("pool_over_relay_median", pool / relay)
+            result["speedups"]["pool_over_relay_median"] = pool / relay
+            print("pool_over_relay_median", result["speedups"]["pool_over_relay_median"])
 
     if args.verify:
-        print("match", torch.equal(cpu, gpu.cpu()))
+        result["verify"] = bool(torch.equal(cpu, gpu.cpu()))
+        print("match", result["verify"])
+
+    if args.json_output:
+        write_json(args.json_output, result)
+        print("json_output", args.json_output)
 
 
 if __name__ == "__main__":

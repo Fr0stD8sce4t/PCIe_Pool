@@ -61,6 +61,11 @@ requests from paying relay overhead when there is not enough work to split.
 The pool benchmark now uses this production planner for pooled transfers instead
 of a hand-written even/odd chunk split.
 
+`benchmarks/bandwidth_pool.py` can emit a JSON report with the run config,
+profile result, per-mode samples, medians, speedups, and optional correctness
+check. `benchmarks/tune_transfer.py` sweeps chunk sizes and staging slot counts
+and reports the best median pooled bandwidth for the tested target/relay pair.
+
 ## Python API
 
 The Python wrapper only accepts contiguous PyTorch tensors:

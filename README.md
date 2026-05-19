@@ -85,8 +85,24 @@ python benchmarks/bandwidth_pool.py \
   --warmup 1 \
   --iterations 5 \
   --mode all \
-  --verify
+  --verify \
+  --json-output benchmarks/results/gpu6_relay5.json
 ```
 
 Use physical CUDA device IDs. Avoid setting `CUDA_VISIBLE_DEVICES` in a way that
 renumbers GPUs unless the runtime and PyTorch tensors use the same remapped IDs.
+
+To sweep chunk sizes and staging slot counts:
+
+```bash
+python benchmarks/tune_transfer.py \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --bytes 268435456 \
+  --profile-bytes 16777216 \
+  --chunk-mib 4,8,16,32,64 \
+  --staging-slots 2,3,4 \
+  --warmup 1 \
+  --iterations 5 \
+  --json-output benchmarks/results/tune_gpu6_relay5.json
+```

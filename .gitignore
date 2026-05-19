@@ -65,6 +65,6 @@ Thumbs.db
 
 # Local benchmark outputs
 results/
+benchmarks/results/
 profiles/
 *.jsonl
-

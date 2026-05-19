@@ -247,6 +247,58 @@ benchmark. Correctness passed with `match True`, all measured Python pooling
 runs used both direct and relay chunks, and the 100-iteration run stayed around
 14.42 GiB/s median without transfer errors.
 
+## 2026-05-19: Python Direct/Relay/Pool Mode Comparison
+
+This run validates the Python benchmark's explicit transfer modes and CUDA-event
+based timing stats.
+
+Command:
+
+```text
+python benchmarks/bandwidth_pool.py \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --bytes 268435456 \
+  --chunk-bytes 16777216 \
+  --profile-bytes 16777216 \
+  --warmup 1 \
+  --iterations 5 \
+  --mode all \
+  --verify
+```
+
+Profile result:
+
+```text
+direct_h2d_bw_gbps 7.499789148536587
+relay 5 h2d 7.468015139322194 p2p 40.792083213708565 effective 7.468015139322194
+```
+
+Median transfer results:
+
+```text
+mode direct median_gib_per_second 7.349199332453709
+mode relay median_gib_per_second 7.2530436365708955
+mode pool median_gib_per_second 14.358309897048315
+pool_over_direct_median 1.953724378333666
+pool_over_relay_median 1.979625467114473
+match True
+```
+
+Chunk assignment checks:
+
+```text
+direct mode: direct_chunks 16, relay_chunks 0
+relay mode:  direct_chunks 0, relay_chunks 16
+pool mode:   direct_chunks 8, relay_chunks 8
+```
+
+Conclusion:
+
+The explicit Python direct/relay/pool modes match the expected planner behavior.
+The pooled path remained about 1.95x faster than direct-only H2D and about 1.98x
+faster than relay-only transfer on the tested GPU6 target + GPU5 relay pair.
+
 ## Next Implementation Steps
 
 1. Replace the benchmark-only even/odd chunk split with the production
