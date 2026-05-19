@@ -142,9 +142,11 @@ Then run the generated binaries in this order:
 
 ```bash
 ./build-test/test_planner
+./build-test/test_p2p_matrix
 ./build-test/test_direct_h2d
 ./build-test/test_relay_h2d_p2p
 ./build-test/test_profiler
+./build-test/bench_pool_bandwidth
 ```
 
 On Windows, the executable paths and build configuration directory may differ,
@@ -158,6 +160,7 @@ The CUDA tests can be steered away from busy GPUs:
 TURBOBUS_TARGET_GPU=6 TURBOBUS_TEST_BYTES=16777216 ./build-test/test_direct_h2d
 TURBOBUS_TARGET_GPU=6 TURBOBUS_RELAY_GPU=5 TURBOBUS_TEST_BYTES=33554432 ./build-test/test_relay_h2d_p2p
 TURBOBUS_TARGET_GPU=6 TURBOBUS_RELAY_GPU=5 TURBOBUS_PROFILE_BYTES=16777216 ./build-test/test_profiler
+TURBOBUS_TARGET_GPU=6 TURBOBUS_RELAY_GPU=5 TURBOBUS_BENCH_BYTES=268435456 ./build-test/bench_pool_bandwidth
 ```
 
 Useful variables:
@@ -166,7 +169,10 @@ Useful variables:
 - `TURBOBUS_RELAY_GPU`: relay GPU id
 - `TURBOBUS_TEST_BYTES`: correctness-test transfer size in bytes
 - `TURBOBUS_PROFILE_BYTES`: profiler transfer size in bytes
+- `TURBOBUS_BENCH_BYTES`: benchmark transfer size in bytes
 - `TURBOBUS_CHUNK_BYTES`: chunk size in bytes
+- `TURBOBUS_STAGING_SLOTS`: relay staging slot count
+- `TURBOBUS_VERIFY`: set to `0` to skip benchmark readback verification
 
 If `test_relay_h2d_p2p` is run without `TURBOBUS_TARGET_GPU` and
 `TURBOBUS_RELAY_GPU`, it scans for the first CUDA P2P-capable pair.
