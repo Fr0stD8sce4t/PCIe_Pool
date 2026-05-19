@@ -37,6 +37,8 @@ docs/                   Design notes
 references/             Cloned reference repositories
 ```
 
+Initial server benchmark notes are recorded in `docs/benchmark_notes.md`.
+
 ## Minimal Python Shape
 
 ```python
