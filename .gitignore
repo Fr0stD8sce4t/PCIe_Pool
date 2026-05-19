@@ -1,0 +1,70 @@
+# Reference repositories
+references/
+
+# Build outputs
+build/
+build-*/
+cmake-build-*/
+out/
+dist/
+*.egg-info/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+
+# Native build artifacts
+*.a
+*.lib
+*.so
+*.so.*
+*.dll
+*.dylib
+*.exe
+*.exp
+*.ilk
+*.obj
+*.o
+*.pdb
+*.ptx
+*.cubin
+*.fatbin
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.venv/
+venv/
+env/
+
+# Logs and runtime files
+*.log
+*.out
+*.err
+*.pid
+*.sock
+
+# Editor and OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Local benchmark outputs
+results/
+profiles/
+*.jsonl
+
