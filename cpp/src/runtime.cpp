@@ -11,6 +11,8 @@ TurboBusRuntime::~TurboBusRuntime() = default;
 void TurboBusRuntime::Init(int target_device, const std::vector<int>& relay_devices) {
   target_device_ = target_device;
   requested_relays_ = relay_devices;
+  profile_ = {};
+  has_profile_ = false;
 
   topology_ = topology_manager_.Discover(target_device_, requested_relays_,
                                          options_.enable_peer_access);
@@ -30,6 +32,7 @@ ProfileResult TurboBusRuntime::Profile(std::size_t bytes) {
     throw std::runtime_error("runtime is not initialized");
   }
   profile_ = profiler_.Profile(target_device_, enabled_relays_, bytes);
+  has_profile_ = true;
   return profile_;
 }
 
@@ -38,8 +41,23 @@ TransferHandle TurboBusRuntime::FetchToGpu(void* host_ptr, void* target_gpu_ptr,
   if (!initialized_) {
     throw std::runtime_error("runtime is not initialized");
   }
-  if (profile_.direct_h2d_bw_gbps <= 0.0 && profile_.relays.empty()) {
-    Profile();
+  if (!has_profile_ && options_.profile_on_first_transfer) {
+    Profile(options_.profile_bytes);
+  }
+  if (!has_profile_) {
+    profile_.target_device = target_device_;
+    profile_.direct_h2d_bw_gbps = 1.0;
+    for (const int relay_device : enabled_relays_) {
+      RelayProfile relay;
+      relay.relay_device = relay_device;
+      relay.target_device = target_device_;
+      relay.h2d_bw_gbps = 1.0;
+      relay.p2p_bw_gbps = 1.0;
+      relay.effective_bw_gbps = 1.0;
+      relay.p2p_enabled = true;
+      profile_.relays.push_back(relay);
+    }
+    has_profile_ = true;
   }
 
   BufferView host;
@@ -62,5 +80,12 @@ void TurboBusRuntime::Wait(const TransferHandle& handle) {
   executor_.Wait(handle);
 }
 
-}  // namespace turbobus
+TransferStats TurboBusRuntime::GetStats(const TransferHandle& handle) const {
+  return executor_.GetStats(handle);
+}
 
+const ProfileResult& TurboBusRuntime::CachedProfile() const {
+  return profile_;
+}
+
+}  // namespace turbobus

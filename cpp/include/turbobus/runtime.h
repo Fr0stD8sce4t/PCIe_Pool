@@ -19,6 +19,8 @@ class TurboBusRuntime {
   ProfileResult Profile(std::size_t bytes = 256ull * 1024ull * 1024ull);
   TransferHandle FetchToGpu(void* host_ptr, void* target_gpu_ptr, std::size_t bytes);
   void Wait(const TransferHandle& handle);
+  TransferStats GetStats(const TransferHandle& handle) const;
+  const ProfileResult& CachedProfile() const;
 
  private:
   RuntimeOptions options_;
@@ -27,6 +29,7 @@ class TurboBusRuntime {
   std::vector<int> enabled_relays_;
   Topology topology_;
   ProfileResult profile_;
+  bool has_profile_ = false;
   bool initialized_ = false;
 
   TopologyManager topology_manager_;
@@ -36,4 +39,3 @@ class TurboBusRuntime {
 };
 
 }  // namespace turbobus
-

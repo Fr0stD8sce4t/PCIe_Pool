@@ -72,14 +72,22 @@ The pooled path reached 14.31 GiB/s, about 1.96x faster than direct-only H2D.
 ## Next Implementation Steps
 
 1. Replace the benchmark-only even/odd chunk split with the production
-   `ChunkPlanner` bandwidth-proportional assignment.
-2. Add a repeated benchmark mode and report median / min / max bandwidth.
+   `ChunkPlanner` bandwidth-proportional assignment. Done after the initial
+   smoke result.
+2. Add a repeated benchmark mode and report median bandwidth. Done after the
+   initial smoke result.
 3. Support multiple relay GPUs in the benchmark and executor validation path.
+   The benchmark now accepts `TURBOBUS_RELAY_GPUS=5,6` and filters by CUDA P2P
+   capability.
 4. Add a topology-aware relay picker that filters by CUDA P2P capability and
-   measured effective bandwidth.
+   measured effective bandwidth. The current runtime scans P2P-capable relays
+   when no relay list is provided; the benchmark profiles the enabled relay list
+   and uses `ChunkPlanner`.
 5. Add Python extension build packaging so `benchmarks/bandwidth_pool.py` can
-   run without manual CMake module handling.
+   run without manual CMake module handling. A minimal `pip install -e .`
+   CMake-backed package build has been added.
 6. Add profiler result caching so runtime does not profile on every first
-   transfer.
+   transfer. The runtime now caches profile results.
 7. Add basic transfer metrics to `TransferHandle` or a returned stats object.
-
+   `TransferStats` now records bytes, submit-to-complete time, effective GiB/s,
+   and direct/relay chunk counts.

@@ -48,6 +48,9 @@ Chunks are assigned by the current normalized assigned bytes over path bandwidth
 This approximates bandwidth-proportional distribution without adding a complex
 runtime scheduler.
 
+The pool benchmark now uses this production planner for pooled transfers instead
+of a hand-written even/odd chunk split.
+
 ## Python API
 
 The Python wrapper only accepts contiguous PyTorch tensors:
@@ -57,6 +60,14 @@ The Python wrapper only accepts contiguous PyTorch tensors:
 - copy size is derived from the source tensor byte size
 
 The native extension receives raw tensor pointers and byte counts.
+
+`TransferHandle.wait()` populates a lightweight stats object with total bytes,
+submit-to-complete time, effective GiB/s, and direct/relay chunk counts.
+
+The runtime caches the first profile result and reuses it for subsequent
+transfers. By default, profiling runs on the first transfer. This can be disabled
+through `RuntimeOptions.profile_on_first_transfer`, in which case the runtime
+falls back to equal path weights until `profile()` is called explicitly.
 
 ## Daemon Boundary
 

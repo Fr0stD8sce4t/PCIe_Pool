@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 
 #include <atomic>
+#include <chrono>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -21,6 +22,15 @@ void CheckCuda(cudaError_t result, const char* message) {
 
 void IgnoreCuda(cudaError_t result) {
   (void)result;
+}
+
+double Gbps(std::size_t bytes, double milliseconds) {
+  if (milliseconds <= 0.0) {
+    return 0.0;
+  }
+  const double seconds = milliseconds / 1000.0;
+  const double gib = static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0);
+  return gib / seconds;
 }
 
 }  // namespace
@@ -42,6 +52,8 @@ struct CudaRelayExecutor::Impl {
   std::unordered_map<int, RelayState> relays;
   std::atomic<std::uint64_t> next_id{1};
   std::unordered_map<std::uint64_t, std::vector<cudaEvent_t>> transfer_events;
+  std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point> start_times;
+  std::unordered_map<std::uint64_t, TransferStats> completed_stats;
 
   void Destroy() noexcept {
     for (auto& item : transfer_events) {
@@ -52,6 +64,8 @@ struct CudaRelayExecutor::Impl {
       }
     }
     transfer_events.clear();
+    start_times.clear();
+    completed_stats.clear();
 
     if (direct_stream != nullptr) {
       IgnoreCuda(cudaStreamDestroy(direct_stream));
@@ -173,6 +187,15 @@ TransferHandle CudaRelayExecutor::Submit(const BufferView& host, const BufferVie
   auto* target_bytes = static_cast<char*>(target.ptr);
   const std::uint64_t id = impl_->next_id.fetch_add(1);
   std::vector<cudaEvent_t> completion_events;
+  TransferStats stats;
+  stats.bytes = plan.total_bytes;
+  for (const auto& assignment : plan.assignments) {
+    if (assignment.path.kind == PathKind::DirectH2D) {
+      stats.direct_chunks += assignment.chunks.size();
+    } else {
+      stats.relay_chunks += assignment.chunks.size();
+    }
+  }
 
   try {
     for (const auto& assignment : plan.assignments) {
@@ -241,6 +264,8 @@ TransferHandle CudaRelayExecutor::Submit(const BufferView& host, const BufferVie
     }
 
     impl_->transfer_events.emplace(id, std::move(completion_events));
+    impl_->start_times.emplace(id, std::chrono::steady_clock::now());
+    impl_->completed_stats.emplace(id, stats);
   } catch (...) {
     for (auto event : completion_events) {
       IgnoreCuda(cudaEventDestroy(event));
@@ -250,6 +275,7 @@ TransferHandle CudaRelayExecutor::Submit(const BufferView& host, const BufferVie
   TransferHandle handle;
   handle.id = id;
   handle.status = TransferStatus::Submitted;
+  handle.stats = stats;
   return handle;
 }
 
@@ -262,7 +288,27 @@ void CudaRelayExecutor::Wait(const TransferHandle& handle) {
     CheckCuda(cudaEventSynchronize(event), "cudaEventSynchronize failed");
     CheckCuda(cudaEventDestroy(event), "cudaEventDestroy completion failed");
   }
+  const auto end = std::chrono::steady_clock::now();
+  const auto start_it = impl_->start_times.find(handle.id);
+  const auto stats_it = impl_->completed_stats.find(handle.id);
+  if (start_it != impl_->start_times.end() && stats_it != impl_->completed_stats.end()) {
+    const auto microseconds =
+        std::chrono::duration_cast<std::chrono::microseconds>(end - start_it->second)
+            .count();
+    stats_it->second.submit_to_complete_ms = static_cast<double>(microseconds) / 1000.0;
+    stats_it->second.gib_per_second =
+        Gbps(stats_it->second.bytes, stats_it->second.submit_to_complete_ms);
+    impl_->start_times.erase(start_it);
+  }
   impl_->transfer_events.erase(event_it);
+}
+
+TransferStats CudaRelayExecutor::GetStats(const TransferHandle& handle) const {
+  const auto stats_it = impl_->completed_stats.find(handle.id);
+  if (stats_it == impl_->completed_stats.end()) {
+    throw std::invalid_argument("unknown transfer handle");
+  }
+  return stats_it->second;
 }
 
 }  // namespace turbobus

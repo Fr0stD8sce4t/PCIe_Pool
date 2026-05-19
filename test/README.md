@@ -160,16 +160,18 @@ The CUDA tests can be steered away from busy GPUs:
 TURBOBUS_TARGET_GPU=6 TURBOBUS_TEST_BYTES=16777216 ./build-test/test_direct_h2d
 TURBOBUS_TARGET_GPU=6 TURBOBUS_RELAY_GPU=5 TURBOBUS_TEST_BYTES=33554432 ./build-test/test_relay_h2d_p2p
 TURBOBUS_TARGET_GPU=6 TURBOBUS_RELAY_GPU=5 TURBOBUS_PROFILE_BYTES=16777216 ./build-test/test_profiler
-TURBOBUS_TARGET_GPU=6 TURBOBUS_RELAY_GPU=5 TURBOBUS_BENCH_BYTES=268435456 ./build-test/bench_pool_bandwidth
+TURBOBUS_TARGET_GPU=6 TURBOBUS_RELAY_GPU=5 TURBOBUS_BENCH_BYTES=268435456 TURBOBUS_BENCH_ITERS=5 ./build-test/bench_pool_bandwidth
 ```
 
 Useful variables:
 
 - `TURBOBUS_TARGET_GPU`: target GPU id
 - `TURBOBUS_RELAY_GPU`: relay GPU id
+- `TURBOBUS_RELAY_GPUS`: comma-separated relay GPU ids, preferred by the pool benchmark
 - `TURBOBUS_TEST_BYTES`: correctness-test transfer size in bytes
 - `TURBOBUS_PROFILE_BYTES`: profiler transfer size in bytes
 - `TURBOBUS_BENCH_BYTES`: benchmark transfer size in bytes
+- `TURBOBUS_BENCH_ITERS`: benchmark iteration count
 - `TURBOBUS_CHUNK_BYTES`: chunk size in bytes
 - `TURBOBUS_STAGING_SLOTS`: relay staging slot count
 - `TURBOBUS_VERIFY`: set to `0` to skip benchmark readback verification

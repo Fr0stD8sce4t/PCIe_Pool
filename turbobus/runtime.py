@@ -22,6 +22,8 @@ class RuntimeOptions:
     chunk_bytes: int = 16 * 1024 * 1024
     staging_slots: int = 2
     enable_peer_access: bool = True
+    profile_bytes: int = 256 * 1024 * 1024
+    profile_on_first_transfer: bool = True
 
     def to_native(self):
         _require_extension()
@@ -29,6 +31,8 @@ class RuntimeOptions:
         options.chunk_bytes = self.chunk_bytes
         options.staging_slots = self.staging_slots
         options.enable_peer_access = self.enable_peer_access
+        options.profile_bytes = self.profile_bytes
+        options.profile_on_first_transfer = self.profile_on_first_transfer
         return options
 
 
@@ -49,18 +53,21 @@ class Runtime:
     def __init__(
         self,
         target_gpu: int,
-        relay_gpus: Iterable[int],
+        relay_gpus: Iterable[int] | None = None,
         options: RuntimeOptions | None = None,
     ) -> None:
         _require_extension()
         self.target_gpu = int(target_gpu)
-        self.relay_gpus = [int(gpu) for gpu in relay_gpus]
+        self.relay_gpus = [int(gpu) for gpu in (relay_gpus or [])]
         self.options = options or RuntimeOptions()
         self._runtime = _turbobus.Runtime(self.options.to_native())
         self._runtime.init(self.target_gpu, self.relay_gpus)
 
     def profile(self, bytes: int = 256 * 1024 * 1024):
         return self._runtime.profile(int(bytes))
+
+    def cached_profile(self):
+        return self._runtime.cached_profile()
 
     def fetch_to_gpu(self, cpu_tensor, gpu_tensor):
         _require_torch()
@@ -93,6 +100,10 @@ class Runtime:
     def wait(self, handle: "TransferHandle") -> None:
         self._runtime.wait(handle.native)
         handle._status = "complete"
+        handle._stats = self._runtime.stats(handle.native)
+
+    def stats(self, handle: "TransferHandle"):
+        return self._runtime.stats(handle.native)
 
 
 class TransferHandle:
@@ -100,6 +111,7 @@ class TransferHandle:
         self.runtime = runtime
         self.native = native_handle
         self._status = "submitted"
+        self._stats = None
         self.error = ""
 
     @property
@@ -113,6 +125,10 @@ class TransferHandle:
     @property
     def done(self) -> bool:
         return self._status == "complete"
+
+    @property
+    def stats(self):
+        return self._stats
 
     def wait(self) -> None:
         if self.done:

@@ -57,7 +57,11 @@ int main() {
   assert(relay_bytes > 0);
   assert(relay_bytes >= direct_bytes);
 
+  turbobus::TransferHandle handle;
+  assert(handle.stats.bytes == 0);
+  assert(handle.stats.direct_chunks == 0);
+  assert(handle.stats.relay_chunks == 0);
+
   std::cout << "planner test passed\n";
   return 0;
 }
-

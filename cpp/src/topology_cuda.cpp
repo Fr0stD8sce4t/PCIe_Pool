@@ -2,8 +2,10 @@
 
 #include <cuda_runtime.h>
 
+#include <cstddef>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace turbobus {
 
@@ -56,23 +58,23 @@ Topology TopologyManager::Discover(int target_device,
         } else {
           CheckCuda(enable_result, "cudaDeviceEnablePeerAccess relay->target failed");
         }
-        CheckCuda(cudaSetDevice(target_device), "cudaSetDevice target failed");
-        const cudaError_t reverse_result = cudaDeviceEnablePeerAccess(device, 0);
-        if (reverse_result == cudaSuccess ||
-            reverse_result == cudaErrorPeerAccessAlreadyEnabled) {
-          if (reverse_result == cudaErrorPeerAccessAlreadyEnabled) {
-            cudaGetLastError();
-          }
-        } else {
-          CheckCuda(reverse_result, "cudaDeviceEnablePeerAccess target->relay failed");
-        }
         CheckCuda(cudaSetDevice(previous_device), "cudaSetDevice restore failed");
       }
     }
     topology.devices.push_back(info);
   }
 
-  for (const int relay_device : relay_devices) {
+  std::vector<int> candidates = relay_devices;
+  if (candidates.empty()) {
+    candidates.reserve(static_cast<std::size_t>(device_count - 1));
+    for (int device = 0; device < device_count; ++device) {
+      if (device != target_device) {
+        candidates.push_back(device);
+      }
+    }
+  }
+
+  for (const int relay_device : candidates) {
     if (relay_device < 0 || relay_device >= device_count) {
       throw std::invalid_argument("relay_device is out of range");
     }

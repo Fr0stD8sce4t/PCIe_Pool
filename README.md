@@ -39,6 +39,15 @@ references/             Cloned reference repositories
 
 Initial server benchmark notes are recorded in `docs/benchmark_notes.md`.
 
+## Build Python Extension
+
+```bash
+pip install -e .
+```
+
+This invokes CMake with `TURBOBUS_BUILD_PYTHON=ON` and builds
+`turbobus._turbobus`.
+
 ## Minimal Python Shape
 
 ```python
@@ -55,6 +64,10 @@ rt = turbobus.Runtime(target_gpu=target_gpu, relay_gpus=relay_gpus)
 rt.profile()
 handle = rt.fetch_to_gpu(cpu_tensor, gpu_tensor)
 handle.wait()
+print(handle.stats.gib_per_second)
 ```
+
+Pass `relay_gpus=None` or omit it to let the runtime scan CUDA P2P-capable
+relay GPUs for the target device.
 
 This repository has not been built or tested yet in the current environment.

@@ -81,12 +81,23 @@ struct RuntimeOptions {
   std::size_t chunk_bytes = kDefaultChunkBytes;
   int staging_slots = kDefaultStagingSlots;
   bool enable_peer_access = true;
+  std::size_t profile_bytes = 256ull * 1024ull * 1024ull;
+  bool profile_on_first_transfer = true;
+};
+
+struct TransferStats {
+  std::size_t bytes = 0;
+  double submit_to_complete_ms = 0.0;
+  double gib_per_second = 0.0;
+  std::size_t direct_chunks = 0;
+  std::size_t relay_chunks = 0;
 };
 
 struct TransferHandle {
   std::uint64_t id = 0;
   TransferStatus status = TransferStatus::Pending;
   std::string error;
+  TransferStats stats;
 };
 
 }  // namespace turbobus

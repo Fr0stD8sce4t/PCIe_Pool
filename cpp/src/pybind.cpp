@@ -31,7 +31,10 @@ PYBIND11_MODULE(_turbobus, m) {
       .def(py::init<>())
       .def_readwrite("chunk_bytes", &turbobus::RuntimeOptions::chunk_bytes)
       .def_readwrite("staging_slots", &turbobus::RuntimeOptions::staging_slots)
-      .def_readwrite("enable_peer_access", &turbobus::RuntimeOptions::enable_peer_access);
+      .def_readwrite("enable_peer_access", &turbobus::RuntimeOptions::enable_peer_access)
+      .def_readwrite("profile_bytes", &turbobus::RuntimeOptions::profile_bytes)
+      .def_readwrite("profile_on_first_transfer",
+                     &turbobus::RuntimeOptions::profile_on_first_transfer);
 
   py::class_<turbobus::RelayProfile>(m, "RelayProfile")
       .def_readonly("relay_device", &turbobus::RelayProfile::relay_device)
@@ -45,6 +48,14 @@ PYBIND11_MODULE(_turbobus, m) {
       .def_readonly("target_device", &turbobus::ProfileResult::target_device)
       .def_readonly("direct_h2d_bw_gbps", &turbobus::ProfileResult::direct_h2d_bw_gbps)
       .def_readonly("relays", &turbobus::ProfileResult::relays);
+
+  py::class_<turbobus::TransferStats>(m, "TransferStats")
+      .def_readonly("bytes", &turbobus::TransferStats::bytes)
+      .def_readonly("submit_to_complete_ms",
+                    &turbobus::TransferStats::submit_to_complete_ms)
+      .def_readonly("gib_per_second", &turbobus::TransferStats::gib_per_second)
+      .def_readonly("direct_chunks", &turbobus::TransferStats::direct_chunks)
+      .def_readonly("relay_chunks", &turbobus::TransferStats::relay_chunks);
 
   py::class_<turbobus::TransferHandle>(m, "TransferHandle")
       .def_property_readonly("id", [](const turbobus::TransferHandle& h) { return h.id; })
@@ -60,6 +71,8 @@ PYBIND11_MODULE(_turbobus, m) {
            py::arg("relay_devices"))
       .def("profile", &turbobus::TurboBusRuntime::Profile,
            py::arg("bytes") = 256ull * 1024ull * 1024ull)
+      .def("cached_profile", &turbobus::TurboBusRuntime::CachedProfile,
+           py::return_value_policy::reference_internal)
       .def("fetch_to_gpu",
            [](turbobus::TurboBusRuntime& runtime, std::uintptr_t host_ptr,
               std::uintptr_t target_ptr, std::size_t bytes) {
@@ -67,5 +80,6 @@ PYBIND11_MODULE(_turbobus, m) {
                                        reinterpret_cast<void*>(target_ptr), bytes);
            },
            py::arg("host_ptr"), py::arg("target_ptr"), py::arg("bytes"))
-      .def("wait", &turbobus::TurboBusRuntime::Wait, py::arg("handle"));
+      .def("wait", &turbobus::TurboBusRuntime::Wait, py::arg("handle"))
+      .def("stats", &turbobus::TurboBusRuntime::GetStats, py::arg("handle"));
 }
