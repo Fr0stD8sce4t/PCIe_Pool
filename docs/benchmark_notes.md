@@ -299,6 +299,94 @@ The explicit Python direct/relay/pool modes match the expected planner behavior.
 The pooled path remained about 1.95x faster than direct-only H2D and about 1.98x
 faster than relay-only transfer on the tested GPU6 target + GPU5 relay pair.
 
+## 2026-05-19: JSON Benchmark Output and Tuner Result
+
+This run validates `--json-output` for the Python benchmark and the first
+chunk/staging sweep tuner.
+
+JSON benchmark command:
+
+```text
+python benchmarks/bandwidth_pool.py \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --bytes 268435456 \
+  --chunk-bytes 16777216 \
+  --profile-bytes 16777216 \
+  --warmup 1 \
+  --iterations 5 \
+  --mode all \
+  --verify \
+  --json-output benchmarks/results/gpu6_relay5.json
+```
+
+Result:
+
+```text
+direct_h2d_bw_gbps 7.518844436581721
+relay 5 h2d 7.533576697043448 p2p 39.88248432714853 effective 7.533576697043448
+mode direct median_gib_per_second 7.333724996503007
+mode relay median_gib_per_second 6.841889157344973
+mode pool median_gib_per_second 13.53812529727491
+pool_over_direct_median 1.8460094022792497
+pool_over_relay_median 1.9787115789125767
+match True
+json_output benchmarks/results/gpu6_relay5.json
+```
+
+Tuner command:
+
+```text
+python benchmarks/tune_transfer.py \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --bytes 268435456 \
+  --profile-bytes 16777216 \
+  --chunk-mib 4,8,16,32,64 \
+  --staging-slots 2,3,4 \
+  --warmup 1 \
+  --iterations 5 \
+  --json-output benchmarks/results/tune_gpu6_relay5.json
+```
+
+Sweep result:
+
+```text
+4 MiB, slots 2: 14.473221746095176 GiB/s
+4 MiB, slots 3: 14.482986700540451 GiB/s
+4 MiB, slots 4: 14.459291213205049 GiB/s
+8 MiB, slots 2: 14.45057294815083 GiB/s
+8 MiB, slots 3: 14.45271128925105 GiB/s
+8 MiB, slots 4: 14.446404843213655 GiB/s
+16 MiB, slots 2: 14.34523384771235 GiB/s
+16 MiB, slots 3: 14.339229463335695 GiB/s
+16 MiB, slots 4: 14.342309495685173 GiB/s
+32 MiB, slots 2: 14.105244806794348 GiB/s
+32 MiB, slots 3: 14.103971379715793 GiB/s
+32 MiB, slots 4: 14.094633367693877 GiB/s
+64 MiB, slots 2: 13.6278875121193 GiB/s
+64 MiB, slots 3: 13.628458557204235 GiB/s
+64 MiB, slots 4: 13.61617818710527 GiB/s
+```
+
+Best candidate:
+
+```text
+chunk_bytes 4194304
+chunk_size 4 MiB
+staging_slots 3
+median_gib_per_second 14.482986700540451
+json_output benchmarks/results/tune_gpu6_relay5.json
+```
+
+Conclusion:
+
+The tuner found `4 MiB` chunks with `3` staging slots as the best candidate in
+this sweep. The result suggests smaller chunks improve pooling on this GPU6
+target + GPU5 relay pair by exposing more chunk-level parallelism. The default
+chunk size remains `16 MiB` for now until repeated sweeps confirm that `4 MiB`
+is consistently better under different machine load.
+
 ## Next Implementation Steps
 
 1. Replace the benchmark-only even/odd chunk split with the production
