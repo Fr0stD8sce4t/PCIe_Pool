@@ -149,3 +149,24 @@ Then run the generated binaries in this order:
 
 On Windows, the executable paths and build configuration directory may differ,
 for example `build-test\Release\test_planner.exe`.
+
+## CUDA Test Environment Variables
+
+The CUDA tests can be steered away from busy GPUs:
+
+```bash
+TURBOBUS_TARGET_GPU=6 TURBOBUS_TEST_BYTES=16777216 ./build-test/test_direct_h2d
+TURBOBUS_TARGET_GPU=6 TURBOBUS_RELAY_GPU=5 TURBOBUS_TEST_BYTES=33554432 ./build-test/test_relay_h2d_p2p
+TURBOBUS_TARGET_GPU=6 TURBOBUS_RELAY_GPU=5 TURBOBUS_PROFILE_BYTES=16777216 ./build-test/test_profiler
+```
+
+Useful variables:
+
+- `TURBOBUS_TARGET_GPU`: target GPU id
+- `TURBOBUS_RELAY_GPU`: relay GPU id
+- `TURBOBUS_TEST_BYTES`: correctness-test transfer size in bytes
+- `TURBOBUS_PROFILE_BYTES`: profiler transfer size in bytes
+- `TURBOBUS_CHUNK_BYTES`: chunk size in bytes
+
+If `test_relay_h2d_p2p` is run without `TURBOBUS_TARGET_GPU` and
+`TURBOBUS_RELAY_GPU`, it scans for the first CUDA P2P-capable pair.

@@ -1,6 +1,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <vector>
 
@@ -17,6 +18,22 @@ void CheckCuda(cudaError_t result, const char* message) {
   }
 }
 
+int EnvInt(const char* name, int fallback) {
+  const char* value = std::getenv(name);
+  if (value == nullptr || value[0] == '\0') {
+    return fallback;
+  }
+  return std::atoi(value);
+}
+
+std::size_t EnvSize(const char* name, std::size_t fallback) {
+  const char* value = std::getenv(name);
+  if (value == nullptr || value[0] == '\0') {
+    return fallback;
+  }
+  return static_cast<std::size_t>(std::strtoull(value, nullptr, 10));
+}
+
 }  // namespace
 
 int main() {
@@ -27,8 +44,12 @@ int main() {
     return 77;
   }
 
-  const int target = 0;
-  const std::size_t bytes = 64ull * 1024ull * 1024ull;
+  const int target = EnvInt("TURBOBUS_TARGET_GPU", 0);
+  if (target < 0 || target >= device_count) {
+    std::cerr << "TURBOBUS_TARGET_GPU is out of range\n";
+    return 2;
+  }
+  const std::size_t bytes = EnvSize("TURBOBUS_TEST_BYTES", 16ull * 1024ull * 1024ull);
   auto* host = static_cast<std::uint8_t*>(nullptr);
   auto* dst = static_cast<std::uint8_t*>(nullptr);
   std::vector<std::uint8_t> back(bytes);
@@ -42,7 +63,7 @@ int main() {
   }
 
   turbobus::RuntimeOptions options;
-  options.chunk_bytes = 16ull * 1024ull * 1024ull;
+  options.chunk_bytes = EnvSize("TURBOBUS_CHUNK_BYTES", 4ull * 1024ull * 1024ull);
   options.staging_slots = 2;
 
   turbobus::TurboBusRuntime runtime(options);
@@ -63,4 +84,3 @@ int main() {
   std::cout << "direct h2d test passed\n";
   return 0;
 }
-

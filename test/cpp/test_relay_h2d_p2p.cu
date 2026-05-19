@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <vector>
 
@@ -19,6 +20,49 @@ void CheckCuda(cudaError_t result, const char* message) {
   }
 }
 
+int EnvInt(const char* name, int fallback) {
+  const char* value = std::getenv(name);
+  if (value == nullptr || value[0] == '\0') {
+    return fallback;
+  }
+  return std::atoi(value);
+}
+
+std::size_t EnvSize(const char* name, std::size_t fallback) {
+  const char* value = std::getenv(name);
+  if (value == nullptr || value[0] == '\0') {
+    return fallback;
+  }
+  return static_cast<std::size_t>(std::strtoull(value, nullptr, 10));
+}
+
+bool PickP2PPair(int device_count, int* target, int* relay) {
+  const int env_target = EnvInt("TURBOBUS_TARGET_GPU", -1);
+  const int env_relay = EnvInt("TURBOBUS_RELAY_GPU", -1);
+  if (env_target >= 0 && env_relay >= 0) {
+    *target = env_target;
+    *relay = env_relay;
+    return true;
+  }
+
+  for (int dst = 0; dst < device_count; ++dst) {
+    for (int src = 0; src < device_count; ++src) {
+      if (src == dst) {
+        continue;
+      }
+      int can_access = 0;
+      CheckCuda(cudaDeviceCanAccessPeer(&can_access, src, dst),
+                "cudaDeviceCanAccessPeer failed");
+      if (can_access) {
+        *target = dst;
+        *relay = src;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 int main() {
@@ -29,8 +73,18 @@ int main() {
     return 77;
   }
 
-  const int target = 0;
-  const int relay = 1;
+  int target = -1;
+  int relay = -1;
+  if (!PickP2PPair(device_count, &target, &relay)) {
+    std::cerr << "no P2P-capable GPU pair found\n";
+    return 77;
+  }
+  if (target < 0 || target >= device_count || relay < 0 || relay >= device_count ||
+      target == relay) {
+    std::cerr << "invalid target/relay GPU pair\n";
+    return 2;
+  }
+
   int can_access = 0;
   CheckCuda(cudaDeviceCanAccessPeer(&can_access, relay, target),
             "cudaDeviceCanAccessPeer failed");
@@ -47,7 +101,9 @@ int main() {
     CheckCuda(enable_result, "cudaDeviceEnablePeerAccess relay->target failed");
   }
 
-  const std::size_t bytes = 96ull * 1024ull * 1024ull;
+  std::cout << "using target GPU " << target << ", relay GPU " << relay << "\n";
+
+  const std::size_t bytes = EnvSize("TURBOBUS_TEST_BYTES", 32ull * 1024ull * 1024ull);
   auto* host = static_cast<std::uint8_t*>(nullptr);
   auto* dst = static_cast<std::uint8_t*>(nullptr);
   std::vector<std::uint8_t> back(bytes);
@@ -61,7 +117,7 @@ int main() {
   }
 
   turbobus::RuntimeOptions options;
-  options.chunk_bytes = 16ull * 1024ull * 1024ull;
+  options.chunk_bytes = EnvSize("TURBOBUS_CHUNK_BYTES", 4ull * 1024ull * 1024ull);
   options.staging_slots = 2;
 
   turbobus::CudaRelayExecutor executor;

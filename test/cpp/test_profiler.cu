@@ -1,4 +1,5 @@
 #include <cassert>
+#include <cstdlib>
 #include <iostream>
 
 #include <cuda_runtime.h>
@@ -14,6 +15,22 @@ void CheckCuda(cudaError_t result, const char* message) {
   }
 }
 
+int EnvInt(const char* name, int fallback) {
+  const char* value = std::getenv(name);
+  if (value == nullptr || value[0] == '\0') {
+    return fallback;
+  }
+  return std::atoi(value);
+}
+
+std::size_t EnvSize(const char* name, std::size_t fallback) {
+  const char* value = std::getenv(name);
+  if (value == nullptr || value[0] == '\0') {
+    return fallback;
+  }
+  return static_cast<std::size_t>(std::strtoull(value, nullptr, 10));
+}
+
 }  // namespace
 
 int main() {
@@ -24,13 +41,32 @@ int main() {
     return 77;
   }
 
+  const int target = EnvInt("TURBOBUS_TARGET_GPU", 0);
+  if (target < 0 || target >= device_count) {
+    std::cerr << "TURBOBUS_TARGET_GPU is out of range\n";
+    return 2;
+  }
+
   std::vector<int> relays;
-  if (device_count >= 2) {
-    relays.push_back(1);
+  const int env_relay = EnvInt("TURBOBUS_RELAY_GPU", -1);
+  if (env_relay >= 0) {
+    if (env_relay >= device_count || env_relay == target) {
+      std::cerr << "TURBOBUS_RELAY_GPU is invalid\n";
+      return 2;
+    }
+    relays.push_back(env_relay);
+  } else if (device_count >= 2) {
+    for (int device = 0; device < device_count; ++device) {
+      if (device != target) {
+        relays.push_back(device);
+        break;
+      }
+    }
   }
 
   turbobus::BandwidthProfiler profiler;
-  const auto profile = profiler.Profile(0, relays, 32ull * 1024ull * 1024ull);
+  const auto profile = profiler.Profile(
+      target, relays, EnvSize("TURBOBUS_PROFILE_BYTES", 16ull * 1024ull * 1024ull));
 
   std::cout << "direct_h2d_bw_gbps=" << profile.direct_h2d_bw_gbps << "\n";
   assert(profile.direct_h2d_bw_gbps > 0.0);
@@ -50,4 +86,3 @@ int main() {
 
   return 0;
 }
-
