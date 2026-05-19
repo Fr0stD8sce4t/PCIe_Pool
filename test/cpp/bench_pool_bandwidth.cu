@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -119,24 +120,15 @@ double RunMode(const char* mode, turbobus::CudaRelayExecutor& executor, std::uin
   dst_view.kind = turbobus::MemoryKind::Device;
   dst_view.device = target;
 
-  cudaEvent_t start = nullptr;
-  cudaEvent_t stop = nullptr;
-  CheckCuda(cudaSetDevice(target), "cudaSetDevice benchmark target failed");
-  CheckCuda(cudaEventCreate(&start), "cudaEventCreate start failed");
-  CheckCuda(cudaEventCreate(&stop), "cudaEventCreate stop failed");
-
-  CheckCuda(cudaEventRecord(start), "cudaEventRecord start failed");
+  const auto start = std::chrono::steady_clock::now();
   auto handle = executor.Submit(src_view, dst_view, plan);
   executor.Wait(handle);
-  CheckCuda(cudaEventRecord(stop), "cudaEventRecord stop failed");
-  CheckCuda(cudaEventSynchronize(stop), "cudaEventSynchronize stop failed");
+  const auto stop = std::chrono::steady_clock::now();
+  const auto microseconds =
+      std::chrono::duration_cast<std::chrono::microseconds>(stop - start).count();
+  const double milliseconds = static_cast<double>(microseconds) / 1000.0;
 
-  float milliseconds = 0.0f;
-  CheckCuda(cudaEventElapsedTime(&milliseconds, start, stop),
-            "cudaEventElapsedTime failed");
-
-  cudaEventDestroy(stop);
-  cudaEventDestroy(start);
+  CheckCuda(cudaSetDevice(target), "cudaSetDevice benchmark target readback failed");
 
   if (verify) {
     std::vector<std::uint8_t> back(bytes);
@@ -145,7 +137,7 @@ double RunMode(const char* mode, turbobus::CudaRelayExecutor& executor, std::uin
     Verify(host, back);
   }
 
-  const double bandwidth = Gbps(bytes, milliseconds);
+  const double bandwidth = Gbps(bytes, static_cast<float>(milliseconds));
   std::cout << mode << "_milliseconds=" << milliseconds << "\n";
   std::cout << mode << "_gib_per_second=" << bandwidth << "\n";
   return bandwidth;
