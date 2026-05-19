@@ -70,4 +70,23 @@ print(handle.stats.gib_per_second)
 Pass `relay_gpus=None` or omit it to let the runtime scan CUDA P2P-capable
 relay GPUs for the target device.
 
-This repository has not been built or tested yet in the current environment.
+## Python Benchmark
+
+The Python benchmark can compare direct-only, relay-only, and pooled transfer
+from the same API path:
+
+```bash
+python benchmarks/bandwidth_pool.py \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --bytes 268435456 \
+  --chunk-bytes 16777216 \
+  --profile-bytes 16777216 \
+  --warmup 1 \
+  --iterations 5 \
+  --mode all \
+  --verify
+```
+
+Use physical CUDA device IDs. Avoid setting `CUDA_VISIBLE_DEVICES` in a way that
+renumbers GPUs unless the runtime and PyTorch tensors use the same remapped IDs.

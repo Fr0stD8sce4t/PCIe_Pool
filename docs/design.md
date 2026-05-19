@@ -48,6 +48,16 @@ Chunks are assigned by the current normalized assigned bytes over path bandwidth
 This approximates bandwidth-proportional distribution without adding a complex
 runtime scheduler.
 
+The planner supports three transfer modes:
+
+- `pool`: use direct and relay paths together
+- `direct`: use only `CPU -> target GPU`
+- `relay`: use only `CPU -> relay GPU -> target GPU`
+
+In `pool` mode, requests with fewer than `min_chunks_for_relay` chunks fall back
+to direct-only transfer. The default threshold is 2 chunks. This keeps small
+requests from paying relay overhead when there is not enough work to split.
+
 The pool benchmark now uses this production planner for pooled transfers instead
 of a hand-written even/odd chunk split.
 
@@ -62,12 +72,16 @@ The Python wrapper only accepts contiguous PyTorch tensors:
 The native extension receives raw tensor pointers and byte counts.
 
 `TransferHandle.wait()` populates a lightweight stats object with total bytes,
-submit-to-complete time, effective GiB/s, and direct/relay chunk counts.
+CUDA event elapsed time, submit-to-complete wall-clock time, GiB/s, and
+direct/relay chunk counts. `gib_per_second` is based on CUDA event timing;
+`submit_gib_per_second` is based on the wall-clock time between submit and wait
+completion.
 
 The runtime caches the first profile result and reuses it for subsequent
 transfers. By default, profiling runs on the first transfer. This can be disabled
 through `RuntimeOptions.profile_on_first_transfer`, in which case the runtime
 falls back to equal path weights until `profile()` is called explicitly.
+Calling `profile(force=True)` refreshes the cached measurement.
 
 ## Daemon Boundary
 

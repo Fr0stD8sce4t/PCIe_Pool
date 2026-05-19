@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from turbobus.runtime import TransferHandle
+from turbobus.runtime import RuntimeOptions, TransferHandle, TransferMode
 
 
 class NativeHandle:
@@ -50,6 +50,14 @@ class TransferHandleTest(unittest.TestCase):
         self.assertEqual(handle.error, "simulated wait failure")
 
 
+class RuntimeOptionsTest(unittest.TestCase):
+    def test_transfer_mode_accepts_string_values(self) -> None:
+        options = RuntimeOptions(transfer_mode="direct", min_chunks_for_relay=3)
+
+        self.assertEqual(options.transfer_mode, "direct")
+        self.assertEqual(TransferMode(options.transfer_mode), TransferMode.DIRECT)
+        self.assertEqual(options.min_chunks_for_relay, 3)
+
+
 if __name__ == "__main__":
     unittest.main()
-

@@ -27,6 +27,11 @@ std::string StatusToString(turbobus::TransferStatus status) {
 }  // namespace
 
 PYBIND11_MODULE(_turbobus, m) {
+  py::enum_<turbobus::TransferMode>(m, "TransferMode")
+      .value("Pool", turbobus::TransferMode::Pool)
+      .value("DirectOnly", turbobus::TransferMode::DirectOnly)
+      .value("RelayOnly", turbobus::TransferMode::RelayOnly);
+
   py::class_<turbobus::RuntimeOptions>(m, "RuntimeOptions")
       .def(py::init<>())
       .def_readwrite("chunk_bytes", &turbobus::RuntimeOptions::chunk_bytes)
@@ -34,7 +39,12 @@ PYBIND11_MODULE(_turbobus, m) {
       .def_readwrite("enable_peer_access", &turbobus::RuntimeOptions::enable_peer_access)
       .def_readwrite("profile_bytes", &turbobus::RuntimeOptions::profile_bytes)
       .def_readwrite("profile_on_first_transfer",
-                     &turbobus::RuntimeOptions::profile_on_first_transfer);
+                     &turbobus::RuntimeOptions::profile_on_first_transfer)
+      .def_readwrite("profile_cache_enabled",
+                     &turbobus::RuntimeOptions::profile_cache_enabled)
+      .def_readwrite("transfer_mode", &turbobus::RuntimeOptions::transfer_mode)
+      .def_readwrite("min_chunks_for_relay",
+                     &turbobus::RuntimeOptions::min_chunks_for_relay);
 
   py::class_<turbobus::RelayProfile>(m, "RelayProfile")
       .def_readonly("relay_device", &turbobus::RelayProfile::relay_device)
@@ -53,7 +63,10 @@ PYBIND11_MODULE(_turbobus, m) {
       .def_readonly("bytes", &turbobus::TransferStats::bytes)
       .def_readonly("submit_to_complete_ms",
                     &turbobus::TransferStats::submit_to_complete_ms)
+      .def_readonly("cuda_elapsed_ms", &turbobus::TransferStats::cuda_elapsed_ms)
       .def_readonly("gib_per_second", &turbobus::TransferStats::gib_per_second)
+      .def_readonly("submit_gib_per_second",
+                    &turbobus::TransferStats::submit_gib_per_second)
       .def_readonly("direct_chunks", &turbobus::TransferStats::direct_chunks)
       .def_readonly("relay_chunks", &turbobus::TransferStats::relay_chunks);
 
@@ -70,7 +83,10 @@ PYBIND11_MODULE(_turbobus, m) {
       .def("init", &turbobus::TurboBusRuntime::Init, py::arg("target_device"),
            py::arg("relay_devices"))
       .def("profile", &turbobus::TurboBusRuntime::Profile,
-           py::arg("bytes") = 256ull * 1024ull * 1024ull)
+           py::arg("bytes") = 256ull * 1024ull * 1024ull,
+           py::arg("force") = false)
+      .def("set_transfer_mode", &turbobus::TurboBusRuntime::SetTransferMode,
+           py::arg("mode"))
       .def("cached_profile", &turbobus::TurboBusRuntime::CachedProfile,
            py::return_value_policy::reference_internal)
       .def("fetch_to_gpu",

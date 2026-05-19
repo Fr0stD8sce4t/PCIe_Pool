@@ -9,10 +9,11 @@
 
 namespace turbobus {
 
-std::vector<Path> ChunkPlanner::BuildPaths(const ProfileResult& profile) const {
+std::vector<Path> ChunkPlanner::BuildPaths(const ProfileResult& profile,
+                                           TransferMode mode) const {
   std::vector<Path> paths;
 
-  if (profile.direct_h2d_bw_gbps > 0.0) {
+  if (mode != TransferMode::RelayOnly && profile.direct_h2d_bw_gbps > 0.0) {
     Path direct;
     direct.kind = PathKind::DirectH2D;
     direct.target_device = profile.target_device;
@@ -24,26 +25,29 @@ std::vector<Path> ChunkPlanner::BuildPaths(const ProfileResult& profile) const {
     paths.push_back(direct);
   }
 
-  for (const auto& relay : profile.relays) {
-    if (!relay.p2p_enabled || relay.effective_bw_gbps <= 0.0) {
-      continue;
+  if (mode != TransferMode::DirectOnly) {
+    for (const auto& relay : profile.relays) {
+      if (!relay.p2p_enabled || relay.effective_bw_gbps <= 0.0) {
+        continue;
+      }
+      Path path;
+      path.kind = PathKind::RelayH2DThenP2P;
+      path.target_device = relay.target_device;
+      path.relay_device = relay.relay_device;
+      path.h2d_bw_gbps = relay.h2d_bw_gbps;
+      path.p2p_bw_gbps = relay.p2p_bw_gbps;
+      path.effective_bw_gbps = relay.effective_bw_gbps;
+      path.enabled = true;
+      paths.push_back(path);
     }
-    Path path;
-    path.kind = PathKind::RelayH2DThenP2P;
-    path.target_device = relay.target_device;
-    path.relay_device = relay.relay_device;
-    path.h2d_bw_gbps = relay.h2d_bw_gbps;
-    path.p2p_bw_gbps = relay.p2p_bw_gbps;
-    path.effective_bw_gbps = relay.effective_bw_gbps;
-    path.enabled = true;
-    paths.push_back(path);
   }
 
   return paths;
 }
 
 TransferPlan ChunkPlanner::Plan(std::size_t total_bytes, std::size_t chunk_bytes,
-                                const ProfileResult& profile) const {
+                                const ProfileResult& profile, TransferMode mode,
+                                std::size_t min_chunks_for_relay) const {
   if (total_bytes == 0) {
     return {};
   }
@@ -51,7 +55,12 @@ TransferPlan ChunkPlanner::Plan(std::size_t total_bytes, std::size_t chunk_bytes
     throw std::invalid_argument("chunk_bytes must be greater than zero");
   }
 
-  auto paths = BuildPaths(profile);
+  const std::size_t num_chunks = (total_bytes + chunk_bytes - 1) / chunk_bytes;
+  if (mode == TransferMode::Pool && num_chunks < min_chunks_for_relay) {
+    mode = TransferMode::DirectOnly;
+  }
+
+  auto paths = BuildPaths(profile, mode);
   if (paths.empty()) {
     throw std::runtime_error("no enabled transfer path is available");
   }
@@ -73,7 +82,6 @@ TransferPlan ChunkPlanner::Plan(std::size_t total_bytes, std::size_t chunk_bytes
     plan.assignments.push_back(std::move(assignment));
   }
 
-  const std::size_t num_chunks = (total_bytes + chunk_bytes - 1) / chunk_bytes;
   std::vector<double> assigned_scores(paths.size(), 0.0);
 
   for (std::size_t chunk_idx = 0; chunk_idx < num_chunks; ++chunk_idx) {

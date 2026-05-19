@@ -16,7 +16,9 @@ class TurboBusRuntime {
   ~TurboBusRuntime();
 
   void Init(int target_device, const std::vector<int>& relay_devices);
-  ProfileResult Profile(std::size_t bytes = 256ull * 1024ull * 1024ull);
+  ProfileResult Profile(std::size_t bytes = 256ull * 1024ull * 1024ull,
+                        bool force = false);
+  void SetTransferMode(TransferMode mode);
   TransferHandle FetchToGpu(void* host_ptr, void* target_gpu_ptr, std::size_t bytes);
   void Wait(const TransferHandle& handle);
   TransferStats GetStats(const TransferHandle& handle) const;

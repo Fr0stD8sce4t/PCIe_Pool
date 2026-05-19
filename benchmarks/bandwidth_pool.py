@@ -12,6 +12,40 @@ def parse_relay_gpus(value: str) -> list[int]:
     return [int(item) for item in value.split(",") if item.strip()]
 
 
+def run_mode(runtime: turbobus.Runtime, cpu, gpu, mode: str, warmup: int, iterations: int):
+    runtime.set_transfer_mode(mode)
+    for _ in range(warmup):
+        handle = runtime.fetch_to_gpu(cpu, gpu)
+        handle.wait()
+
+    samples = []
+    last_stats = None
+    for _ in range(iterations):
+        handle = runtime.fetch_to_gpu(cpu, gpu)
+        handle.wait()
+        stats = handle.stats
+        last_stats = stats
+        samples.append(stats.gib_per_second)
+        print(
+            "mode",
+            mode,
+            "sample_gib_per_second",
+            stats.gib_per_second,
+            "cuda_milliseconds",
+            stats.cuda_elapsed_ms,
+            "submit_milliseconds",
+            stats.submit_to_complete_ms,
+            "direct_chunks",
+            stats.direct_chunks,
+            "relay_chunks",
+            stats.relay_chunks,
+        )
+
+    median = statistics.median(samples) if samples else 0.0
+    print("mode", mode, "median_gib_per_second", median)
+    return median, last_stats
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="TurboBus bandwidth pool smoke benchmark")
     parser.add_argument("--target-gpu", type=int, default=0)
@@ -21,6 +55,7 @@ def main() -> None:
     parser.add_argument("--profile-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--iterations", type=int, default=5)
+    parser.add_argument("--mode", choices=["pool", "direct", "relay", "all"], default="pool")
     parser.add_argument("--verify", action="store_true")
     args = parser.parse_args()
 
@@ -40,6 +75,7 @@ def main() -> None:
     print("chunk_bytes", args.chunk_bytes)
     print("warmup", args.warmup)
     print("iterations", args.iterations)
+    print("mode", args.mode)
     print("direct_h2d_bw_gbps", profile.direct_h2d_bw_gbps)
     for relay in profile.relays:
         print(
@@ -53,29 +89,20 @@ def main() -> None:
             relay.effective_bw_gbps,
         )
 
-    for _ in range(args.warmup):
-        handle = runtime.fetch_to_gpu(cpu, gpu)
-        handle.wait()
+    modes = ["direct", "relay", "pool"] if args.mode == "all" else [args.mode]
+    medians = {}
+    for mode in modes:
+        median, _ = run_mode(runtime, cpu, gpu, mode, args.warmup, args.iterations)
+        medians[mode] = median
 
-    samples = []
-    for _ in range(args.iterations):
-        handle = runtime.fetch_to_gpu(cpu, gpu)
-        handle.wait()
-        stats = handle.stats
-        samples.append(stats.gib_per_second)
-        print(
-            "sample_gib_per_second",
-            stats.gib_per_second,
-            "milliseconds",
-            stats.submit_to_complete_ms,
-            "direct_chunks",
-            stats.direct_chunks,
-            "relay_chunks",
-            stats.relay_chunks,
-        )
-
-    if samples:
-        print("median_gib_per_second", statistics.median(samples))
+    if args.mode == "all":
+        direct = medians.get("direct", 0.0)
+        relay = medians.get("relay", 0.0)
+        pool = medians.get("pool", 0.0)
+        if direct > 0.0:
+            print("pool_over_direct_median", pool / direct)
+        if relay > 0.0:
+            print("pool_over_relay_median", pool / relay)
 
     if args.verify:
         print("match", torch.equal(cpu, gpu.cpu()))

@@ -30,6 +30,7 @@ def send_request(path: str, request: dict) -> dict:
 
 
 class DaemonSocketTest(unittest.TestCase):
+    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
     def test_socket_session_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             socket_path = os.path.join(tmpdir, "turbobusd.sock")
@@ -73,4 +74,3 @@ class DaemonSocketTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

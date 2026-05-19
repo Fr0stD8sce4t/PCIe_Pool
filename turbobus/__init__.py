@@ -1,4 +1,3 @@
-from .runtime import Runtime, RuntimeOptions
+from .runtime import Runtime, RuntimeOptions, TransferMode
 
-__all__ = ["Runtime", "RuntimeOptions"]
-
+__all__ = ["Runtime", "RuntimeOptions", "TransferMode"]

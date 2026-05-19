@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Iterable
 
 try:
@@ -17,6 +18,25 @@ else:
     _IMPORT_ERROR = None
 
 
+class TransferMode(str, Enum):
+    POOL = "pool"
+    DIRECT = "direct"
+    RELAY = "relay"
+
+
+def _native_transfer_mode(mode: TransferMode | str):
+    _require_extension()
+    if not isinstance(mode, TransferMode):
+        mode = TransferMode(mode)
+    if mode is TransferMode.POOL:
+        return _turbobus.TransferMode.Pool
+    if mode is TransferMode.DIRECT:
+        return _turbobus.TransferMode.DirectOnly
+    if mode is TransferMode.RELAY:
+        return _turbobus.TransferMode.RelayOnly
+    raise ValueError(f"unsupported transfer mode: {mode}")
+
+
 @dataclass
 class RuntimeOptions:
     chunk_bytes: int = 16 * 1024 * 1024
@@ -24,6 +44,9 @@ class RuntimeOptions:
     enable_peer_access: bool = True
     profile_bytes: int = 256 * 1024 * 1024
     profile_on_first_transfer: bool = True
+    profile_cache_enabled: bool = True
+    transfer_mode: TransferMode | str = TransferMode.POOL
+    min_chunks_for_relay: int = 2
 
     def to_native(self):
         _require_extension()
@@ -33,6 +56,9 @@ class RuntimeOptions:
         options.enable_peer_access = self.enable_peer_access
         options.profile_bytes = self.profile_bytes
         options.profile_on_first_transfer = self.profile_on_first_transfer
+        options.profile_cache_enabled = self.profile_cache_enabled
+        options.transfer_mode = _native_transfer_mode(self.transfer_mode)
+        options.min_chunks_for_relay = self.min_chunks_for_relay
         return options
 
 
@@ -63,11 +89,15 @@ class Runtime:
         self._runtime = _turbobus.Runtime(self.options.to_native())
         self._runtime.init(self.target_gpu, self.relay_gpus)
 
-    def profile(self, bytes: int = 256 * 1024 * 1024):
-        return self._runtime.profile(int(bytes))
+    def profile(self, bytes: int = 256 * 1024 * 1024, force: bool = False):
+        return self._runtime.profile(int(bytes), bool(force))
 
     def cached_profile(self):
         return self._runtime.cached_profile()
+
+    def set_transfer_mode(self, mode: TransferMode | str) -> None:
+        self.options.transfer_mode = TransferMode(mode)
+        self._runtime.set_transfer_mode(_native_transfer_mode(self.options.transfer_mode))
 
     def fetch_to_gpu(self, cpu_tensor, gpu_tensor):
         _require_torch()

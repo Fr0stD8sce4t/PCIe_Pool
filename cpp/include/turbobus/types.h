@@ -28,6 +28,12 @@ enum class TransferStatus {
   Failed,
 };
 
+enum class TransferMode {
+  Pool,
+  DirectOnly,
+  RelayOnly,
+};
+
 struct BufferView {
   void* ptr = nullptr;
   std::size_t bytes = 0;
@@ -83,12 +89,17 @@ struct RuntimeOptions {
   bool enable_peer_access = true;
   std::size_t profile_bytes = 256ull * 1024ull * 1024ull;
   bool profile_on_first_transfer = true;
+  bool profile_cache_enabled = true;
+  TransferMode transfer_mode = TransferMode::Pool;
+  std::size_t min_chunks_for_relay = 2;
 };
 
 struct TransferStats {
   std::size_t bytes = 0;
   double submit_to_complete_ms = 0.0;
+  double cuda_elapsed_ms = 0.0;
   double gib_per_second = 0.0;
+  double submit_gib_per_second = 0.0;
   std::size_t direct_chunks = 0;
   std::size_t relay_chunks = 0;
 };

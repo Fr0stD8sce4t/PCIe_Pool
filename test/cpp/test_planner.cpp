@@ -59,8 +59,25 @@ int main() {
 
   turbobus::TransferHandle handle;
   assert(handle.stats.bytes == 0);
+  assert(handle.stats.cuda_elapsed_ms == 0.0);
   assert(handle.stats.direct_chunks == 0);
   assert(handle.stats.relay_chunks == 0);
+
+  const auto small_plan = planner.Plan(4ull * 1024ull * 1024ull, chunk_bytes, profile);
+  assert(small_plan.assignments.size() == 1);
+  assert(small_plan.assignments.front().path.kind == turbobus::PathKind::DirectH2D);
+  assert(small_plan.assignments.front().chunks.size() == 1);
+
+  const auto direct_plan =
+      planner.Plan(total_bytes, chunk_bytes, profile, turbobus::TransferMode::DirectOnly);
+  assert(direct_plan.assignments.size() == 1);
+  assert(direct_plan.assignments.front().path.kind == turbobus::PathKind::DirectH2D);
+
+  const auto relay_plan =
+      planner.Plan(total_bytes, chunk_bytes, profile, turbobus::TransferMode::RelayOnly);
+  assert(relay_plan.assignments.size() == 1);
+  assert(relay_plan.assignments.front().path.kind ==
+         turbobus::PathKind::RelayH2DThenP2P);
 
   std::cout << "planner test passed\n";
   return 0;

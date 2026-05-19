@@ -27,13 +27,19 @@ void TurboBusRuntime::Init(int target_device, const std::vector<int>& relay_devi
   initialized_ = true;
 }
 
-ProfileResult TurboBusRuntime::Profile(std::size_t bytes) {
+ProfileResult TurboBusRuntime::Profile(std::size_t bytes, bool force) {
   if (!initialized_) {
     throw std::runtime_error("runtime is not initialized");
   }
-  profile_ = profiler_.Profile(target_device_, enabled_relays_, bytes);
-  has_profile_ = true;
+  if (force || !has_profile_ || !options_.profile_cache_enabled) {
+    profile_ = profiler_.Profile(target_device_, enabled_relays_, bytes);
+    has_profile_ = true;
+  }
   return profile_;
+}
+
+void TurboBusRuntime::SetTransferMode(TransferMode mode) {
+  options_.transfer_mode = mode;
 }
 
 TransferHandle TurboBusRuntime::FetchToGpu(void* host_ptr, void* target_gpu_ptr,
@@ -42,7 +48,7 @@ TransferHandle TurboBusRuntime::FetchToGpu(void* host_ptr, void* target_gpu_ptr,
     throw std::runtime_error("runtime is not initialized");
   }
   if (!has_profile_ && options_.profile_on_first_transfer) {
-    Profile(options_.profile_bytes);
+    Profile(options_.profile_bytes, false);
   }
   if (!has_profile_) {
     profile_.target_device = target_device_;
@@ -72,7 +78,9 @@ TransferHandle TurboBusRuntime::FetchToGpu(void* host_ptr, void* target_gpu_ptr,
   target.kind = MemoryKind::Device;
   target.device = target_device_;
 
-  const TransferPlan plan = planner_.Plan(bytes, options_.chunk_bytes, profile_);
+  const TransferPlan plan = planner_.Plan(bytes, options_.chunk_bytes, profile_,
+                                         options_.transfer_mode,
+                                         options_.min_chunks_for_relay);
   return executor_.Submit(host, target, plan);
 }
 
