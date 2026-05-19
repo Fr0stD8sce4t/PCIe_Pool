@@ -120,6 +120,133 @@ relay pair. Across two 5-iteration runs, direct-only H2D stayed around
 7.32 GiB/s, relay-only stayed around 7.24 GiB/s, and pooled transfer stayed
 around 14.28-14.31 GiB/s. This is about 1.95x faster than direct-only H2D.
 
+## 2026-05-19: Python API End-to-End Benchmark Result
+
+The Python extension and PyTorch-facing API were validated after fixing the
+native extension CUDA link issue.
+
+Native extension import check:
+
+```text
+python - <<'PY'
+import turbobus._turbobus as tb
+print(tb)
+print(tb.RuntimeOptions)
+PY
+```
+
+Result:
+
+```text
+<module 'turbobus._turbobus' from '/home/sdu/fengbin/TurboBus/turbobus/_turbobus.cpython-313-x86_64-linux-gnu.so'>
+<class 'turbobus._turbobus.RuntimeOptions'>
+```
+
+Short Python pooling benchmark:
+
+```text
+python benchmarks/bandwidth_pool.py \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --bytes 268435456 \
+  --chunk-bytes 16777216 \
+  --profile-bytes 16777216 \
+  --warmup 1 \
+  --iterations 5 \
+  --verify
+```
+
+Result:
+
+```text
+direct_h2d_bw_gbps 7.633091670011347
+relay 5 h2d 7.573304563650957 p2p 39.93140749818256 effective 7.573304563650957
+median_gib_per_second 14.400921658986174
+direct_chunks 8
+relay_chunks 8
+match True
+```
+
+20-iteration Python stability run:
+
+```text
+python benchmarks/bandwidth_pool.py \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --bytes 268435456 \
+  --chunk-bytes 16777216 \
+  --profile-bytes 16777216 \
+  --warmup 3 \
+  --iterations 20 \
+  --verify
+```
+
+Result:
+
+```text
+direct_h2d_bw_gbps 7.433000521612081
+relay 5 h2d 7.536251016403788 p2p 39.24143954936054 effective 7.536251016403788
+median_gib_per_second 13.650014301100978
+direct_chunks 8
+relay_chunks 8
+match True
+```
+
+1 GiB Python transfer run:
+
+```text
+python benchmarks/bandwidth_pool.py \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --bytes 1073741824 \
+  --chunk-bytes 16777216 \
+  --profile-bytes 16777216 \
+  --warmup 2 \
+  --iterations 10 \
+  --verify
+```
+
+Result:
+
+```text
+direct_h2d_bw_gbps 7.543586322875762
+relay 5 h2d 7.52428981879867 p2p 40.966628272433766 effective 7.52428981879867
+median_gib_per_second 14.624586933618467
+direct_chunks 32
+relay_chunks 32
+match True
+```
+
+100-iteration Python stability run:
+
+```text
+python benchmarks/bandwidth_pool.py \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --bytes 268435456 \
+  --chunk-bytes 16777216 \
+  --profile-bytes 16777216 \
+  --warmup 5 \
+  --iterations 100
+```
+
+Result:
+
+```text
+direct_h2d_bw_gbps 7.565325330576065
+relay 5 h2d 7.560288734366875 p2p 40.85010046409519 effective 7.560288734366875
+median_gib_per_second 14.42169022209403
+direct_chunks 8
+relay_chunks 8
+```
+
+Conclusion:
+
+The Python API drives the same planner-backed pooled transfer path as the C++
+benchmark. Correctness passed with `match True`, all measured Python pooling
+runs used both direct and relay chunks, and the 100-iteration run stayed around
+14.42 GiB/s median without transfer errors.
+
 ## Next Implementation Steps
 
 1. Replace the benchmark-only even/odd chunk split with the production
