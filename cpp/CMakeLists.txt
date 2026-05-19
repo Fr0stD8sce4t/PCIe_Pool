@@ -28,7 +28,6 @@ target_link_libraries(turbobus_core
 )
 
 set_target_properties(turbobus_core PROPERTIES
-  CUDA_SEPARABLE_COMPILATION ON
   POSITION_INDEPENDENT_CODE ON
 )
 

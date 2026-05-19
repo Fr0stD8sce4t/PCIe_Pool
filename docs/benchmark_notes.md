@@ -69,6 +69,57 @@ direct + relay chunk-level concurrent transfer
 
 The pooled path reached 14.31 GiB/s, about 1.96x faster than direct-only H2D.
 
+## 2026-05-19: Planner-Driven Multi-Run Pooling Result
+
+This run validates the formal path:
+
+```text
+profiler -> ChunkPlanner -> CUDA executor
+```
+
+The benchmark used repeated runs and median reporting:
+
+```text
+TURBOBUS_TARGET_GPU=6 TURBOBUS_RELAY_GPUS=5 TURBOBUS_BENCH_ITERS=5 ./build-test/bench_pool_bandwidth
+```
+
+Run 1:
+
+```text
+target_gpu=6
+relay_gpus=5,
+bytes=268435456
+chunk_bytes=16777216
+iterations=5
+direct_median_gib_per_second=7.3215
+relay_median_gib_per_second=7.24071
+pool_median_gib_per_second=14.3062
+pool_over_direct_median=1.95399
+pool_over_relay_median=1.97579
+```
+
+Run 2:
+
+```text
+target_gpu=6
+relay_gpus=5,
+bytes=268435456
+chunk_bytes=16777216
+iterations=5
+direct_median_gib_per_second=7.32365
+relay_median_gib_per_second=7.24344
+pool_median_gib_per_second=14.2759
+pool_over_direct_median=1.94929
+pool_over_relay_median=1.97088
+```
+
+Conclusion:
+
+The planner-driven pool transfer is stable on the tested GPU6 target + GPU5
+relay pair. Across two 5-iteration runs, direct-only H2D stayed around
+7.32 GiB/s, relay-only stayed around 7.24 GiB/s, and pooled transfer stayed
+around 14.28-14.31 GiB/s. This is about 1.95x faster than direct-only H2D.
+
 ## Next Implementation Steps
 
 1. Replace the benchmark-only even/odd chunk split with the production
