@@ -15,6 +15,10 @@ try:  # pragma: no cover - depends on an installed vLLM build
         KVConnectorMetadata,
         KVConnectorRole,
     )
+    try:
+        from vllm.distributed.kv_transfer.kv_connector.v1.base import SupportsHMA
+    except ImportError:
+        SupportsHMA = object
 except ImportError:  # pragma: no cover - lets unit tests import without vLLM
     class KVConnectorMetadata:
         pass
@@ -28,6 +32,8 @@ except ImportError:  # pragma: no cover - lets unit tests import without vLLM
     class KVConnectorRole:
         SCHEDULER = "scheduler"
         WORKER = "worker"
+
+    SupportsHMA = object
 
 
 @dataclass
@@ -102,7 +108,7 @@ def get_saved_prefix(key: str) -> TurboBusSavedPrefix | None:
     return _SAVED_PREFIXES.get(str(key))
 
 
-class TurboBusConnector(KVConnectorBase_V1):
+class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
     """vLLM KV connector entry point for TurboBus prefix restore.
 
     This uses vLLM's KV-transfer connector lifecycle instead of replacing the
@@ -277,7 +283,8 @@ class TurboBusConnector(KVConnectorBase_V1):
         metadata = TurboBusConnectorMetadata()
         for request_id in sorted(self.state.pending_loads):
             metadata.add_request(self.state.pending_loads[request_id])
-        _emit_event("build_connector_meta", requests=len(metadata))
+        if len(metadata) > 0:
+            _emit_event("build_connector_meta", requests=len(metadata))
         self.state.pending_loads.clear()
         return metadata
 

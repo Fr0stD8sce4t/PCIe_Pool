@@ -114,6 +114,13 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertEqual(metadata.requests[0].block_count, 4)
         self.assertEqual(connector.state.pending_loads, {})
 
+    def test_empty_connector_metadata_does_not_add_events(self) -> None:
+        connector = self.make_connector()
+        metadata = connector.build_connector_meta(object())
+
+        self.assertEqual(len(metadata), 0)
+        self.assertEqual(connector.state.events, [])
+
     def test_start_load_kv_is_safe_until_restore_enabled(self) -> None:
         register_saved_prefix("default", [object()], block_count=4, matched_tokens=64)
         connector = self.make_connector({"turbobus.restore_block_limit": 4})
