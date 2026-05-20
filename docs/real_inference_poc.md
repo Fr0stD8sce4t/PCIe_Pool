@@ -79,6 +79,12 @@ PyTorch model kernels while TurboBus restores prefix/session KV-shaped buffers.
 This checks a more realistic compute side without taking ownership of framework
 scheduling or KV allocation.
 
+Sidecar status: passed on the GPU6 target + GPU5 relay test pair. A single
+PyTorch TransformerEncoderLayer sidecar run verified restored data and improved
+restore throughput from 7.101 GiB/s direct to 13.866 GiB/s pool, a 1.953x
+speedup. The model compute was light at about 1.2 ms, so heavier model sweeps
+are still needed before judging compute-heavy overlap.
+
 Phase 2 can add a narrow vLLM/SGLang or LMCache-style connector that only handles
 prefix/session restore and save. Broader decode-time eviction can wait until the
 restore path is correct.

@@ -122,8 +122,10 @@ Next steps:
      restore harness. It keeps TurboBus outside the framework scheduler, but
      runs a PyTorch TransformerEncoderLayer while TurboBus restores
      prefix/session KV-shaped buffers into target-GPU slots.
-   - Next priority: run and record the sidecar result, then design the first
-     narrow connector boundary for real framework KV slot addresses.
+   - The first sidecar result is recorded and shows about 1.95x pooled restore
+     speedup beside a real PyTorch Transformer layer.
+   - Next priority: add or run heavier sidecar compute sweeps, then design the
+     first narrow connector boundary for real framework KV slot addresses.
    - Compare direct, relay, and pool modes using the same manager API that a
      future vLLM/SGLang connector would call.
 

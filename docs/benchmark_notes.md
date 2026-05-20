@@ -1097,6 +1097,72 @@ The direct-mode `compute_p95_ms=19.461` is an outlier in a five-iteration run;
 the direct compute p50 and relay/pool compute p95 values stay around 4.3 ms.
 Future comparisons should use more iterations when measuring tail latency.
 
+## Real PyTorch Model Sidecar Restore
+
+Scenario:
+
+This run uses `benchmarks/real_model_sidecar_restore.py`. It keeps TurboBus
+outside any real inference framework scheduler, but replaces the native dummy
+compute with a real PyTorch `TransformerEncoderLayer` running on the target GPU
+while TurboBus restores prefix/session KV-shaped blocks. The run uses packed
+storage, overlap enabled, and verification enabled.
+
+Command:
+
+```text
+python benchmarks/real_model_sidecar_restore.py \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --sessions 4 \
+  --blocks-per-session 8 \
+  --restore-blocks 8 \
+  --iterations 5 \
+  --storage-layout packed \
+  --block-bytes 16777216 \
+  --model-layers 1 \
+  --model-batch-size 1 \
+  --model-seq-len 128 \
+  --model-hidden-size 4096 \
+  --model-heads 32 \
+  --model-ff-size 11008 \
+  --model-dtype float16 \
+  --overlap-compute \
+  --mode all \
+  --dynamic-weights \
+  --verify
+```
+
+Copy summary:
+
+```text
+COPY_SUMMARY_BEGIN
+sidecar_config target=6 relays=[5] sessions=4 blocks_per_session=8 restore_blocks=8 iterations=5 storage_layout=packed block_bytes=16777216 model_layers=1 model_batch_size=1 model_seq_len=128 model_hidden_size=4096 model_heads=32 model_ff_size=11008 model_iterations=1 model_dtype=float16 overlap_compute=True mode=all dynamic_weights=True
+sidecar_scenario type=real_torch_model_sidecar_restore boundary=framework_adjacent transfer=cpu_pinned_prefix_kv_to_gpu_slots model=torch_transformer_encoder_layer policy=no_scheduler_rewrite verify=True note=real_model_compute_not_full_inference_framework
+profile direct_h2d_bw_gbps=7.627
+profile_relay relay=5 h2d=7.599 p2p=40.653 effective=7.599 p2p_enabled=True
+sidecar_mode mode=direct restore_gib_s=7.101 restore_p50_ms=17.602 restore_p95_ms=17.852 step_p50_ms=17.914 step_p95_ms=18.351 model_p50_ms=1.204 model_p95_ms=1.391 restored_blocks=40 direct_chunks=160 relay_chunks=0 verified=True
+sidecar_mode mode=relay restore_gib_s=7.062 restore_p50_ms=17.718 restore_p95_ms=17.957 step_p50_ms=18.082 step_p95_ms=18.362 model_p50_ms=1.421 model_p95_ms=1.638 restored_blocks=40 direct_chunks=0 relay_chunks=160 verified=True
+sidecar_mode mode=pool restore_gib_s=13.866 restore_p50_ms=8.974 restore_p95_ms=9.148 step_p50_ms=9.231 step_p95_ms=9.539 model_p50_ms=1.219 model_p95_ms=1.382 restored_blocks=40 direct_chunks=80 relay_chunks=80 verified=True
+sidecar_speedup pool_over_direct_restore=1.953
+sidecar_speedup pool_over_relay_restore=1.964
+sidecar_speedup direct_over_pool_step_p50=1.941
+COPY_SUMMARY_END
+```
+
+Analysis:
+
+This validates that pooled restore still works beside real PyTorch model
+kernels. The restored data verifies in all modes, and pool mode again splits the
+work evenly across direct and relay paths, 80 chunks each. Restore throughput
+improves from 7.101 GiB/s direct to 13.866 GiB/s pool, a 1.953x speedup.
+Step p50 drops from 17.914 ms direct to 9.231 ms pool, a 1.941x improvement.
+
+The sidecar model compute is only about 1.2 ms in this configuration, so restore
+time dominates. This run proves that real PyTorch kernels can coexist with the
+restore path, but it is not yet a compute-heavy overlap study. Use larger
+`--model-iterations`, `--model-layers`, or sequence length for overlap sweeps
+before drawing conclusions about compute-bound decode.
+
 ## Next Implementation Steps
 
 1. Replace the benchmark-only even/odd chunk split with the production
@@ -1122,4 +1188,8 @@ Future comparisons should use more iterations when measuring tail latency.
 8. Move from the prefix restore POC to a real-model sidecar restore harness.
    Keep TurboBus outside the framework scheduler: run real model work or a
    framework-adjacent model step while TurboBus restores prefix/session KV-shaped
-   buffers into target-GPU slots.
+   buffers into target-GPU slots. The first sidecar run is complete and shows
+   that pooled restore still gives about 1.95x speedup beside a real PyTorch
+   Transformer layer.
+9. Add or run sidecar compute sweeps with heavier model settings, then design
+   the first narrow connector boundary for real framework KV slot addresses.
