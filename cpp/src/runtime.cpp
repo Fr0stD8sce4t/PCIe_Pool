@@ -56,6 +56,20 @@ TransferHandle TurboBusRuntime::OffloadToCpu(void* target_gpu_ptr, void* host_pt
   return SubmitTransfer(target_gpu_ptr, host_ptr, bytes, TransferDirection::D2H);
 }
 
+TransferHandle TurboBusRuntime::FetchRangesToGpu(
+    void* host_ptr, std::size_t host_bytes, void* target_gpu_ptr,
+    std::size_t target_bytes, const std::vector<TransferRange>& ranges) {
+  return SubmitRanges(host_ptr, host_bytes, target_gpu_ptr, target_bytes, ranges,
+                      TransferDirection::H2D);
+}
+
+TransferHandle TurboBusRuntime::OffloadRangesToCpu(
+    void* target_gpu_ptr, std::size_t target_bytes, void* host_ptr,
+    std::size_t host_bytes, const std::vector<TransferRange>& ranges) {
+  return SubmitRanges(target_gpu_ptr, target_bytes, host_ptr, host_bytes, ranges,
+                      TransferDirection::D2H);
+}
+
 void TurboBusRuntime::EnsureProfile() {
   if (!initialized_) {
     throw std::runtime_error("runtime is not initialized");
@@ -110,6 +124,40 @@ TransferHandle TurboBusRuntime::SubmitTransfer(void* source_ptr, void* destinati
                              options_.relay_min_effective_bw_gbps,
                              options_.relay_min_direct_ratio,
                              direction);
+  if (direction == TransferDirection::H2D) {
+    return executor_.Submit(source, destination, last_plan_);
+  }
+  return executor_.SubmitD2H(source, destination, last_plan_);
+}
+
+TransferHandle TurboBusRuntime::SubmitRanges(
+    void* source_ptr, std::size_t source_bytes, void* destination_ptr,
+    std::size_t destination_bytes, const std::vector<TransferRange>& ranges,
+    TransferDirection direction) {
+  EnsureProfile();
+
+  BufferView source;
+  source.ptr = source_ptr;
+  source.bytes = source_bytes;
+  source.device =
+      direction == TransferDirection::H2D ? kHostDevice : target_device_;
+  source.kind = direction == TransferDirection::H2D ? MemoryKind::HostPinned
+                                                    : MemoryKind::Device;
+
+  BufferView destination;
+  destination.ptr = destination_ptr;
+  destination.bytes = destination_bytes;
+  destination.device =
+      direction == TransferDirection::H2D ? target_device_ : kHostDevice;
+  destination.kind = direction == TransferDirection::H2D ? MemoryKind::Device
+                                                         : MemoryKind::HostPinned;
+
+  const auto& plan_profile =
+      options_.enable_dynamic_weights ? planner_profile_ : profile_;
+  last_plan_ = planner_.PlanRanges(
+      ranges, options_.chunk_bytes, plan_profile, options_.transfer_mode,
+      options_.min_chunks_for_relay, options_.relay_min_effective_bw_gbps,
+      options_.relay_min_direct_ratio, direction);
   if (direction == TransferDirection::H2D) {
     return executor_.Submit(source, destination, last_plan_);
   }

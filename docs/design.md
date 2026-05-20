@@ -114,6 +114,14 @@ The runtime keeps the last generated `TransferPlan`. Python callers can inspect
 it through `Runtime.last_plan_dict()` to see which chunks used the direct path
 and which chunks used each relay GPU.
 
+The first batched API supports multiple byte ranges inside one pinned CPU
+buffer and one GPU buffer. `fetch_ranges_to_gpu` and `offload_ranges_to_cpu`
+accept ranges with `src_offset`, `dst_offset`, and `bytes`. The planner splits
+each range by `chunk_bytes`, preserves the range offsets in the generated
+chunks, and then assigns those chunks across direct and relay paths using the
+same bandwidth-proportional scheduler. This keeps the simple contiguous tensor
+API intact while allowing KV-block-like copy batches.
+
 The runtime caches the first profile result and reuses it for subsequent
 transfers. By default, profiling runs on the first transfer. This can be disabled
 through `RuntimeOptions.profile_on_first_transfer`, in which case the runtime

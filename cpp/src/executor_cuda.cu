@@ -89,6 +89,26 @@ TransferStats BuildInitialStats(const TransferPlan& plan) {
   return stats;
 }
 
+std::size_t MaxSourceEnd(const TransferPlan& plan) {
+  std::size_t end = 0;
+  for (const auto& assignment : plan.assignments) {
+    for (const auto& chunk : assignment.chunks) {
+      end = std::max(end, chunk.src_offset + chunk.bytes);
+    }
+  }
+  return end;
+}
+
+std::size_t MaxDestinationEnd(const TransferPlan& plan) {
+  std::size_t end = 0;
+  for (const auto& assignment : plan.assignments) {
+    for (const auto& chunk : assignment.chunks) {
+      end = std::max(end, chunk.dst_offset + chunk.bytes);
+    }
+  }
+  return end;
+}
+
 }  // namespace
 
 struct CudaRelayExecutor::Impl {
@@ -274,7 +294,8 @@ struct CudaRelayExecutor::Impl {
     if (source.ptr == nullptr || destination.ptr == nullptr) {
       throw std::invalid_argument("source and destination pointers must not be null");
     }
-    if (source.bytes < plan.total_bytes || destination.bytes < plan.total_bytes) {
+    if (source.bytes < MaxSourceEnd(plan) ||
+        destination.bytes < MaxDestinationEnd(plan)) {
       throw std::invalid_argument("buffer is smaller than transfer plan");
     }
     if (direction == TransferDirection::H2D) {

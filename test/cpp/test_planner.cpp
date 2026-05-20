@@ -110,6 +110,25 @@ int main() {
   assert(has_direct_d2h);
   assert(has_relay_d2h);
 
+  std::vector<turbobus::TransferRange> ranges;
+  ranges.push_back({0, 64, 10});
+  ranges.push_back({1024, 4096, 25});
+  const auto range_plan = planner.PlanRanges(ranges, 8, profile);
+  assert(range_plan.total_bytes == 35);
+  std::size_t range_bytes = 0;
+  bool saw_non_identity_offset = false;
+  for (const auto& assignment : range_plan.assignments) {
+    for (const auto& chunk : assignment.chunks) {
+      range_bytes += chunk.bytes;
+      if (chunk.src_offset != chunk.dst_offset) {
+        saw_non_identity_offset = true;
+      }
+      assert(chunk.bytes <= 8);
+    }
+  }
+  assert(range_bytes == 35);
+  assert(saw_non_identity_offset);
+
   std::cout << "planner test passed\n";
   return 0;
 }

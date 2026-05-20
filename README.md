@@ -145,3 +145,19 @@ For GPU-to-CPU offload into pinned host memory:
 handle = rt.offload_to_cpu(gpu_tensor, cpu_tensor)
 handle.wait()
 ```
+
+For block-style transfers inside the same CPU/GPU backing buffers, submit
+multiple byte ranges in one call:
+
+```python
+ranges = [
+    {"src_offset": 0, "dst_offset": 0, "bytes": 4 * 1024 * 1024},
+    {"src_offset": 16 * 1024 * 1024, "dst_offset": 8 * 1024 * 1024, "bytes": 4 * 1024 * 1024},
+]
+handle = rt.fetch_ranges_to_gpu(cpu_tensor, gpu_tensor, ranges)
+handle.wait()
+```
+
+Use `offload_ranges_to_cpu(gpu_tensor, cpu_tensor, ranges)` for the D2H
+direction. This is the first batched API; it batches ranges within one source
+buffer and one destination buffer.

@@ -54,6 +54,12 @@ struct Chunk {
   std::size_t bytes = 0;
 };
 
+struct TransferRange {
+  std::size_t src_offset = 0;
+  std::size_t dst_offset = 0;
+  std::size_t bytes = 0;
+};
+
 struct Path {
   PathKind kind = PathKind::DirectH2D;
   TransferDirection direction = TransferDirection::H2D;

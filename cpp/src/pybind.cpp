@@ -112,6 +112,12 @@ PYBIND11_MODULE(_turbobus, m) {
       .def_readonly("dst_offset", &turbobus::Chunk::dst_offset)
       .def_readonly("bytes", &turbobus::Chunk::bytes);
 
+  py::class_<turbobus::TransferRange>(m, "TransferRange")
+      .def(py::init<>())
+      .def_readwrite("src_offset", &turbobus::TransferRange::src_offset)
+      .def_readwrite("dst_offset", &turbobus::TransferRange::dst_offset)
+      .def_readwrite("bytes", &turbobus::TransferRange::bytes);
+
   py::class_<turbobus::PathAssignment>(m, "PathAssignment")
       .def_readonly("path", &turbobus::PathAssignment::path)
       .def_readonly("chunks", &turbobus::PathAssignment::chunks);
@@ -193,6 +199,28 @@ PYBIND11_MODULE(_turbobus, m) {
                                          reinterpret_cast<void*>(host_ptr), bytes);
            },
            py::arg("target_ptr"), py::arg("host_ptr"), py::arg("bytes"))
+      .def("fetch_ranges_to_gpu",
+           [](turbobus::TurboBusRuntime& runtime, std::uintptr_t host_ptr,
+              std::size_t host_bytes, std::uintptr_t target_ptr,
+              std::size_t target_bytes,
+              const std::vector<turbobus::TransferRange>& ranges) {
+             return runtime.FetchRangesToGpu(
+                 reinterpret_cast<void*>(host_ptr), host_bytes,
+                 reinterpret_cast<void*>(target_ptr), target_bytes, ranges);
+           },
+           py::arg("host_ptr"), py::arg("host_bytes"), py::arg("target_ptr"),
+           py::arg("target_bytes"), py::arg("ranges"))
+      .def("offload_ranges_to_cpu",
+           [](turbobus::TurboBusRuntime& runtime, std::uintptr_t target_ptr,
+              std::size_t target_bytes, std::uintptr_t host_ptr,
+              std::size_t host_bytes,
+              const std::vector<turbobus::TransferRange>& ranges) {
+             return runtime.OffloadRangesToCpu(
+                 reinterpret_cast<void*>(target_ptr), target_bytes,
+                 reinterpret_cast<void*>(host_ptr), host_bytes, ranges);
+           },
+           py::arg("target_ptr"), py::arg("target_bytes"), py::arg("host_ptr"),
+           py::arg("host_bytes"), py::arg("ranges"))
       .def("wait", &turbobus::TurboBusRuntime::Wait, py::arg("handle"))
       .def("stats", &turbobus::TurboBusRuntime::GetStats, py::arg("handle"));
 }

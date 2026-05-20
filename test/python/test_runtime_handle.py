@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 import tempfile
 
+from turbobus import runtime as runtime_module
 from turbobus.runtime import RuntimeOptions, TransferHandle, TransferMode
 
 
@@ -97,6 +98,51 @@ class RuntimeOptionsTest(unittest.TestCase):
         self.assertEqual(options.chunk_bytes, 8388608)
         self.assertEqual(options.profile_bytes, 16777216)
         self.assertEqual(options.staging_slots, 2)
+
+
+class RangeValidationTest(unittest.TestCase):
+    def test_native_ranges_accepts_dicts_and_tuples(self) -> None:
+        class NativeRange:
+            def __init__(self) -> None:
+                self.src_offset = 0
+                self.dst_offset = 0
+                self.bytes = 0
+
+        old_extension = runtime_module._turbobus
+        runtime_module._turbobus = type("Ext", (), {"TransferRange": NativeRange})
+        try:
+            ranges = runtime_module._native_ranges(
+                [
+                    {"src_offset": 0, "dst_offset": 16, "bytes": 8},
+                    (32, 64, 8),
+                ],
+                source_bytes=128,
+                destination_bytes=128,
+            )
+        finally:
+            runtime_module._turbobus = old_extension
+
+        self.assertEqual(len(ranges), 2)
+        self.assertEqual(ranges[0].src_offset, 0)
+        self.assertEqual(ranges[0].dst_offset, 16)
+        self.assertEqual(ranges[1].src_offset, 32)
+        self.assertEqual(ranges[1].dst_offset, 64)
+
+    def test_native_ranges_rejects_out_of_bounds(self) -> None:
+        class NativeRange:
+            pass
+
+        old_extension = runtime_module._turbobus
+        runtime_module._turbobus = type("Ext", (), {"TransferRange": NativeRange})
+        try:
+            with self.assertRaises(ValueError):
+                runtime_module._native_ranges(
+                    [(120, 0, 16)],
+                    source_bytes=128,
+                    destination_bytes=128,
+                )
+        finally:
+            runtime_module._turbobus = old_extension
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 import json
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Mapping, Sequence
 
 try:
     import torch
@@ -181,6 +181,42 @@ class Runtime:
         )
         return TransferHandle(self, handle)
 
+    def fetch_ranges_to_gpu(self, cpu_tensor, gpu_tensor, ranges: Iterable):
+        _require_torch()
+        source_bytes, destination_bytes = _validate_range_tensors(
+            cpu_tensor=cpu_tensor,
+            gpu_tensor=gpu_tensor,
+            target_gpu=self.target_gpu,
+            direction="h2d",
+        )
+        native_ranges = _native_ranges(ranges, source_bytes, destination_bytes)
+        handle = self._runtime.fetch_ranges_to_gpu(
+            int(cpu_tensor.data_ptr()),
+            int(source_bytes),
+            int(gpu_tensor.data_ptr()),
+            int(destination_bytes),
+            native_ranges,
+        )
+        return TransferHandle(self, handle)
+
+    def offload_ranges_to_cpu(self, gpu_tensor, cpu_tensor, ranges: Iterable):
+        _require_torch()
+        source_bytes, destination_bytes = _validate_range_tensors(
+            cpu_tensor=cpu_tensor,
+            gpu_tensor=gpu_tensor,
+            target_gpu=self.target_gpu,
+            direction="d2h",
+        )
+        native_ranges = _native_ranges(ranges, source_bytes, destination_bytes)
+        handle = self._runtime.offload_ranges_to_cpu(
+            int(gpu_tensor.data_ptr()),
+            int(source_bytes),
+            int(cpu_tensor.data_ptr()),
+            int(destination_bytes),
+            native_ranges,
+        )
+        return TransferHandle(self, handle)
+
     def wait(self, handle: "TransferHandle") -> None:
         self._runtime.wait(handle.native)
         handle._status = "complete"
@@ -219,6 +255,58 @@ def _validate_transfer_tensors(cpu_tensor, gpu_tensor, target_gpu: int, directio
         if cpu_tensor.numel() * cpu_tensor.element_size() < bytes_to_copy:
             raise ValueError("cpu_tensor is smaller than gpu_tensor")
     return bytes_to_copy
+
+
+def _validate_range_tensors(
+    cpu_tensor,
+    gpu_tensor,
+    target_gpu: int,
+    direction: str,
+) -> tuple[int, int]:
+    _validate_transfer_tensors(cpu_tensor, gpu_tensor, target_gpu, direction)
+    cpu_bytes = cpu_tensor.numel() * cpu_tensor.element_size()
+    gpu_bytes = gpu_tensor.numel() * gpu_tensor.element_size()
+    if direction == "h2d":
+        return cpu_bytes, gpu_bytes
+    return gpu_bytes, cpu_bytes
+
+
+def _native_ranges(
+    ranges: Iterable,
+    source_bytes: int,
+    destination_bytes: int,
+) -> list:
+    _require_extension()
+    native = []
+    for item in ranges:
+        src_offset, dst_offset, bytes_ = _range_fields(item)
+        if src_offset < 0 or dst_offset < 0 or bytes_ <= 0:
+            raise ValueError("range offsets must be non-negative and bytes must be positive")
+        if src_offset + bytes_ > source_bytes:
+            raise ValueError("range source extends past source tensor")
+        if dst_offset + bytes_ > destination_bytes:
+            raise ValueError("range destination extends past destination tensor")
+        transfer_range = _turbobus.TransferRange()
+        transfer_range.src_offset = int(src_offset)
+        transfer_range.dst_offset = int(dst_offset)
+        transfer_range.bytes = int(bytes_)
+        native.append(transfer_range)
+    if not native:
+        raise ValueError("at least one non-empty range is required")
+    return native
+
+
+def _range_fields(item) -> tuple[int, int, int]:
+    if isinstance(item, Mapping):
+        return int(item["src_offset"]), int(item["dst_offset"]), int(item["bytes"])
+    if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+        if len(item) != 3:
+            raise ValueError("range tuples must be (src_offset, dst_offset, bytes)")
+        return int(item[0]), int(item[1]), int(item[2])
+    src_offset = getattr(item, "src_offset")
+    dst_offset = getattr(item, "dst_offset")
+    bytes_ = getattr(item, "bytes")
+    return int(src_offset), int(dst_offset), int(bytes_)
 
 
 class TransferHandle:
