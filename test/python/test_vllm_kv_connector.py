@@ -133,6 +133,14 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertEqual(connector.state.events[-1]["event"], "load_ready")
         self.assertFalse(connector.state.events[-1]["restore_enabled"])
 
+    def test_request_finished_all_groups_flattens_groups(self) -> None:
+        connector = self.make_connector()
+
+        self.assertEqual(
+            connector.request_finished_all_groups(FakeRequest(), ([1, 2], [3])),
+            (False, None),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
