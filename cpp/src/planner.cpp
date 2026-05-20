@@ -10,7 +10,9 @@
 namespace turbobus {
 
 std::vector<Path> ChunkPlanner::BuildPaths(const ProfileResult& profile,
-                                           TransferMode mode) const {
+                                           TransferMode mode,
+                                           double relay_min_effective_bw_gbps,
+                                           double relay_min_direct_ratio) const {
   std::vector<Path> paths;
 
   if (mode != TransferMode::RelayOnly && profile.direct_h2d_bw_gbps > 0.0) {
@@ -30,6 +32,14 @@ std::vector<Path> ChunkPlanner::BuildPaths(const ProfileResult& profile,
       if (!relay.p2p_enabled || relay.effective_bw_gbps <= 0.0) {
         continue;
       }
+      if (relay.effective_bw_gbps < relay_min_effective_bw_gbps) {
+        continue;
+      }
+      if (profile.direct_h2d_bw_gbps > 0.0 && relay_min_direct_ratio > 0.0 &&
+          relay.effective_bw_gbps <
+              profile.direct_h2d_bw_gbps * relay_min_direct_ratio) {
+        continue;
+      }
       Path path;
       path.kind = PathKind::RelayH2DThenP2P;
       path.target_device = relay.target_device;
@@ -47,7 +57,9 @@ std::vector<Path> ChunkPlanner::BuildPaths(const ProfileResult& profile,
 
 TransferPlan ChunkPlanner::Plan(std::size_t total_bytes, std::size_t chunk_bytes,
                                 const ProfileResult& profile, TransferMode mode,
-                                std::size_t min_chunks_for_relay) const {
+                                std::size_t min_chunks_for_relay,
+                                double relay_min_effective_bw_gbps,
+                                double relay_min_direct_ratio) const {
   if (total_bytes == 0) {
     return {};
   }
@@ -60,7 +72,8 @@ TransferPlan ChunkPlanner::Plan(std::size_t total_bytes, std::size_t chunk_bytes
     mode = TransferMode::DirectOnly;
   }
 
-  auto paths = BuildPaths(profile, mode);
+  auto paths = BuildPaths(profile, mode, relay_min_effective_bw_gbps,
+                          relay_min_direct_ratio);
   if (paths.empty()) {
     throw std::runtime_error("no enabled transfer path is available");
   }

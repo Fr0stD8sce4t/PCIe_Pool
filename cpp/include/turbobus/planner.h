@@ -12,10 +12,14 @@ class ChunkPlanner {
   TransferPlan Plan(std::size_t total_bytes, std::size_t chunk_bytes,
                     const ProfileResult& profile,
                     TransferMode mode = TransferMode::Pool,
-                    std::size_t min_chunks_for_relay = 2) const;
+                    std::size_t min_chunks_for_relay = 2,
+                    double relay_min_effective_bw_gbps = 0.0,
+                    double relay_min_direct_ratio = 0.0) const;
 
  private:
-  std::vector<Path> BuildPaths(const ProfileResult& profile, TransferMode mode) const;
+  std::vector<Path> BuildPaths(const ProfileResult& profile, TransferMode mode,
+                               double relay_min_effective_bw_gbps,
+                               double relay_min_direct_ratio) const;
 };
 
 }  // namespace turbobus

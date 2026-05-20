@@ -58,6 +58,15 @@ In `pool` mode, requests with fewer than `min_chunks_for_relay` chunks fall back
 to direct-only transfer. The default threshold is 2 chunks. This keeps small
 requests from paying relay overhead when there is not enough work to split.
 
+Relay paths can also be filtered conservatively before planning:
+
+- `relay_min_effective_bw_gbps` skips relays below an absolute effective
+  bandwidth
+- `relay_min_direct_ratio` skips relays whose effective bandwidth is below a
+  fraction of the direct H2D bandwidth
+
+Both filters default to 0, so the default planner behavior is unchanged.
+
 The pool benchmark now uses this production planner for pooled transfers instead
 of a hand-written even/odd chunk split.
 

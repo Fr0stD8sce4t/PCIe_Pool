@@ -82,6 +82,15 @@ int main() {
   assert(relay_plan.assignments.front().path.kind ==
          turbobus::PathKind::RelayH2DThenP2P);
 
+  turbobus::ProfileResult slow_relay_profile = profile;
+  slow_relay_profile.relays.front().h2d_bw_gbps = 5.0;
+  slow_relay_profile.relays.front().effective_bw_gbps = 5.0;
+  const auto filtered_plan =
+      planner.Plan(total_bytes, chunk_bytes, slow_relay_profile,
+                   turbobus::TransferMode::Pool, 2, 0.0, 0.9);
+  assert(filtered_plan.assignments.size() == 1);
+  assert(filtered_plan.assignments.front().path.kind == turbobus::PathKind::DirectH2D);
+
   std::cout << "planner test passed\n";
   return 0;
 }

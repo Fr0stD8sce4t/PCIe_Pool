@@ -387,6 +387,64 @@ target + GPU5 relay pair by exposing more chunk-level parallelism. The default
 chunk size remains `16 MiB` for now until repeated sweeps confirm that `4 MiB`
 is consistently better under different machine load.
 
+## 2026-05-20: 4 MiB Trace Benchmark Result
+
+This run validates the expanded JSON trace output: direct/relay byte counts,
+per-relay stats, and `last_plan` chunk assignments.
+
+Command:
+
+```text
+python benchmarks/bandwidth_pool.py \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --bytes 268435456 \
+  --chunk-bytes 4194304 \
+  --profile-bytes 16777216 \
+  --warmup 1 \
+  --iterations 5 \
+  --mode all \
+  --verify \
+  --json-output benchmarks/results/gpu6_relay5_trace.json
+```
+
+Profile result:
+
+```text
+direct_h2d_bw_gbps 7.563802560469968
+relay 5 h2d 7.595924979113988 p2p 40.9563203305953 effective 7.595924979113988
+```
+
+Median transfer results:
+
+```text
+mode direct median_gib_per_second 7.317287762256032
+mode relay median_gib_per_second 7.275725990581611
+mode pool median_gib_per_second 14.450813519766232
+pool_over_direct_median 1.9748865958649717
+pool_over_relay_median 1.9861679148545086
+match True
+```
+
+Trace checks:
+
+```text
+pool direct_bytes 134217728
+pool relay_bytes 134217728
+pool direct_chunks 32
+pool relay_chunks 32
+relay 5 bytes 134217728
+relay 5 chunks 32
+last_plan direct assignment: 32 chunks
+last_plan relay5 assignment: 32 chunks
+```
+
+Conclusion:
+
+The `4 MiB` trace run confirms that the JSON output records enough information
+to explain planner behavior. The pooled path split the 256 MiB transfer evenly
+between direct H2D and relay GPU5, and reached about 1.97x direct-only bandwidth.
+
 ## Next Implementation Steps
 
 1. Replace the benchmark-only even/odd chunk split with the production

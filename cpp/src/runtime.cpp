@@ -81,7 +81,9 @@ TransferHandle TurboBusRuntime::FetchToGpu(void* host_ptr, void* target_gpu_ptr,
 
   last_plan_ = planner_.Plan(bytes, options_.chunk_bytes, profile_,
                              options_.transfer_mode,
-                             options_.min_chunks_for_relay);
+                             options_.min_chunks_for_relay,
+                             options_.relay_min_effective_bw_gbps,
+                             options_.relay_min_direct_ratio);
   return executor_.Submit(host, target, last_plan_);
 }
 

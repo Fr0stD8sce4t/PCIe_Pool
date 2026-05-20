@@ -54,11 +54,18 @@ class TransferHandleTest(unittest.TestCase):
 
 class RuntimeOptionsTest(unittest.TestCase):
     def test_transfer_mode_accepts_string_values(self) -> None:
-        options = RuntimeOptions(transfer_mode="direct", min_chunks_for_relay=3)
+        options = RuntimeOptions(
+            transfer_mode="direct",
+            min_chunks_for_relay=3,
+            relay_min_effective_bw_gbps=6.5,
+            relay_min_direct_ratio=0.8,
+        )
 
         self.assertEqual(options.transfer_mode, "direct")
         self.assertEqual(TransferMode(options.transfer_mode), TransferMode.DIRECT)
         self.assertEqual(options.min_chunks_for_relay, 3)
+        self.assertEqual(options.relay_min_effective_bw_gbps, 6.5)
+        self.assertEqual(options.relay_min_direct_ratio, 0.8)
 
     def test_from_tuning_json_reads_best_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

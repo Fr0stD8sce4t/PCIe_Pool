@@ -116,3 +116,10 @@ opts = turbobus.RuntimeOptions.from_tuning_json(
 )
 rt = turbobus.Runtime(target_gpu=6, relay_gpus=[5], options=opts)
 ```
+
+To skip weak relay paths, set conservative planner thresholds:
+
+```python
+opts.relay_min_direct_ratio = 0.8
+opts.relay_min_effective_bw_gbps = 6.0
+```

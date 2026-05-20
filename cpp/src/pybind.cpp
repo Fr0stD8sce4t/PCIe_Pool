@@ -54,7 +54,11 @@ PYBIND11_MODULE(_turbobus, m) {
                      &turbobus::RuntimeOptions::profile_cache_enabled)
       .def_readwrite("transfer_mode", &turbobus::RuntimeOptions::transfer_mode)
       .def_readwrite("min_chunks_for_relay",
-                     &turbobus::RuntimeOptions::min_chunks_for_relay);
+                     &turbobus::RuntimeOptions::min_chunks_for_relay)
+      .def_readwrite("relay_min_effective_bw_gbps",
+                     &turbobus::RuntimeOptions::relay_min_effective_bw_gbps)
+      .def_readwrite("relay_min_direct_ratio",
+                     &turbobus::RuntimeOptions::relay_min_direct_ratio);
 
   py::class_<turbobus::RelayProfile>(m, "RelayProfile")
       .def_readonly("relay_device", &turbobus::RelayProfile::relay_device)

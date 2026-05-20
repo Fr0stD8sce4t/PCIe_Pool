@@ -49,6 +49,8 @@ class RuntimeOptions:
     profile_cache_enabled: bool = True
     transfer_mode: TransferMode | str = TransferMode.POOL
     min_chunks_for_relay: int = 2
+    relay_min_effective_bw_gbps: float = 0.0
+    relay_min_direct_ratio: float = 0.0
 
     @classmethod
     def from_tuning_json(cls, path: str | Path) -> "RuntimeOptions":
@@ -84,6 +86,8 @@ class RuntimeOptions:
         options.profile_cache_enabled = self.profile_cache_enabled
         options.transfer_mode = _native_transfer_mode(self.transfer_mode)
         options.min_chunks_for_relay = self.min_chunks_for_relay
+        options.relay_min_effective_bw_gbps = self.relay_min_effective_bw_gbps
+        options.relay_min_direct_ratio = self.relay_min_direct_ratio
         return options
 
 
