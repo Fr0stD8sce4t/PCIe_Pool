@@ -13,7 +13,8 @@ pinned CPU prefix KV backing -> existing target-GPU KV cache slots
 ```
 
 This is the smallest useful real inference path because it affects TTFT and
-uses the same H2D pooled transfer path already validated by the POC benchmarks.
+uses the same H2D pooled transfer path already validated by low-level transfer
+benchmarks.
 
 ## Framework Responsibilities
 
@@ -66,12 +67,13 @@ manager.wait_many(block_names)
 ## vLLM Target
 
 The first real framework target is vLLM. The vLLM-specific plan is recorded in
-`docs/vllm_poc.md`, and the initial adapter sketch is
-`examples/vllm_kv_slot_adapter.py`.
+`docs/vllm_integration.md`; the package APIs are `turbobus.vllm` and
+`turbobus.vllm_integration`.
 
-## First Real Framework POC Shape
+## First Real Framework Integration Shape
 
-The first vLLM POC should patch only a narrow prefix/session restore hook:
+The first vLLM integration should patch only a narrow prefix/session restore
+hook:
 
 1. Let vLLM allocate its normal GPU KV slots.
 2. Export the KV cache tensor and slot offsets to a TurboBus adapter.

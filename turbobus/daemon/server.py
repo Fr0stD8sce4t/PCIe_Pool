@@ -8,7 +8,14 @@ import uuid
 from dataclasses import asdict
 from typing import Iterable
 
-from .protocol import DaemonRequest, DaemonResponse, RelayQuota, RequestType, Session
+from .protocol import (
+    DaemonRequest,
+    DaemonResponse,
+    RelayQuota,
+    RequestType,
+    Session,
+    TransferReservation,
+)
 
 
 class TurboBusDaemon:
@@ -27,6 +34,7 @@ class TurboBusDaemon:
     ) -> None:
         self._lock = threading.Lock()
         self._sessions: dict[str, Session] = {}
+        self._reservations: dict[str, TransferReservation] = {}
         self._relay_quotas = {
             int(gpu): RelayQuota(
                 relay_gpu=int(gpu),
@@ -72,6 +80,9 @@ class TurboBusDaemon:
             session = self._sessions.pop(session_id, None)
             if session is None:
                 return DaemonResponse(ok=False, error="unknown session")
+            for reservation_id, reservation in list(self._reservations.items()):
+                if reservation.session_id == session_id:
+                    self._release_reservation_locked(reservation_id)
             for gpu in session.relay_gpus:
                 quota = self._relay_quotas.get(gpu)
                 if quota is not None:
@@ -79,17 +90,73 @@ class TurboBusDaemon:
             session.active = False
             return DaemonResponse(ok=True, payload={"session_id": session_id})
 
+    def reserve_transfer(
+        self,
+        session_id: str,
+        relay_gpu: int,
+        chunks: int,
+        bytes_: int = 0,
+        direction: str = "unknown",
+    ) -> DaemonResponse:
+        chunks = int(chunks)
+        relay_gpu = int(relay_gpu)
+        if chunks <= 0:
+            return DaemonResponse(ok=False, error="chunks must be positive")
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None or not session.active:
+                return DaemonResponse(ok=False, error="unknown session")
+            if relay_gpu not in session.relay_gpus:
+                return DaemonResponse(ok=False, error="relay GPU is not assigned to this session")
+            if chunks > session.max_inflight_chunks:
+                return DaemonResponse(ok=False, error="reservation exceeds session chunk limit")
+            quota = self._relay_quotas.get(relay_gpu)
+            if quota is None or not quota.can_reserve(chunks):
+                return DaemonResponse(ok=False, error="relay chunk quota is unavailable")
+
+            reservation = TransferReservation(
+                reservation_id=str(uuid.uuid4()),
+                session_id=session_id,
+                relay_gpu=relay_gpu,
+                chunks=chunks,
+                bytes=int(bytes_),
+                direction=str(direction),
+            )
+            self._reservations[reservation.reservation_id] = reservation
+            quota.active_chunks += chunks
+            return DaemonResponse(ok=True, payload={"reservation": asdict(reservation)})
+
+    def release_transfer(self, reservation_id: str) -> DaemonResponse:
+        with self._lock:
+            reservation = self._release_reservation_locked(reservation_id)
+            if reservation is None:
+                return DaemonResponse(ok=False, error="unknown reservation")
+            return DaemonResponse(ok=True, payload={"reservation_id": reservation_id})
+
+    def _release_reservation_locked(self, reservation_id: str) -> TransferReservation | None:
+        reservation = self._reservations.pop(reservation_id, None)
+        if reservation is None:
+            return None
+        quota = self._relay_quotas.get(reservation.relay_gpu)
+        if quota is not None:
+            quota.active_chunks = max(0, quota.active_chunks - reservation.chunks)
+        return reservation
+
     def describe(self) -> DaemonResponse:
         with self._lock:
             return DaemonResponse(
                 ok=True,
                 payload={
                     "sessions": {key: asdict(value) for key, value in self._sessions.items()},
+                    "reservations": {
+                        key: asdict(value) for key, value in self._reservations.items()
+                    },
                     "relay_quotas": {
                         key: {
                             "relay_gpu": quota.relay_gpu,
                             "max_sessions": quota.max_sessions,
                             "max_inflight_chunks": quota.max_inflight_chunks,
+                            "active_chunks": quota.active_chunks,
                             "sessions": sorted(quota.sessions),
                         }
                         for key, quota in self._relay_quotas.items()
@@ -109,6 +176,23 @@ class TurboBusDaemon:
             if request.session_id is None:
                 return DaemonResponse(ok=False, error="session_id is required")
             return self.close_session(request.session_id)
+        if request.request_type == RequestType.RESERVE_TRANSFER:
+            if request.session_id is None:
+                return DaemonResponse(ok=False, error="session_id is required")
+            payload = request.payload
+            return self.reserve_transfer(
+                session_id=request.session_id,
+                relay_gpu=int(payload["relay_gpu"]),
+                chunks=int(payload.get("chunks", 1)),
+                bytes_=int(payload.get("bytes", 0)),
+                direction=str(payload.get("direction", "unknown")),
+            )
+        if request.request_type == RequestType.RELEASE_TRANSFER:
+            payload = request.payload
+            reservation_id = payload.get("reservation_id")
+            if reservation_id is None:
+                return DaemonResponse(ok=False, error="reservation_id is required")
+            return self.release_transfer(str(reservation_id))
         if request.request_type == RequestType.PROFILE:
             return self.describe()
         return DaemonResponse(ok=False, error=f"unsupported request: {request.request_type}")

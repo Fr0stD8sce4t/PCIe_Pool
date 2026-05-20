@@ -1,9 +1,14 @@
 # TurboBus
 
-TurboBus is an experimental single-node PCIe bandwidth pooling runtime for LLM
-offload-style transfers.
+TurboBus is an experimental single-node PCIe bandwidth pooling system for real
+large-model memory offload.
 
-The current MVP focuses on:
+TurboBus uses fast GPU scale-up fabric such as NVLink, NVSwitch, or Infinity
+Fabric to use neighboring GPUs as relays. A target GPU can borrow otherwise idle
+PCIe links from relay GPUs, so several independent PCIe links behave like a
+shared transfer layer instead of a single GPU-private link.
+
+The current implementation focuses on:
 
 - `CPU pinned memory -> target GPU`
 - `CPU pinned memory -> relay GPU -> target GPU`
@@ -11,17 +16,20 @@ The current MVP focuses on:
 - CUDA stream/event execution
 - path profiling
 - a thin PyTorch API
-- a minimal daemon state skeleton for relay quota control
+- real framework KV slot APIs
+- a per-node daemon state skeleton for relay quota control
 
-The daemon first version only manages session and relay quota state through a
-local Unix socket. It does not move GPU pointers across processes.
+The daemon manages session and relay quota state through a local Unix socket.
+It is the control-plane boundary for cross-job bandwidth sharing. Client
+processes still execute their own CUDA transfers, but daemon policy decides
+which relay GPUs and relay capacity they may use.
 
 Out of scope for this first version:
 
 - HMC integration
 - RDMA
 - cross-node transfer
-- vLLM/SGLang deep integration
+- broad vLLM/SGLang scheduler rewrites
 - a full KV cache state machine
 
 ## Layout
@@ -38,12 +46,10 @@ references/             Cloned reference repositories
 ```
 
 Initial server benchmark notes are recorded in `docs/benchmark_notes.md`.
-The narrow real inference POC plan is recorded in
-`docs/real_inference_poc.md`.
 The real framework connector boundary is recorded in
 `docs/real_framework_connector.md`.
-The first real framework target is vLLM; its POC plan is recorded in
-`docs/vllm_poc.md`.
+The first real framework target is vLLM; its integration plan is recorded in
+`docs/vllm_integration.md`.
 
 ## Build Python Extension
 
@@ -137,8 +143,9 @@ Use a tuner result directly:
 
 ## KV Block Offload Benchmark
 
-`benchmarks/kv_offload.py` uses `OffloadStore` to simulate named KV-cache
-blocks moving between pinned CPU memory and the target GPU:
+`benchmarks/kv_offload.py` validates named KV-cache shaped blocks moving
+between pinned CPU memory and the target GPU. It is a transfer-layer check, not
+a replacement for real vLLM testing:
 
 ```bash
 python benchmarks/kv_offload.py \
@@ -167,135 +174,54 @@ can include queueing time when several blocks are submitted together. Use
 tensors and exercise the range-batched manager path; use `separate` to keep one
 tensor per block.
 
-## Inference Offload Simulator
+## Real Inference Integration
 
-`benchmarks/inference_offload_sim.py` is a lightweight simulator for future
-LLM connector behavior. It does not patch vLLM or SGLang. It simulates request
-KV blocks, decode steps, limited GPU block residency, prefetch, eviction, and
-transfer stall using the same `OffloadManager` API as the KV benchmark:
+`turbobus.inference` is the framework-facing KV slot API. A framework owns the
+KV cache allocation and passes TurboBus a CPU backing tensor, a GPU KV backing
+tensor, and per-block byte offsets. TurboBus restores or saves those registered
+slots through pooled PCIe transfer:
 
-```bash
-python benchmarks/inference_offload_sim.py \
-  --target-gpu 6 \
-  --relay-gpus 5 \
-  --requests 4 \
-  --blocks-per-request 8 \
-  --blocks-per-step 4 \
-  --gpu-block-capacity 4 \
-  --access-pattern round_robin \
-  --working-set-blocks 8 \
-  --seed 1 \
-  --storage-layout packed \
-  --block-bytes 16777216 \
-  --decode-steps 32 \
-  --compute-ms 0 \
-  --compute-impl cuda \
-  --cuda-compute-elements 16777216 \
-  --cuda-compute-iterations 64 \
-  --chunk-bytes 4194304 \
-  --profile-bytes 16777216 \
-  --mode all \
-  --dynamic-weights \
-  --json-output benchmarks/results/infer_sim_gpu6_relay5.json \
-  --summary-output benchmarks/results/infer_sim_gpu6_relay5_summary.txt
+```python
+from turbobus.inference import InferenceKVSlotAdapter
+
+adapter = InferenceKVSlotAdapter(rt, cpu_backing, gpu_kv_backing)
+adapter.register_slots(slots)
+adapter.restore_prefix(["prefix0", "prefix1"])
 ```
 
-By default each step waits for eviction and prefetch before optional dummy
-compute. Add `--overlap-compute` to run dummy compute concurrently with
-transfer. `--compute-impl sleep --compute-ms N` uses a Python sleep scheduling
-model. `--compute-impl cuda` runs a native CUDA dummy kernel on a preallocated
-target-GPU tensor; tune its runtime with `--cuda-compute-elements` and
-`--cuda-compute-iterations`. The default access pattern and GPU block capacity
-are chosen to create capacity pressure, so the run should exercise both
-prefetch and eviction. Use `tokens_s`, `step_p50_ms`, and `transfer_p50_ms` in
-the copy summary as the main metrics. The `sim_scenario` line describes what
-the run is modeling so the saved summary can be read without the full command.
-Use `--storage-layout packed` to store all simulated KV blocks in shared
-CPU/GPU backing tensors and exercise the range-batched manager path; use
-`separate` to keep one tensor per block.
+`turbobus.vllm` maps vLLM V1 `GPUModelRunner.kv_caches` tensors and
+`KVCacheManager` block ids into TurboBus KV slots. `turbobus.vllm_integration`
+installs a narrow hook in a real vLLM process: vLLM still owns scheduling and
+KV allocation, while TurboBus observes the allocated block ids and restores or
+saves those real slots through pooled PCIe transfer.
 
-`benchmarks/inference_workload_sim.py` adds a request-level workload model on
-top of the same manager API. It keeps the benchmark self-contained while adding
-request arrival, prefill, decode steps, scheduling, TTFT, request latency, and
-GPU KV cache hit-rate metrics:
+On the current Qwen3-0.6B server run, vLLM exposes 28 layer KV tensors shaped
+`(2, 9944, 16, 8, 128)` in `bfloat16`, so TurboBus treats each layer tensor as
+one relay-poolable group.
 
-```bash
-python benchmarks/inference_workload_sim.py \
-  --target-gpu 6 \
-  --relay-gpus 5 \
-  --preset pressure \
-  --scheduler round_robin \
-  --storage-layout packed \
-  --prefill-mode restore_from_cpu \
-  --compute-impl cuda \
-  --cuda-compute-iterations 2048 \
-  --overlap-compute \
-  --mode all \
-  --dynamic-weights
+Use `examples/vllm_introspect.py` and `examples/vllm_probe.py` only to inspect
+version-specific vLLM internals before wiring a hook. They are discovery tools,
+not the runtime data path.
+
+Minimal integration shape:
+
+```python
+import turbobus
+from turbobus.vllm_integration import VllmTurboBusIntegration
+
+rt = turbobus.Runtime(target_gpu=6, relay_gpus=[5])
+integration = VllmTurboBusIntegration(rt)
+integration.install()
+
+# After vLLM initializes KV cache tensors:
+integration.allocate_cpu_backings(slots_per_layer=128)
+
+# After vLLM allocates slots for a request:
+integration.restore_request_prefix(request_id)
 ```
 
-Use `--preset light`, `--preset pressure`, or `--preset long_context` for
-repeatable workload shapes. `--prefill-mode produce_kv_on_gpu` models prompt KV
-being produced on the target GPU; `--prefill-mode restore_from_cpu` models
-prompt/prefix KV blocks being loaded from pinned CPU backing memory before
-decode.
-
-`benchmarks/prefix_restore_poc.py` is the first narrow real-inference POC
-boundary. It focuses only on prefix/session KV restore from pinned CPU backing
-memory into target-GPU KV slots, with optional CUDA dummy compute beside the
-restore. It does not patch vLLM or SGLang:
-
-```bash
-python benchmarks/prefix_restore_poc.py \
-  --target-gpu 6 \
-  --relay-gpus 5 \
-  --sessions 4 \
-  --blocks-per-session 8 \
-  --restore-blocks 8 \
-  --iterations 5 \
-  --storage-layout packed \
-  --block-bytes 16777216 \
-  --compute-impl cuda \
-  --cuda-compute-iterations 2048 \
-  --overlap-compute \
-  --mode all \
-  --dynamic-weights \
-  --summary-output benchmarks/results/prefix_restore_poc_summary.txt
-```
-
-Use `poc_mode.restore_gib_s`, `restore_p50_ms`, `step_p50_ms`, and the
-direct/relay chunk counts as the main POC metrics.
-
-`benchmarks/real_model_sidecar_restore.py` is the next step after the POC. It
-runs a real PyTorch `TransformerEncoderLayer` on the target GPU while TurboBus
-restores prefix/session KV-shaped blocks beside it. This still does not patch a
-real inference framework, but it replaces the dummy compute with real PyTorch
-model kernels:
-
-```bash
-python benchmarks/real_model_sidecar_restore.py \
-  --target-gpu 6 \
-  --relay-gpus 5 \
-  --sessions 4 \
-  --blocks-per-session 8 \
-  --restore-blocks 8 \
-  --iterations 5 \
-  --storage-layout packed \
-  --block-bytes 16777216 \
-  --model-layers 1 \
-  --model-batch-size 1 \
-  --model-seq-len 128 \
-  --model-hidden-size 4096 \
-  --model-heads 32 \
-  --model-ff-size 11008 \
-  --model-dtype float16 \
-  --overlap-compute \
-  --mode all \
-  --dynamic-weights
-```
-
-Use `sidecar_mode.restore_gib_s`, `step_p50_ms`, `model_p50_ms`, and
-direct/relay chunks to compare direct, relay, and pool modes.
+This is intentionally narrow: it moves real vLLM KV slots, but does not replace
+vLLM's scheduler or cache manager.
 
 ```python
 opts = turbobus.RuntimeOptions.from_tuning_json(

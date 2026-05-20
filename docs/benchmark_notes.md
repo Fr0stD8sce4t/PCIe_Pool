@@ -1,5 +1,11 @@
 # Benchmark Notes
 
+This file keeps historical validation results. Some older sections mention
+simulator or sidecar scripts that were removed when the project was refocused
+on real large-model integration. Active entry points are the low-level transfer
+benchmarks, the KV block transfer benchmark, and the vLLM integration modules
+under `turbobus/`.
+
 ## 2026-05-19: Single Relay Pooling Smoke Result
 
 Environment summary from the first server run:
@@ -1198,7 +1204,7 @@ The vLLM worker exposes one KV cache tensor per layer in
 `GPUModelRunner.kv_caches`. For Qwen3-0.6B there are 28 layer tensors, each with
 shape `(2, 9944, 16, 8, 128)`, dtype `bfloat16`, on `cuda:0`. A single layer
 block is 65,536 bytes. The scheduler allocated block id `[1]` for the first
-short request. The next vLLM POC should treat each layer tensor as its own
+short request. The vLLM integration should treat each layer tensor as its own
 TurboBus group and restore the same vLLM block ids across all layer groups.
 
 ## Next Implementation Steps
@@ -1223,14 +1229,12 @@ TurboBus group and restore the same vLLM block ids across all layer groups.
 7. Add basic transfer metrics to `TransferHandle` or a returned stats object.
    `TransferStats` now records bytes, submit-to-complete time, effective GiB/s,
    and direct/relay chunk counts.
-8. Move from the prefix restore POC to a real-model sidecar restore harness.
-   Keep TurboBus outside the framework scheduler: run real model work or a
-   framework-adjacent model step while TurboBus restores prefix/session KV-shaped
-   buffers into target-GPU slots. The first sidecar run is complete and shows
-   that pooled restore still gives about 1.95x speedup beside a real PyTorch
-   Transformer layer.
-9. Add or run sidecar compute sweeps with heavier model settings, then design
-   the first narrow connector boundary for real framework KV slot addresses.
-10. Use the vLLM probe result to wire a narrow prefix/session restore hook for
-    Qwen3-0.6B: one TurboBus group per `GPUModelRunner.kv_caches` layer tensor,
-    block byte size 65,536, and vLLM block ids from `KVCacheManager`.
+8. Move the active project away from simulator and sidecar scripts. Keep their
+   old measurements here as historical validation only.
+9. Use the vLLM probe result to wire a narrow prefix/session restore hook for
+   Qwen3-0.6B: one TurboBus group per `GPUModelRunner.kv_caches` layer tensor,
+   block byte size 65,536, and vLLM block ids from `KVCacheManager`.
+10. Evolve `turbobus.vllm_integration` into the measured real path: capture
+    real vLLM KV tensors, allocate pinned CPU backing, restore/save the
+    allocated request blocks, and compare direct, relay, and pool modes inside a
+    real vLLM generation run.

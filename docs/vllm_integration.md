@@ -1,4 +1,4 @@
-# vLLM Prefix Restore POC
+# vLLM Prefix Restore Integration
 
 The first real framework target is vLLM. Keep the first patch narrow: wire only
 prefix/session KV restore to TurboBus, and leave vLLM scheduling and cache
@@ -9,8 +9,8 @@ allocation in vLLM.
 The vLLM V1 KV cache API exposes request blocks through `KVCacheBlocks`, where
 the outer tuple maps to KV cache groups and each group contains block ids. The
 vLLM KV cache manager also has prefix-cache methods such as
-`get_computed_blocks()` and `allocate_slots()`. This matches the TurboBus POC
-boundary:
+`get_computed_blocks()` and `allocate_slots()`. This matches the TurboBus
+integration boundary:
 
 ```text
 vLLM decides block ids and GPU slots
@@ -23,7 +23,7 @@ vLLM continues decode
 Target a prefix/session restore hook after vLLM knows the GPU block ids for a
 request and before decode starts for the reused prefix.
 
-The POC should:
+The integration should:
 
 1. Let vLLM allocate its normal GPU KV blocks.
 2. Convert the vLLM KV block ids into byte offsets inside the vLLM KV cache
@@ -63,8 +63,8 @@ python examples/vllm_introspect.py
 
 Copy only the `VLLM_INTROSPECT_BEGIN` / `VLLM_INTROSPECT_END` block. The output
 lists the actual module paths, classes, and KV-cache-related methods in the
-installed vLLM version, so the POC can target real source paths instead of an
-older API shape.
+installed vLLM version, so the integration can target real source paths instead
+of an older API shape.
 
 For this version, introspection showed the main patch points:
 
@@ -102,13 +102,21 @@ For this model, one layer KV tensor block is:
 2 * 16 * 8 * 128 * sizeof(bfloat16) = 65536 bytes
 ```
 
-`examples/vllm_kv_slot_adapter.py` therefore supports one TurboBus group per
-vLLM layer tensor. This avoids assuming that all layers share one contiguous
-allocation.
+`turbobus.vllm` therefore supports one TurboBus group per vLLM layer tensor.
+This avoids assuming that all layers share one contiguous allocation.
+
+`turbobus.vllm_integration` installs a narrow hook on:
+
+- `GPUModelRunner.initialize_kv_cache`
+- `KVCacheManager.allocate_slots`
+
+The hook records real `kv_caches` tensors and allocated block ids, then exposes
+`restore_request_prefix()` and `save_request_prefix()` for those real vLLM
+slots.
 
 ## Success Criteria
 
-The first vLLM POC passes when:
+The first vLLM integration passes when:
 
 - a fixed prompt produces the same output with and without TurboBus restore;
 - direct, relay, and pool modes restore the same block list;

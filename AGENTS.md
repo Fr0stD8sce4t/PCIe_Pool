@@ -1,8 +1,8 @@
 # TurboBus Project Instructions
 
 TurboBus is a research prototype for single-node PCIe bandwidth pooling for
-LLM memory offload tasks. Treat the project as an LLM offload transfer engine,
-not only as a memcpy benchmark tool.
+real large-model memory offload tasks. Treat the project as a daemon-managed
+LLM systems project, not as a memcpy benchmark or inference simulator.
 
 The current core idea is:
 
@@ -10,8 +10,8 @@ The current core idea is:
 - use relay `CPU pinned memory -> relay GPU -> target GPU` transfer;
 - split large tensor/block transfers across direct and relay paths;
 - use measured path performance to improve scheduling decisions;
-- expose enough Python APIs and benchmark data to evaluate LLM offload use
-  cases such as KV cache prefetch/evict and model weight reload.
+- expose production-shaped Python APIs for real inference/training systems:
+  on-demand model loading, vLLM KV cache offload/restore, and training offload.
 
 ## Scope
 
@@ -27,8 +27,10 @@ In scope:
 - path profiling and tuning;
 - per-path stats and plan tracing;
 - PyTorch tensor API;
-- lightweight LLM offload benchmarks;
-- a daemon used only for resource coordination.
+- real framework KV slot adapters;
+- vLLM integration hooks;
+- a per-node daemon for relay ownership, relay quota, and cross-job bandwidth
+  sharing policy.
 
 Out of scope unless explicitly requested:
 
@@ -36,7 +38,7 @@ Out of scope unless explicitly requested:
 - cross-node transfer;
 - HMC integration;
 - daemon-side CUDA IPC data movement;
-- full vLLM/SGLang patching;
+- broad vLLM/SGLang scheduler rewrites;
 - full KV cache state machine.
 
 ## Reference Projects
@@ -59,9 +61,9 @@ Important lessons from local references:
 
 ## Development Roadmap
 
-Prefer small, verifiable steps. The project should be connector-ready for real
-LLM inference later, but should not patch vLLM/SGLang or implement a full KV
-cache manager before the core behavior is tested.
+Prefer small, verifiable steps. The project should move toward the TurboBus
+paper system: daemon-managed PCIe bandwidth pooling through relay GPUs, with
+real large-model integration points instead of simulated inference workloads.
 
 Current completed baseline:
 
@@ -71,7 +73,8 @@ Current completed baseline:
 - Chunk planning, path stats, dynamic weights, and JSON/copy summaries.
 - Range batched transfer APIs.
 - A minimal named-block `OffloadStore`.
-- `bandwidth_pool.py` and `kv_offload.py` benchmarks.
+- `bandwidth_pool.py` and `kv_offload.py` low-level validation benchmarks.
+- `turbobus.inference` and `turbobus.vllm` framework-facing APIs.
 
 Next steps:
 
@@ -88,70 +91,43 @@ Next steps:
      and future connector entry points.
    - The simple per-block path is available and tested.
    - Packed CPU/GPU backing buffers with per-block offsets are supported by
-     `OffloadStore`, the simulator, and the KV benchmark. Shared backing buffers
-     use `fetch_ranges_to_gpu` and `offload_ranges_to_cpu` for many-block
-     transfers.
+     `OffloadStore`, the framework adapters, and the KV benchmark. Shared
+     backing buffers use `fetch_ranges_to_gpu` and `offload_ranges_to_cpu` for
+     many-block transfers.
    - Keep the per-block path as a fallback for non-packed tensors.
 
-3. Add an inference offload simulator before patching real frameworks.
-   - Simulate request arrival, block ownership, decode steps, GPU block capacity,
-     prefetch, eviction, and transfer stall.
-   - Non-overlap and Python-sleep overlap simulator paths are available.
-   - The simulator uses the packed range-batch manager path for
-     KV-cache-style backing buffers.
-   - Native CUDA dummy compute is available for overlap experiments through
-     `--compute-impl cuda`.
-   - CUDA dummy compute overlap has been validated with heavier native kernels.
-   - A request-level workload simulator is available as
-     `benchmarks/inference_workload_sim.py`; it models request arrival, prefill,
-     decode steps, scheduling, TTFT, request latency, and GPU KV cache hit rate.
-   - The initial burst workload result is recorded and shows enough KV pressure
-     to compare direct, relay, and pool modes.
-   - Workload presets `light`, `pressure`, and `long_context` are available.
-   - Prefill supports both `produce_kv_on_gpu` and `restore_from_cpu`.
-   - The `pressure` + `restore_from_cpu` workload result is recorded and shows
-     strong pooled-transfer gains for TTFT and tokens/s.
-   - A narrow real-framework POC plan is recorded in
-     `docs/real_inference_poc.md`. The first POC boundary is prefix/session KV
-     restore from pinned CPU backing memory into target-GPU KV slots, without
-     broad vLLM/SGLang scheduler rewrites.
-   - `benchmarks/prefix_restore_poc.py` is the first framework-adjacent harness
-     for that boundary. The initial GPU6 target + GPU5 relay run passed with
-     verification enabled and showed about 1.96x pooled restore speedup.
-   - `benchmarks/real_model_sidecar_restore.py` is the real-model sidecar
-     restore harness. It keeps TurboBus outside the framework scheduler, but
-     runs a PyTorch TransformerEncoderLayer while TurboBus restores
-     prefix/session KV-shaped buffers into target-GPU slots.
-   - The first sidecar result is recorded and shows about 1.95x pooled restore
-     speedup beside a real PyTorch Transformer layer.
-   - `docs/real_framework_connector.md` and `turbobus.inference` define the
-     first narrow connector boundary for real framework KV slot addresses.
-   - vLLM is the first real framework target. `docs/vllm_poc.md` and
-     `turbobus.vllm` define the vLLM-shaped adapter boundary.
-   - `examples/vllm_introspect.py` prints the installed vLLM version's
-     KV-cache-related modules and methods before writing a version-specific
-     patch.
-   - `examples/vllm_probe.py` is an observation-only vLLM run that prints KV
-     cache tensor shapes and allocated block ids without changing vLLM behavior.
-   - The Qwen3-0.6B vLLM probe showed 28 layer KV tensors shaped
+3. Build the real vLLM KV offload integration path.
+   - vLLM is the first real inference framework target.
+   - `turbobus.inference` defines framework KV slot registration and
+     restore/save.
+   - `turbobus.vllm` defines vLLM layer KV groups and block references.
+   - `turbobus.vllm_integration` installs a narrow real-vLLM hook that observes
+     `GPUModelRunner.kv_caches` and `KVCacheManager.allocate_slots()` results.
+   - `examples/vllm_introspect.py` and `examples/vllm_probe.py` are temporary
+     discovery tools for version-specific vLLM internals, not simulator code.
+   - The current server vLLM is
+     `0.17.1rc1.dev171+ga3e2e250f.d20260324`.
+   - The Qwen3-0.6B probe showed 28 layer KV tensors shaped
      `(2, 9944, 16, 8, 128)` in bfloat16, with 65,536 bytes per layer block.
-   - Next priority: wire only vLLM's prefix/session restore hook to the adapter
-     boundary, using one TurboBus group per `GPUModelRunner.kv_caches` layer
-     tensor and vLLM-owned block ids from `KVCacheManager`.
+   - Next priority: implement a real vLLM restore/save hook using vLLM-owned
+     `GPUModelRunner.kv_caches` tensors and block ids from `KVCacheManager`.
+     The first hook exists in `turbobus.vllm_integration`; keep evolving it
+     toward correctness and measurement inside an actual vLLM generation run.
    - Compare direct, relay, and pool modes using the same manager API that a
      future vLLM/SGLang connector would call.
 
-4. Only after the prefix restore POC is stable, design real connector
-   prototypes.
-   - Start with narrow adapter designs for vLLM, SGLang, or LMCache-style
-     integration.
-   - Do not vendor or heavily patch external inference frameworks in this repo
-     unless explicitly requested.
+4. Add production-shaped offload clients for the three paper workloads.
+   - On-demand model loading: restore model-weight buckets into GPU memory.
+   - KV cache offloading: vLLM prefix/session save and restore.
+   - Training offload: expose block/bucket transfer hooks suitable for
+     ZeRO-Offload style optimizer or parameter movement.
 
-5. Keep daemon work narrow.
+5. Expand daemon work toward the paper architecture.
    - Use the daemon for relay quota, session tracking, profile cache sharing,
      and multi-process coordination.
-   - Do not move GPU pointers or CUDA IPC through the daemon in this phase.
+   - Add transfer reservation APIs for relay bandwidth sharing across jobs.
+   - Keep process isolation: applications should borrow relay PCIe bandwidth
+     through daemon policy without directly controlling another job's GPU.
 
 ## Coding Rules
 

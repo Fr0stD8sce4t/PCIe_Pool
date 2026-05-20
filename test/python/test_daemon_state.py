@@ -48,7 +48,56 @@ class DaemonStateTest(unittest.TestCase):
         )
         self.assertTrue(closed.ok)
 
+    def test_transfer_reservation_uses_relay_chunk_quota(self) -> None:
+        daemon = TurboBusDaemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=2,
+            max_inflight_chunks_per_relay=4,
+        )
+        register = daemon.register_session(
+            target_gpu=0,
+            requested_relays=[1],
+            max_inflight_chunks=4,
+        )
+        session_id = register.payload["session"]["session_id"]
+
+        first = daemon.reserve_transfer(
+            session_id,
+            relay_gpu=1,
+            chunks=3,
+            bytes_=1024,
+            direction="h2d",
+        )
+        self.assertTrue(first.ok)
+
+        blocked = daemon.reserve_transfer(session_id, relay_gpu=1, chunks=2)
+        self.assertFalse(blocked.ok)
+        self.assertIn("quota", blocked.error)
+
+        reservation_id = first.payload["reservation"]["reservation_id"]
+        released = daemon.release_transfer(reservation_id)
+        self.assertTrue(released.ok)
+
+        second = daemon.reserve_transfer(session_id, relay_gpu=1, chunks=2)
+        self.assertTrue(second.ok)
+
+    def test_close_session_releases_transfer_reservations(self) -> None:
+        daemon = TurboBusDaemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=1,
+            max_inflight_chunks_per_relay=4,
+        )
+        register = daemon.register_session(target_gpu=0, requested_relays=[1])
+        session_id = register.payload["session"]["session_id"]
+        reserved = daemon.reserve_transfer(session_id, relay_gpu=1, chunks=4)
+        self.assertTrue(reserved.ok)
+
+        closed = daemon.close_session(session_id)
+        self.assertTrue(closed.ok)
+
+        profile = daemon.describe()
+        self.assertEqual(profile.payload["relay_quotas"][1]["active_chunks"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
-

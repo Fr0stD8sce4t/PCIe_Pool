@@ -23,6 +23,12 @@ from .vllm import (
     make_vllm_layer_groups_from_kv_caches,
     vllm_block_name,
 )
+from .vllm_integration import (
+    VllmAllocationEvent,
+    VllmIntegrationState,
+    VllmTurboBusIntegration,
+    extract_vllm_block_ids,
+)
 
 __all__ = [
     "BlockState",
@@ -40,7 +46,11 @@ __all__ = [
     "VllmKVBlockRef",
     "VllmKVGroup",
     "VllmKVSlotAdapter",
+    "VllmAllocationEvent",
+    "VllmIntegrationState",
+    "VllmTurboBusIntegration",
     "block_bytes_from_vllm_kv_tensor",
+    "extract_vllm_block_ids",
     "make_contiguous_kv_slots",
     "make_vllm_block_refs_from_ids",
     "make_vllm_layer_block_refs_from_ids",
