@@ -33,14 +33,31 @@ def profile_to_dict(profile) -> dict:
 
 
 def stats_to_dict(stats) -> dict:
+    per_relay = []
+    for relay, bytes_, chunks in zip(
+        stats.relay_devices,
+        stats.relay_device_bytes,
+        stats.relay_device_chunks,
+        strict=False,
+    ):
+        per_relay.append(
+            {
+                "relay_device": relay,
+                "bytes": bytes_,
+                "chunks": chunks,
+            }
+        )
     return {
         "bytes": stats.bytes,
+        "direct_bytes": stats.direct_bytes,
+        "relay_bytes": stats.relay_bytes,
         "cuda_elapsed_ms": stats.cuda_elapsed_ms,
         "submit_to_complete_ms": stats.submit_to_complete_ms,
         "gib_per_second": stats.gib_per_second,
         "submit_gib_per_second": stats.submit_gib_per_second,
         "direct_chunks": stats.direct_chunks,
         "relay_chunks": stats.relay_chunks,
+        "per_relay": per_relay,
     }
 
 
@@ -82,6 +99,7 @@ def run_mode(runtime: turbobus.Runtime, cpu, gpu, mode: str, warmup: int, iterat
         "median_gib_per_second": median,
         "samples": samples,
         "last_stats": stats_to_dict(last_stats) if last_stats is not None else None,
+        "last_plan": runtime.last_plan_dict(),
     }
 
 

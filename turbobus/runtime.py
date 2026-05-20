@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import json
+from pathlib import Path
 from typing import Iterable
 
 try:
@@ -48,6 +50,29 @@ class RuntimeOptions:
     transfer_mode: TransferMode | str = TransferMode.POOL
     min_chunks_for_relay: int = 2
 
+    @classmethod
+    def from_tuning_json(cls, path: str | Path) -> "RuntimeOptions":
+        data = _read_json(path)
+        best = data.get("best")
+        if not isinstance(best, dict):
+            raise ValueError("tuning JSON does not contain a 'best' object")
+        chunk_bytes = int(best["chunk_bytes"])
+        staging_slots = int(best["staging_slots"])
+        return cls(chunk_bytes=chunk_bytes, staging_slots=staging_slots)
+
+    @classmethod
+    def from_profile_json(cls, path: str | Path) -> "RuntimeOptions":
+        data = _read_json(path)
+        config = data.get("config", {})
+        if not isinstance(config, dict):
+            raise ValueError("profile JSON contains an invalid 'config' object")
+        defaults = cls()
+        return cls(
+            chunk_bytes=int(config.get("chunk_bytes", defaults.chunk_bytes)),
+            staging_slots=int(config.get("staging_slots", defaults.staging_slots)),
+            profile_bytes=int(config.get("profile_bytes", defaults.profile_bytes)),
+        )
+
     def to_native(self):
         _require_extension()
         options = _turbobus.RuntimeOptions()
@@ -68,6 +93,14 @@ def _require_extension() -> None:
             "turbobus native extension is not available. Build cpp/_turbobus "
             "before using the runtime."
         ) from _IMPORT_ERROR
+
+
+def _read_json(path: str | Path) -> dict:
+    with Path(path).open("r", encoding="utf-8") as file:
+        data = json.load(file)
+    if not isinstance(data, dict):
+        raise ValueError("expected a JSON object")
+    return data
 
 
 def _require_torch() -> None:
@@ -94,6 +127,12 @@ class Runtime:
 
     def cached_profile(self):
         return self._runtime.cached_profile()
+
+    def last_plan(self):
+        return self._runtime.last_plan()
+
+    def last_plan_dict(self) -> dict:
+        return transfer_plan_to_dict(self.last_plan())
 
     def set_transfer_mode(self, mode: TransferMode | str) -> None:
         self.options.transfer_mode = TransferMode(mode)
@@ -174,3 +213,38 @@ class TransferHandle:
 
     def __repr__(self) -> str:
         return f"TransferHandle(id={self.id}, status={self.status})"
+
+
+def transfer_plan_to_dict(plan) -> dict:
+    assignments = []
+    for assignment in plan.assignments:
+        path = assignment.path
+        chunks = [
+            {
+                "src_offset": chunk.src_offset,
+                "dst_offset": chunk.dst_offset,
+                "bytes": chunk.bytes,
+            }
+            for chunk in assignment.chunks
+        ]
+        assignments.append(
+            {
+                "path": {
+                    "kind": path.kind,
+                    "target_device": path.target_device,
+                    "relay_device": path.relay_device,
+                    "h2d_bw_gbps": path.h2d_bw_gbps,
+                    "p2p_bw_gbps": path.p2p_bw_gbps,
+                    "effective_bw_gbps": path.effective_bw_gbps,
+                    "enabled": path.enabled,
+                },
+                "chunks": chunks,
+                "bytes": sum(chunk["bytes"] for chunk in chunks),
+                "chunk_count": len(chunks),
+            }
+        )
+    return {
+        "total_bytes": plan.total_bytes,
+        "chunk_bytes": plan.chunk_bytes,
+        "assignments": assignments,
+    }

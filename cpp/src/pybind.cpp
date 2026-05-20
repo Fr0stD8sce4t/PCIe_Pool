@@ -24,6 +24,16 @@ std::string StatusToString(turbobus::TransferStatus status) {
   return "unknown";
 }
 
+std::string PathKindToString(turbobus::PathKind kind) {
+  switch (kind) {
+    case turbobus::PathKind::DirectH2D:
+      return "direct";
+    case turbobus::PathKind::RelayH2DThenP2P:
+      return "relay";
+  }
+  return "unknown";
+}
+
 }  // namespace
 
 PYBIND11_MODULE(_turbobus, m) {
@@ -59,8 +69,36 @@ PYBIND11_MODULE(_turbobus, m) {
       .def_readonly("direct_h2d_bw_gbps", &turbobus::ProfileResult::direct_h2d_bw_gbps)
       .def_readonly("relays", &turbobus::ProfileResult::relays);
 
+  py::class_<turbobus::Path>(m, "Path")
+      .def_property_readonly("kind",
+                             [](const turbobus::Path& path) {
+                               return PathKindToString(path.kind);
+                             })
+      .def_readonly("target_device", &turbobus::Path::target_device)
+      .def_readonly("relay_device", &turbobus::Path::relay_device)
+      .def_readonly("h2d_bw_gbps", &turbobus::Path::h2d_bw_gbps)
+      .def_readonly("p2p_bw_gbps", &turbobus::Path::p2p_bw_gbps)
+      .def_readonly("effective_bw_gbps", &turbobus::Path::effective_bw_gbps)
+      .def_readonly("enabled", &turbobus::Path::enabled);
+
+  py::class_<turbobus::Chunk>(m, "Chunk")
+      .def_readonly("src_offset", &turbobus::Chunk::src_offset)
+      .def_readonly("dst_offset", &turbobus::Chunk::dst_offset)
+      .def_readonly("bytes", &turbobus::Chunk::bytes);
+
+  py::class_<turbobus::PathAssignment>(m, "PathAssignment")
+      .def_readonly("path", &turbobus::PathAssignment::path)
+      .def_readonly("chunks", &turbobus::PathAssignment::chunks);
+
+  py::class_<turbobus::TransferPlan>(m, "TransferPlan")
+      .def_readonly("total_bytes", &turbobus::TransferPlan::total_bytes)
+      .def_readonly("chunk_bytes", &turbobus::TransferPlan::chunk_bytes)
+      .def_readonly("assignments", &turbobus::TransferPlan::assignments);
+
   py::class_<turbobus::TransferStats>(m, "TransferStats")
       .def_readonly("bytes", &turbobus::TransferStats::bytes)
+      .def_readonly("direct_bytes", &turbobus::TransferStats::direct_bytes)
+      .def_readonly("relay_bytes", &turbobus::TransferStats::relay_bytes)
       .def_readonly("submit_to_complete_ms",
                     &turbobus::TransferStats::submit_to_complete_ms)
       .def_readonly("cuda_elapsed_ms", &turbobus::TransferStats::cuda_elapsed_ms)
@@ -68,7 +106,12 @@ PYBIND11_MODULE(_turbobus, m) {
       .def_readonly("submit_gib_per_second",
                     &turbobus::TransferStats::submit_gib_per_second)
       .def_readonly("direct_chunks", &turbobus::TransferStats::direct_chunks)
-      .def_readonly("relay_chunks", &turbobus::TransferStats::relay_chunks);
+      .def_readonly("relay_chunks", &turbobus::TransferStats::relay_chunks)
+      .def_readonly("relay_devices", &turbobus::TransferStats::relay_devices)
+      .def_readonly("relay_device_bytes",
+                    &turbobus::TransferStats::relay_device_bytes)
+      .def_readonly("relay_device_chunks",
+                    &turbobus::TransferStats::relay_device_chunks);
 
   py::class_<turbobus::TransferHandle>(m, "TransferHandle")
       .def_property_readonly("id", [](const turbobus::TransferHandle& h) { return h.id; })
@@ -88,6 +131,8 @@ PYBIND11_MODULE(_turbobus, m) {
       .def("set_transfer_mode", &turbobus::TurboBusRuntime::SetTransferMode,
            py::arg("mode"))
       .def("cached_profile", &turbobus::TurboBusRuntime::CachedProfile,
+           py::return_value_policy::reference_internal)
+      .def("last_plan", &turbobus::TurboBusRuntime::LastPlan,
            py::return_value_policy::reference_internal)
       .def("fetch_to_gpu",
            [](turbobus::TurboBusRuntime& runtime, std::uintptr_t host_ptr,

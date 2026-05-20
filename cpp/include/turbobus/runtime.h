@@ -23,6 +23,7 @@ class TurboBusRuntime {
   void Wait(const TransferHandle& handle);
   TransferStats GetStats(const TransferHandle& handle) const;
   const ProfileResult& CachedProfile() const;
+  const TransferPlan& LastPlan() const;
 
  private:
   RuntimeOptions options_;
@@ -31,6 +32,7 @@ class TurboBusRuntime {
   std::vector<int> enabled_relays_;
   Topology topology_;
   ProfileResult profile_;
+  TransferPlan last_plan_;
   bool has_profile_ = false;
   bool initialized_ = false;
 

@@ -59,9 +59,12 @@ int main() {
 
   turbobus::TransferHandle handle;
   assert(handle.stats.bytes == 0);
+  assert(handle.stats.direct_bytes == 0);
+  assert(handle.stats.relay_bytes == 0);
   assert(handle.stats.cuda_elapsed_ms == 0.0);
   assert(handle.stats.direct_chunks == 0);
   assert(handle.stats.relay_chunks == 0);
+  assert(handle.stats.relay_devices.empty());
 
   const auto small_plan = planner.Plan(4ull * 1024ull * 1024ull, chunk_bytes, profile);
   assert(small_plan.assignments.size() == 1);

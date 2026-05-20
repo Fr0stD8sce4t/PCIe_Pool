@@ -96,12 +96,17 @@ struct RuntimeOptions {
 
 struct TransferStats {
   std::size_t bytes = 0;
+  std::size_t direct_bytes = 0;
+  std::size_t relay_bytes = 0;
   double submit_to_complete_ms = 0.0;
   double cuda_elapsed_ms = 0.0;
   double gib_per_second = 0.0;
   double submit_gib_per_second = 0.0;
   std::size_t direct_chunks = 0;
   std::size_t relay_chunks = 0;
+  std::vector<int> relay_devices;
+  std::vector<std::size_t> relay_device_bytes;
+  std::vector<std::size_t> relay_device_chunks;
 };
 
 struct TransferHandle {

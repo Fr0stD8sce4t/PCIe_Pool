@@ -34,6 +34,20 @@ double Gbps(std::size_t bytes, double milliseconds) {
   return gib / seconds;
 }
 
+void AddRelayStats(TransferStats* stats, int relay_device, std::size_t bytes,
+                   std::size_t chunks) {
+  for (std::size_t i = 0; i < stats->relay_devices.size(); ++i) {
+    if (stats->relay_devices[i] == relay_device) {
+      stats->relay_device_bytes[i] += bytes;
+      stats->relay_device_chunks[i] += chunks;
+      return;
+    }
+  }
+  stats->relay_devices.push_back(relay_device);
+  stats->relay_device_bytes.push_back(bytes);
+  stats->relay_device_chunks.push_back(chunks);
+}
+
 }  // namespace
 
 struct CudaRelayExecutor::Impl {
@@ -203,10 +217,18 @@ TransferHandle CudaRelayExecutor::Submit(const BufferView& host, const BufferVie
   TransferStats stats;
   stats.bytes = plan.total_bytes;
   for (const auto& assignment : plan.assignments) {
+    std::size_t assignment_bytes = 0;
+    for (const auto& chunk : assignment.chunks) {
+      assignment_bytes += chunk.bytes;
+    }
     if (assignment.path.kind == PathKind::DirectH2D) {
       stats.direct_chunks += assignment.chunks.size();
+      stats.direct_bytes += assignment_bytes;
     } else {
       stats.relay_chunks += assignment.chunks.size();
+      stats.relay_bytes += assignment_bytes;
+      AddRelayStats(&stats, assignment.path.relay_device, assignment_bytes,
+                    assignment.chunks.size());
     }
   }
 

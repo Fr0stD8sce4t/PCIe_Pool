@@ -65,6 +65,7 @@ rt.profile()
 handle = rt.fetch_to_gpu(cpu_tensor, gpu_tensor)
 handle.wait()
 print(handle.stats.gib_per_second)
+print(rt.last_plan_dict())
 ```
 
 Pass `relay_gpus=None` or omit it to let the runtime scan CUDA P2P-capable
@@ -105,4 +106,13 @@ python benchmarks/tune_transfer.py \
   --warmup 1 \
   --iterations 5 \
   --json-output benchmarks/results/tune_gpu6_relay5.json
+```
+
+Use a tuner result directly:
+
+```python
+opts = turbobus.RuntimeOptions.from_tuning_json(
+    "benchmarks/results/tune_gpu6_relay5.json"
+)
+rt = turbobus.Runtime(target_gpu=6, relay_gpus=[5], options=opts)
 ```

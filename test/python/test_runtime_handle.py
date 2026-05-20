@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+import tempfile
 
 from turbobus.runtime import RuntimeOptions, TransferHandle, TransferMode
 
@@ -57,6 +59,33 @@ class RuntimeOptionsTest(unittest.TestCase):
         self.assertEqual(options.transfer_mode, "direct")
         self.assertEqual(TransferMode(options.transfer_mode), TransferMode.DIRECT)
         self.assertEqual(options.min_chunks_for_relay, 3)
+
+    def test_from_tuning_json_reads_best_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "tune.json"
+            path.write_text(
+                '{"best": {"chunk_bytes": 4194304, "staging_slots": 3}}',
+                encoding="utf-8",
+            )
+
+            options = RuntimeOptions.from_tuning_json(path)
+
+        self.assertEqual(options.chunk_bytes, 4194304)
+        self.assertEqual(options.staging_slots, 3)
+
+    def test_from_profile_json_reads_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "profile.json"
+            path.write_text(
+                '{"config": {"chunk_bytes": 8388608, "profile_bytes": 16777216}}',
+                encoding="utf-8",
+            )
+
+            options = RuntimeOptions.from_profile_json(path)
+
+        self.assertEqual(options.chunk_bytes, 8388608)
+        self.assertEqual(options.profile_bytes, 16777216)
+        self.assertEqual(options.staging_slots, 2)
 
 
 if __name__ == "__main__":

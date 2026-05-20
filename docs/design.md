@@ -62,9 +62,10 @@ The pool benchmark now uses this production planner for pooled transfers instead
 of a hand-written even/odd chunk split.
 
 `benchmarks/bandwidth_pool.py` can emit a JSON report with the run config,
-profile result, per-mode samples, medians, speedups, and optional correctness
-check. `benchmarks/tune_transfer.py` sweeps chunk sizes and staging slot counts
-and reports the best median pooled bandwidth for the tested target/relay pair.
+profile result, per-mode samples, medians, speedups, last transfer plan, and
+optional correctness check. `benchmarks/tune_transfer.py` sweeps chunk sizes and
+staging slot counts and reports the best median pooled bandwidth for the tested
+target/relay pair.
 
 ## Python API
 
@@ -77,16 +78,25 @@ The Python wrapper only accepts contiguous PyTorch tensors:
 The native extension receives raw tensor pointers and byte counts.
 
 `TransferHandle.wait()` populates a lightweight stats object with total bytes,
-CUDA event elapsed time, submit-to-complete wall-clock time, GiB/s, and
-direct/relay chunk counts. `gib_per_second` is based on CUDA event timing;
-`submit_gib_per_second` is based on the wall-clock time between submit and wait
-completion.
+direct/relay bytes, per-relay bytes and chunk counts, CUDA event elapsed time,
+submit-to-complete wall-clock time, GiB/s, and direct/relay chunk counts.
+`gib_per_second` is based on CUDA event timing; `submit_gib_per_second` is based
+on the wall-clock time between submit and wait completion.
+
+The runtime keeps the last generated `TransferPlan`. Python callers can inspect
+it through `Runtime.last_plan_dict()` to see which chunks used the direct path
+and which chunks used each relay GPU.
 
 The runtime caches the first profile result and reuses it for subsequent
 transfers. By default, profiling runs on the first transfer. This can be disabled
 through `RuntimeOptions.profile_on_first_transfer`, in which case the runtime
 falls back to equal path weights until `profile()` is called explicitly.
 Calling `profile(force=True)` refreshes the cached measurement.
+
+`RuntimeOptions.from_tuning_json(path)` reads the best chunk size and staging
+slot count from a tuner JSON output. `RuntimeOptions.from_profile_json(path)`
+reads the benchmark profile config fields that are useful for recreating a
+runtime configuration.
 
 ## Daemon Boundary
 

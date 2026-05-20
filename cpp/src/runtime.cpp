@@ -12,6 +12,7 @@ void TurboBusRuntime::Init(int target_device, const std::vector<int>& relay_devi
   target_device_ = target_device;
   requested_relays_ = relay_devices;
   profile_ = {};
+  last_plan_ = {};
   has_profile_ = false;
 
   topology_ = topology_manager_.Discover(target_device_, requested_relays_,
@@ -78,10 +79,10 @@ TransferHandle TurboBusRuntime::FetchToGpu(void* host_ptr, void* target_gpu_ptr,
   target.kind = MemoryKind::Device;
   target.device = target_device_;
 
-  const TransferPlan plan = planner_.Plan(bytes, options_.chunk_bytes, profile_,
-                                         options_.transfer_mode,
-                                         options_.min_chunks_for_relay);
-  return executor_.Submit(host, target, plan);
+  last_plan_ = planner_.Plan(bytes, options_.chunk_bytes, profile_,
+                             options_.transfer_mode,
+                             options_.min_chunks_for_relay);
+  return executor_.Submit(host, target, last_plan_);
 }
 
 void TurboBusRuntime::Wait(const TransferHandle& handle) {
@@ -94,6 +95,10 @@ TransferStats TurboBusRuntime::GetStats(const TransferHandle& handle) const {
 
 const ProfileResult& TurboBusRuntime::CachedProfile() const {
   return profile_;
+}
+
+const TransferPlan& TurboBusRuntime::LastPlan() const {
+  return last_plan_;
 }
 
 }  // namespace turbobus
