@@ -65,6 +65,8 @@ rt.profile()
 handle = rt.fetch_to_gpu(cpu_tensor, gpu_tensor)
 handle.wait()
 print(handle.stats.gib_per_second)
+for path in handle.stats.path_stats:
+    print(path.kind, path.relay_device, path.gib_per_second)
 print(rt.last_plan_dict())
 ```
 

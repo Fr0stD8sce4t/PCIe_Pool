@@ -47,6 +47,18 @@ def stats_to_dict(stats) -> dict:
                 "chunks": chunks,
             }
         )
+    path_stats = [
+        {
+            "kind": path.kind,
+            "target_device": path.target_device,
+            "relay_device": path.relay_device,
+            "bytes": path.bytes,
+            "chunks": path.chunks,
+            "cuda_elapsed_ms": path.cuda_elapsed_ms,
+            "gib_per_second": path.gib_per_second,
+        }
+        for path in stats.path_stats
+    ]
     return {
         "bytes": stats.bytes,
         "direct_bytes": stats.direct_bytes,
@@ -58,6 +70,7 @@ def stats_to_dict(stats) -> dict:
         "direct_chunks": stats.direct_chunks,
         "relay_chunks": stats.relay_chunks,
         "per_relay": per_relay,
+        "path_stats": path_stats,
     }
 
 

@@ -88,9 +88,15 @@ The native extension receives raw tensor pointers and byte counts.
 
 `TransferHandle.wait()` populates a lightweight stats object with total bytes,
 direct/relay bytes, per-relay bytes and chunk counts, CUDA event elapsed time,
-submit-to-complete wall-clock time, GiB/s, and direct/relay chunk counts.
-`gib_per_second` is based on CUDA event timing; `submit_gib_per_second` is based
-on the wall-clock time between submit and wait completion.
+submit-to-complete wall-clock time, per-path CUDA timing, GiB/s, and
+direct/relay chunk counts. `gib_per_second` is based on CUDA event timing;
+`submit_gib_per_second` is based on the wall-clock time between submit and wait
+completion.
+
+`TransferStats.path_stats` records one entry per planned path assignment. Each
+entry includes the path kind, relay device, bytes, chunks, CUDA elapsed time, and
+path-local GiB/s. For a pooled direct + relay transfer this makes it possible to
+see which path is the bottleneck without changing the transfer schedule.
 
 The runtime keeps the last generated `TransferPlan`. Python callers can inspect
 it through `Runtime.last_plan_dict()` to see which chunks used the direct path

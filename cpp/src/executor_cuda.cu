@@ -48,9 +48,25 @@ void AddRelayStats(TransferStats* stats, int relay_device, std::size_t bytes,
   stats->relay_device_chunks.push_back(chunks);
 }
 
+PathStats MakePathStats(const PathAssignment& assignment, std::size_t bytes) {
+  PathStats stats;
+  stats.kind = assignment.path.kind;
+  stats.target_device = assignment.path.target_device;
+  stats.relay_device = assignment.path.relay_device;
+  stats.bytes = bytes;
+  stats.chunks = assignment.chunks.size();
+  return stats;
+}
+
 }  // namespace
 
 struct CudaRelayExecutor::Impl {
+  struct PathTiming {
+    std::size_t stats_index = 0;
+    cudaEvent_t start = nullptr;
+    cudaEvent_t stop = nullptr;
+  };
+
   struct RelayState {
     int relay_device = kHostDevice;
     cudaStream_t h2d_stream = nullptr;
@@ -68,6 +84,7 @@ struct CudaRelayExecutor::Impl {
   std::atomic<std::uint64_t> next_id{1};
   std::unordered_map<std::uint64_t, std::vector<cudaEvent_t>> transfer_events;
   std::unordered_map<std::uint64_t, std::pair<cudaEvent_t, cudaEvent_t>> timing_events;
+  std::unordered_map<std::uint64_t, std::vector<PathTiming>> path_timing_events;
   std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point> start_times;
   std::unordered_map<std::uint64_t, TransferStats> completed_stats;
 
@@ -89,6 +106,17 @@ struct CudaRelayExecutor::Impl {
       }
     }
     timing_events.clear();
+    for (auto& item : path_timing_events) {
+      for (auto& path_timing : item.second) {
+        if (path_timing.start != nullptr) {
+          IgnoreCuda(cudaEventDestroy(path_timing.start));
+        }
+        if (path_timing.stop != nullptr) {
+          IgnoreCuda(cudaEventDestroy(path_timing.stop));
+        }
+      }
+    }
+    path_timing_events.clear();
     start_times.clear();
     completed_stats.clear();
 
@@ -212,6 +240,7 @@ TransferHandle CudaRelayExecutor::Submit(const BufferView& host, const BufferVie
   auto* target_bytes = static_cast<char*>(target.ptr);
   const std::uint64_t id = impl_->next_id.fetch_add(1);
   std::vector<cudaEvent_t> completion_events;
+  std::vector<Impl::PathTiming> path_timing_events;
   cudaEvent_t timing_start = nullptr;
   cudaEvent_t timing_stop = nullptr;
   TransferStats stats;
@@ -230,6 +259,7 @@ TransferHandle CudaRelayExecutor::Submit(const BufferView& host, const BufferVie
       AddRelayStats(&stats, assignment.path.relay_device, assignment_bytes,
                     assignment.chunks.size());
     }
+    stats.path_stats.push_back(MakePathStats(assignment, assignment_bytes));
   }
 
   try {
@@ -239,21 +269,35 @@ TransferHandle CudaRelayExecutor::Submit(const BufferView& host, const BufferVie
     CheckCuda(cudaEventRecord(timing_start, impl_->direct_stream),
               "cudaEventRecord timing start failed");
 
-    for (const auto& assignment : plan.assignments) {
+    for (std::size_t assignment_index = 0; assignment_index < plan.assignments.size();
+         ++assignment_index) {
+      const auto& assignment = plan.assignments[assignment_index];
+      Impl::PathTiming path_timing;
+      path_timing.stats_index = assignment_index;
+
       if (assignment.path.kind == PathKind::DirectH2D) {
         CheckCuda(cudaSetDevice(impl_->target_device), "cudaSetDevice direct failed");
+        CheckCuda(cudaEventCreate(&path_timing.start),
+                  "cudaEventCreate direct path start failed");
+        CheckCuda(cudaEventCreate(&path_timing.stop),
+                  "cudaEventCreate direct path stop failed");
+        CheckCuda(cudaEventRecord(path_timing.start, impl_->direct_stream),
+                  "cudaEventRecord direct path start failed");
         for (const auto& chunk : assignment.chunks) {
           CheckCuda(cudaMemcpyAsync(target_bytes + chunk.dst_offset,
                                     host_bytes + chunk.src_offset, chunk.bytes,
                                     cudaMemcpyHostToDevice, impl_->direct_stream),
                     "direct cudaMemcpyAsync failed");
         }
+        CheckCuda(cudaEventRecord(path_timing.stop, impl_->direct_stream),
+                  "cudaEventRecord direct path stop failed");
         cudaEvent_t completion = nullptr;
         CheckCuda(cudaEventCreateWithFlags(&completion, cudaEventDisableTiming),
                   "cudaEventCreate direct completion failed");
         CheckCuda(cudaEventRecord(completion, impl_->direct_stream),
                   "cudaEventRecord direct completion failed");
         completion_events.push_back(completion);
+        path_timing_events.push_back(path_timing);
         continue;
       }
 
@@ -264,6 +308,12 @@ TransferHandle CudaRelayExecutor::Submit(const BufferView& host, const BufferVie
 
       auto& relay = relay_it->second;
       CheckCuda(cudaSetDevice(relay.relay_device), "cudaSetDevice relay submit failed");
+      CheckCuda(cudaEventCreate(&path_timing.start),
+                "cudaEventCreate relay path start failed");
+      CheckCuda(cudaEventCreate(&path_timing.stop),
+                "cudaEventCreate relay path stop failed");
+      CheckCuda(cudaEventRecord(path_timing.start, relay.h2d_stream),
+                "cudaEventRecord relay path start failed");
       std::size_t slot_index = 0;
       for (const auto& chunk : assignment.chunks) {
         if (chunk.bytes > impl_->options.chunk_bytes) {
@@ -296,12 +346,15 @@ TransferHandle CudaRelayExecutor::Submit(const BufferView& host, const BufferVie
         relay.slot_has_pending_p2p[slot_index] = true;
         ++slot_index;
       }
+      CheckCuda(cudaEventRecord(path_timing.stop, relay.p2p_stream),
+                "cudaEventRecord relay path stop failed");
       cudaEvent_t completion = nullptr;
       CheckCuda(cudaEventCreateWithFlags(&completion, cudaEventDisableTiming),
                 "cudaEventCreate relay completion failed");
       CheckCuda(cudaEventRecord(completion, relay.p2p_stream),
                 "cudaEventRecord relay completion failed");
       completion_events.push_back(completion);
+      path_timing_events.push_back(path_timing);
     }
 
     CheckCuda(cudaSetDevice(impl_->target_device), "cudaSetDevice timing stop failed");
@@ -314,6 +367,7 @@ TransferHandle CudaRelayExecutor::Submit(const BufferView& host, const BufferVie
 
     impl_->transfer_events.emplace(id, std::move(completion_events));
     impl_->timing_events.emplace(id, std::make_pair(timing_start, timing_stop));
+    impl_->path_timing_events.emplace(id, std::move(path_timing_events));
     timing_start = nullptr;
     timing_stop = nullptr;
     impl_->start_times.emplace(id, std::chrono::steady_clock::now());
@@ -321,6 +375,14 @@ TransferHandle CudaRelayExecutor::Submit(const BufferView& host, const BufferVie
   } catch (...) {
     for (auto event : completion_events) {
       IgnoreCuda(cudaEventDestroy(event));
+    }
+    for (auto& path_timing : path_timing_events) {
+      if (path_timing.start != nullptr) {
+        IgnoreCuda(cudaEventDestroy(path_timing.start));
+      }
+      if (path_timing.stop != nullptr) {
+        IgnoreCuda(cudaEventDestroy(path_timing.stop));
+      }
     }
     if (timing_start != nullptr) {
       IgnoreCuda(cudaEventDestroy(timing_start));
@@ -346,6 +408,10 @@ void CudaRelayExecutor::Wait(const TransferHandle& handle) {
   if (timing_it == impl_->timing_events.end()) {
     throw std::invalid_argument("unknown timing handle");
   }
+  const auto path_timing_it = impl_->path_timing_events.find(handle.id);
+  if (path_timing_it == impl_->path_timing_events.end()) {
+    throw std::invalid_argument("unknown path timing handle");
+  }
   CheckCuda(cudaEventSynchronize(timing_it->second.second),
             "cudaEventSynchronize timing stop failed");
   const auto end = std::chrono::steady_clock::now();
@@ -365,6 +431,19 @@ void CudaRelayExecutor::Wait(const TransferHandle& handle) {
     stats_it->second.cuda_elapsed_ms = static_cast<double>(cuda_milliseconds);
     stats_it->second.gib_per_second =
         Gbps(stats_it->second.bytes, stats_it->second.cuda_elapsed_ms);
+    for (const auto& path_timing : path_timing_it->second) {
+      if (path_timing.stats_index >= stats_it->second.path_stats.size()) {
+        continue;
+      }
+      float path_milliseconds = 0.0f;
+      CheckCuda(cudaEventElapsedTime(&path_milliseconds, path_timing.start,
+                                     path_timing.stop),
+                "cudaEventElapsedTime path transfer failed");
+      auto& path_stats = stats_it->second.path_stats[path_timing.stats_index];
+      path_stats.cuda_elapsed_ms = static_cast<double>(path_milliseconds);
+      path_stats.gib_per_second =
+          Gbps(path_stats.bytes, path_stats.cuda_elapsed_ms);
+    }
     impl_->start_times.erase(start_it);
   }
   for (auto event : event_it->second) {
@@ -374,6 +453,13 @@ void CudaRelayExecutor::Wait(const TransferHandle& handle) {
             "cudaEventDestroy timing start failed");
   CheckCuda(cudaEventDestroy(timing_it->second.second),
             "cudaEventDestroy timing stop failed");
+  for (auto& path_timing : path_timing_it->second) {
+    CheckCuda(cudaEventDestroy(path_timing.start),
+              "cudaEventDestroy path timing start failed");
+    CheckCuda(cudaEventDestroy(path_timing.stop),
+              "cudaEventDestroy path timing stop failed");
+  }
+  impl_->path_timing_events.erase(path_timing_it);
   impl_->timing_events.erase(timing_it);
   impl_->transfer_events.erase(event_it);
 }

@@ -65,6 +65,7 @@ int main() {
   assert(handle.stats.direct_chunks == 0);
   assert(handle.stats.relay_chunks == 0);
   assert(handle.stats.relay_devices.empty());
+  assert(handle.stats.path_stats.empty());
 
   const auto small_plan = planner.Plan(4ull * 1024ull * 1024ull, chunk_bytes, profile);
   assert(small_plan.assignments.size() == 1);

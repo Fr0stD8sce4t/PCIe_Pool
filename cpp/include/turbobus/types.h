@@ -96,6 +96,16 @@ struct RuntimeOptions {
   double relay_min_direct_ratio = 0.0;
 };
 
+struct PathStats {
+  PathKind kind = PathKind::DirectH2D;
+  int target_device = 0;
+  int relay_device = kHostDevice;
+  std::size_t bytes = 0;
+  std::size_t chunks = 0;
+  double cuda_elapsed_ms = 0.0;
+  double gib_per_second = 0.0;
+};
+
 struct TransferStats {
   std::size_t bytes = 0;
   std::size_t direct_bytes = 0;
@@ -109,6 +119,7 @@ struct TransferStats {
   std::vector<int> relay_devices;
   std::vector<std::size_t> relay_device_bytes;
   std::vector<std::size_t> relay_device_chunks;
+  std::vector<PathStats> path_stats;
 };
 
 struct TransferHandle {
