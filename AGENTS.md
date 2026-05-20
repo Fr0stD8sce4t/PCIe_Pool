@@ -111,12 +111,17 @@ Next steps:
    - Prefill supports both `produce_kv_on_gpu` and `restore_from_cpu`.
    - The `pressure` + `restore_from_cpu` workload result is recorded and shows
      strong pooled-transfer gains for TTFT and tokens/s.
-   - Next priority: design a narrow real-framework POC around prefix/session KV
-     restore, without broad vLLM/SGLang scheduler rewrites.
+   - A narrow real-framework POC plan is recorded in
+     `docs/real_inference_poc.md`. The first POC boundary is prefix/session KV
+     restore from pinned CPU backing memory into target-GPU KV slots, without
+     broad vLLM/SGLang scheduler rewrites.
+   - `benchmarks/prefix_restore_poc.py` is the first framework-adjacent harness
+     for that boundary. Use it before attempting external framework patches.
    - Compare direct, relay, and pool modes using the same manager API that a
      future vLLM/SGLang connector would call.
 
-4. Only after simulator results are stable, design real connector prototypes.
+4. Only after the prefix restore POC is stable, design real connector
+   prototypes.
    - Start with narrow adapter designs for vLLM, SGLang, or LMCache-style
      integration.
    - Do not vendor or heavily patch external inference frameworks in this repo

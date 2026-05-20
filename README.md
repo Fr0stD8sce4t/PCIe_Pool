@@ -38,6 +38,8 @@ references/             Cloned reference repositories
 ```
 
 Initial server benchmark notes are recorded in `docs/benchmark_notes.md`.
+The narrow real inference POC plan is recorded in
+`docs/real_inference_poc.md`.
 
 ## Build Python Extension
 
@@ -233,6 +235,32 @@ repeatable workload shapes. `--prefill-mode produce_kv_on_gpu` models prompt KV
 being produced on the target GPU; `--prefill-mode restore_from_cpu` models
 prompt/prefix KV blocks being loaded from pinned CPU backing memory before
 decode.
+
+`benchmarks/prefix_restore_poc.py` is the first narrow real-inference POC
+boundary. It focuses only on prefix/session KV restore from pinned CPU backing
+memory into target-GPU KV slots, with optional CUDA dummy compute beside the
+restore. It does not patch vLLM or SGLang:
+
+```bash
+python benchmarks/prefix_restore_poc.py \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --sessions 4 \
+  --blocks-per-session 8 \
+  --restore-blocks 8 \
+  --iterations 5 \
+  --storage-layout packed \
+  --block-bytes 16777216 \
+  --compute-impl cuda \
+  --cuda-compute-iterations 2048 \
+  --overlap-compute \
+  --mode all \
+  --dynamic-weights \
+  --summary-output benchmarks/results/prefix_restore_poc_summary.txt
+```
+
+Use `poc_mode.restore_gib_s`, `restore_p50_ms`, `step_p50_ms`, and the
+direct/relay chunk counts as the main POC metrics.
 
 ```python
 opts = turbobus.RuntimeOptions.from_tuning_json(
