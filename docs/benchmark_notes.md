@@ -445,6 +445,56 @@ The `4 MiB` trace run confirms that the JSON output records enough information
 to explain planner behavior. The pooled path split the 256 MiB transfer evenly
 between direct H2D and relay GPU5, and reached about 1.97x direct-only bandwidth.
 
+## 2026-05-20: Per-Path Timing Stats Benchmark Result
+
+This run validates `TransferStats.path_stats` in direct, relay-only, and pooled
+transfer modes. The benchmark command was:
+
+```text
+python benchmarks/bandwidth_pool.py \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --bytes 268435456 \
+  --chunk-bytes 4194304 \
+  --profile-bytes 16777216 \
+  --warmup 1 \
+  --iterations 5 \
+  --mode all \
+  --verify \
+  --json-output benchmarks/results/gpu6_relay5_path_stats.json
+```
+
+Profile result:
+
+```text
+direct_h2d_bw_gbps 7.5371818856916715
+relay 5 h2d 7.492768305553483 p2p 38.33565487615392 effective 7.492768305553483
+```
+
+Median transfer results:
+
+```text
+mode direct median_gib_per_second 7.274012365465845
+mode relay median_gib_per_second 7.224097373636718
+mode pool median_gib_per_second 14.298448030619832
+pool_over_direct_median 1.9656892664223737
+pool_over_relay_median 1.9792712211770453
+match True
+```
+
+Representative pooled `path_stats`:
+
+```text
+direct path bytes 134217728 chunks 32 cuda_elapsed_ms 17.16-17.22 gib_per_second 7.26-7.28
+relay5 path bytes 134217728 chunks 32 cuda_elapsed_ms 17.30-17.36 gib_per_second 7.20-7.22
+```
+
+Conclusion:
+
+The per-path stats are exposed through Python and included in benchmark JSON.
+For the pooled transfer, total elapsed time tracks the slower relay path, which
+is the signal needed for a future dynamic weighting pass.
+
 ## Next Implementation Steps
 
 1. Replace the benchmark-only even/odd chunk split with the production
