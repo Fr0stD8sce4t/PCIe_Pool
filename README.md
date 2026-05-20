@@ -265,6 +265,35 @@ of the same store. Blocks also track `block_id`, optional CPU/GPU slots, state,
 and last transfer stats. Use `prefetch_many(names)` and `evict_many(names)` when
 benchmarking or simulating batched block movement.
 
+When blocks share packed CPU/GPU backing tensors, register byte offsets and a
+byte count. `prefetch_many` and `evict_many` will use the runtime range-batched
+APIs automatically:
+
+```python
+cpu_backing = torch.empty(128 * 1024 * 1024, dtype=torch.uint8, pin_memory=True)
+gpu_backing = torch.empty_like(cpu_backing, device=f"cuda:{target_gpu}")
+
+store.add(
+    "kv0",
+    cpu_backing,
+    gpu_backing,
+    cpu_offset=0,
+    gpu_offset=0,
+    byte_count=16 * 1024 * 1024,
+)
+store.add(
+    "kv1",
+    cpu_backing,
+    gpu_backing,
+    cpu_offset=16 * 1024 * 1024,
+    gpu_offset=16 * 1024 * 1024,
+    byte_count=16 * 1024 * 1024,
+)
+
+handle = store.prefetch_many(["kv0", "kv1"])[0]
+handle.wait()
+```
+
 This is intentionally thin: it does not implement a full KV-cache state
 machine, but it gives the next benchmarks a named block API instead of raw
 tensor copies only.

@@ -40,6 +40,14 @@ class FakeRuntime:
         self.calls.append(("evict", gpu_tensor, cpu_tensor))
         return FakeHandle("evict")
 
+    def fetch_ranges_to_gpu(self, cpu_tensor, gpu_tensor, ranges):
+        self.calls.append(("prefetch_ranges", cpu_tensor, gpu_tensor, ranges))
+        return FakeHandle("prefetch_ranges")
+
+    def offload_ranges_to_cpu(self, gpu_tensor, cpu_tensor, ranges):
+        self.calls.append(("evict_ranges", gpu_tensor, cpu_tensor, ranges))
+        return FakeHandle("evict_ranges")
+
 
 class OffloadStoreTest(unittest.TestCase):
     def test_add_tracks_named_block(self) -> None:
@@ -73,6 +81,30 @@ class OffloadStoreTest(unittest.TestCase):
         self.assertEqual(block.block_id, ("request0", 0))
         self.assertEqual(block.cpu_slot, 3)
         self.assertEqual(block.gpu_slot, 7)
+
+    def test_add_accepts_packed_offsets(self) -> None:
+        store = OffloadStore(FakeRuntime())
+
+        block = store.add(
+            "kv0",
+            FakeTensor(128),
+            object(),
+            cpu_offset=16,
+            gpu_offset=32,
+            byte_count=8,
+        )
+
+        self.assertEqual(block.cpu_offset, 16)
+        self.assertEqual(block.gpu_offset, 32)
+        self.assertEqual(block.bytes, 8)
+
+    def test_add_rejects_invalid_packed_offsets(self) -> None:
+        store = OffloadStore(FakeRuntime())
+
+        with self.assertRaises(ValueError):
+            store.add("kv0", FakeTensor(128), object(), cpu_offset=-1)
+        with self.assertRaises(ValueError):
+            store.add("kv1", FakeTensor(128), object(), byte_count=0)
 
     def test_duplicate_name_is_rejected(self) -> None:
         store = OffloadStore(FakeRuntime())
@@ -127,6 +159,58 @@ class OffloadStoreTest(unittest.TestCase):
         self.assertEqual([handle.wait_calls for handle in handles], [1, 1])
         self.assertEqual(store.block("kv0").state, BlockState.GPU)
         self.assertEqual(store.block("kv1").state, BlockState.GPU)
+
+    def test_many_methods_use_range_batch_for_packed_blocks(self) -> None:
+        runtime = FakeRuntime()
+        store = OffloadStore(runtime)
+        cpu = FakeTensor(128)
+        gpu = object()
+        store.add("kv0", cpu, gpu, cpu_offset=0, gpu_offset=16, byte_count=8)
+        store.add("kv1", cpu, gpu, cpu_offset=32, gpu_offset=48, byte_count=8)
+
+        handles = store.prefetch_many(["kv0", "kv1"])
+
+        self.assertEqual(handles[0], handles[1])
+        self.assertEqual(runtime.calls[0][0], "prefetch_ranges")
+        self.assertIs(runtime.calls[0][1], cpu)
+        self.assertIs(runtime.calls[0][2], gpu)
+        self.assertEqual(
+            runtime.calls[0][3],
+            [
+                {"src_offset": 0, "dst_offset": 16, "bytes": 8},
+                {"src_offset": 32, "dst_offset": 48, "bytes": 8},
+            ],
+        )
+        store.wait_many(["kv0", "kv1"])
+        self.assertEqual(handles[0].wait_calls, 1)
+        self.assertEqual(store.block("kv0").state, BlockState.GPU)
+        self.assertEqual(store.block("kv1").state, BlockState.GPU)
+
+    def test_evict_many_uses_reversed_ranges_for_packed_blocks(self) -> None:
+        runtime = FakeRuntime()
+        store = OffloadStore(runtime)
+        cpu = FakeTensor(128)
+        gpu = object()
+        store.add("kv0", cpu, gpu, cpu_offset=0, gpu_offset=16, byte_count=8)
+        store.add("kv1", cpu, gpu, cpu_offset=32, gpu_offset=48, byte_count=8)
+
+        handles = store.evict_many(["kv0", "kv1"])
+
+        self.assertEqual(handles[0], handles[1])
+        self.assertEqual(runtime.calls[0][0], "evict_ranges")
+        self.assertIs(runtime.calls[0][1], gpu)
+        self.assertIs(runtime.calls[0][2], cpu)
+        self.assertEqual(
+            runtime.calls[0][3],
+            [
+                {"src_offset": 16, "dst_offset": 0, "bytes": 8},
+                {"src_offset": 48, "dst_offset": 32, "bytes": 8},
+            ],
+        )
+        store.wait_many(["kv0", "kv1"])
+        self.assertEqual(handles[0].wait_calls, 1)
+        self.assertEqual(store.block("kv0").state, BlockState.CPU)
+        self.assertEqual(store.block("kv1").state, BlockState.CPU)
 
     def test_manager_aliases_point_to_store(self) -> None:
         self.assertIs(OffloadManager, OffloadStore)

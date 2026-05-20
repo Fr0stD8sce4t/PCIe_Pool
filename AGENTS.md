@@ -84,17 +84,21 @@ Next steps:
      `OffloadManager` / `KVBlockStore` style API.
 
 2. Add batch block operations on top of the existing transfer APIs.
-   - Provide `prefetch_many(names)` and `evict_many(names)` as the stable
-     benchmark and future connector entry points.
-   - Start with simple per-block submissions when that is enough to verify
-     behavior.
-   - Use range batched transfer for packed backing buffers once tests show the
-     simple path is correct.
+   - `prefetch_many(names)` and `evict_many(names)` are the stable benchmark
+     and future connector entry points.
+   - The simple per-block path is available and tested.
+   - Next priority: support packed CPU/GPU backing buffers with per-block
+     offsets, then use `fetch_ranges_to_gpu` and `offload_ranges_to_cpu` for
+     many-block transfers when blocks share backing tensors.
+   - Keep the per-block path as a fallback for non-packed tensors.
 
 3. Add an inference offload simulator before patching real frameworks.
    - Simulate request arrival, block ownership, decode steps, GPU block capacity,
      prefetch, eviction, and transfer stall.
-   - Add dummy compute overlap after the non-overlap simulator is correct.
+   - Non-overlap and Python-sleep overlap simulator paths are available.
+   - After packed range-batch manager support, make the simulator use that path
+     for packed KV-cache-style backing buffers.
+   - Then add CUDA dummy compute overlap as the next simulator realism step.
    - Compare direct, relay, and pool modes using the same manager API that a
      future vLLM/SGLang connector would call.
 
