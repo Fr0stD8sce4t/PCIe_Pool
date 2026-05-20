@@ -127,6 +127,31 @@ python benchmarks/tune_transfer.py \
 
 Use a tuner result directly:
 
+## KV Block Offload Benchmark
+
+`benchmarks/kv_offload.py` uses `OffloadStore` to simulate named KV-cache
+blocks moving between pinned CPU memory and the target GPU:
+
+```bash
+python benchmarks/kv_offload.py \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --num-blocks 8 \
+  --active-blocks 4 \
+  --block-bytes 16777216 \
+  --chunk-bytes 4194304 \
+  --profile-bytes 16777216 \
+  --warmup 1 \
+  --iterations 5 \
+  --mode all \
+  --verify \
+  --dynamic-weights \
+  --json-output benchmarks/results/kv_gpu6_relay5.json
+```
+
+Copy only the final `COPY_SUMMARY_BEGIN` / `COPY_SUMMARY_END` block when
+sharing results.
+
 ```python
 opts = turbobus.RuntimeOptions.from_tuning_json(
     "benchmarks/results/tune_gpu6_relay5.json"
