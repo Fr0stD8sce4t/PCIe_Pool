@@ -161,3 +161,25 @@ handle.wait()
 Use `offload_ranges_to_cpu(gpu_tensor, cpu_tensor, ranges)` for the D2H
 direction. This is the first batched API; it batches ranges within one source
 buffer and one destination buffer.
+
+## Named Offload Blocks
+
+`OffloadStore` is a small Python layer for LLM-style named blocks. It keeps a
+pinned CPU tensor and target-GPU tensor together, then submits async prefetch
+and evict transfers through the runtime:
+
+```python
+store = turbobus.OffloadStore(rt)
+store.add("kv-layer0-block0", cpu_tensor, gpu_tensor)
+
+handle = store.prefetch("kv-layer0-block0")
+handle.wait()
+
+handle = store.evict("kv-layer0-block0")
+handle.wait()
+print(store.stats("kv-layer0-block0"))
+```
+
+This is intentionally thin: it does not implement a full KV-cache state
+machine, but it gives the next benchmarks a named block API instead of raw
+tensor copies only.
