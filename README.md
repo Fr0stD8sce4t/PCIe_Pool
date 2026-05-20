@@ -231,7 +231,9 @@ python examples/vllm_turbobus_restore.py \
   --model ~/huggingface/Qwen3-0.6B \
   --target-gpu 6 \
   --relay-gpus 5 \
-  --restore-blocks 1 \
+  --prompt-repeat 64 \
+  --restore-blocks 8 \
+  --min-allocated-blocks 8 \
   --iterations 3 \
   --chunk-bytes 4194304 \
   --profile-bytes 16777216 \
@@ -247,6 +249,9 @@ must run in-process so the hook can see the real Python tensor objects; the
 script disables vLLM V1 multiprocessing by default.
 For tensors shaped like `(2, num_blocks, ...)`, it transfers K and V lanes as
 separate byte ranges for each logical KV block.
+Use `--prompt-repeat`, `--restore-blocks`, and `--min-allocated-blocks` to make
+vLLM allocate enough real KV blocks for bandwidth comparisons; a one-block run
+is mainly a correctness smoke test and is dominated by many small ranges.
 By default, the script treats `--target-gpu` and `--relay-gpus` as physical GPU
 ids and sets `CUDA_VISIBLE_DEVICES` before importing PyTorch/vLLM, so vLLM's
 `cuda:0` maps to the requested target GPU. Use `--no-map-physical-gpus` only

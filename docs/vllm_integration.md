@@ -136,7 +136,9 @@ python examples/vllm_turbobus_restore.py \
   --model ~/huggingface/Qwen3-0.6B \
   --target-gpu 6 \
   --relay-gpus 5 \
-  --restore-blocks 1 \
+  --prompt-repeat 64 \
+  --restore-blocks 8 \
+  --min-allocated-blocks 8 \
   --iterations 3 \
   --chunk-bytes 4194304 \
   --profile-bytes 16777216 \
@@ -155,6 +157,11 @@ For vLLM tensors shaped like `(2, num_blocks, ...)`, K and V live in separate
 lanes. The script maps one logical KV block into separate K/V byte ranges, so
 the correctness check covers both lanes instead of assuming the block is one
 contiguous byte range.
+
+For performance runs, avoid a one-block prompt unless you only want a
+correctness smoke test. One Qwen3-0.6B block maps to 28 layers x K/V lanes, so a
+single logical block is many small ranges. Use `--prompt-repeat` to make vLLM
+allocate more real blocks, then select several blocks with `--restore-blocks`.
 
 By default, `--target-gpu` and `--relay-gpus` are physical GPU ids. The script
 sets `CUDA_VISIBLE_DEVICES=<target>,<relays>` before importing PyTorch or vLLM,

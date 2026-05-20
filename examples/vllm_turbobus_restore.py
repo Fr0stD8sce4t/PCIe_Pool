@@ -157,6 +157,9 @@ def initialize_vllm(args, first_mode: str):
 
     from vllm import LLM, SamplingParams
 
+    prompt = args.prompt
+    if args.prompt_repeat > 1:
+        prompt = " ".join([args.prompt] * args.prompt_repeat)
     sampling = SamplingParams(temperature=0.0, max_tokens=args.max_tokens)
     llm_kwargs = {
         "model": args.model,
@@ -169,7 +172,7 @@ def initialize_vllm(args, first_mode: str):
     init_ms = (time.perf_counter() - start) * 1000.0
 
     start = time.perf_counter()
-    outputs = llm.generate([args.prompt], sampling)
+    outputs = llm.generate([prompt], sampling)
     generate_ms = (time.perf_counter() - start) * 1000.0
 
     request_id = wait_for_allocation(integration, args.allocation_timeout_s)
@@ -184,12 +187,21 @@ def initialize_vllm(args, first_mode: str):
     selected_block_ids = block_ids[: args.restore_blocks]
     if not selected_block_ids:
         raise RuntimeError("vLLM allocation did not contain any block ids")
+    if len(block_ids) < args.min_allocated_blocks:
+        raise RuntimeError(
+            "vLLM allocated fewer blocks than requested: "
+            f"allocated={len(block_ids)} min_allocated_blocks={args.min_allocated_blocks}. "
+            "Increase --prompt-repeat or lower --min-allocated-blocks."
+        )
 
     text = outputs[0].outputs[0].text if outputs and outputs[0].outputs else ""
+    prompt_tokens = len(getattr(outputs[0], "prompt_token_ids", []) or []) if outputs else 0
     return {
         "llm": llm,
         "request_id": request_id,
         "allocation": integration.state.allocations[request_id],
+        "allocated_block_ids": block_ids,
+        "prompt_tokens": prompt_tokens,
         "kv_cache_config": integration.state.kv_cache_config,
         "kv_caches": integration.state.kv_caches,
         "init_ms": init_ms,
@@ -228,6 +240,7 @@ def run_mode(args, captured: dict, mode: str) -> dict:
     block_bytes_by_layer = [
         block_bytes_from_vllm_kv_tensor(kv_cache) for kv_cache in integration.state.kv_caches
     ]
+    bytes_per_iteration = sum(block_bytes_by_layer[ref.group_id] for ref in refs)
 
     adapter = integration._require_adapter()
     save_samples = []
@@ -286,6 +299,10 @@ def run_mode(args, captured: dict, mode: str) -> dict:
         "generate_ms": captured["generate_ms"],
         "layer_count": len(integration.state.kv_caches),
         "block_bytes": block_bytes_by_layer[0] if block_bytes_by_layer else 0,
+        "selected_ranges": len(refs),
+        "bytes_per_iteration": bytes_per_iteration,
+        "allocated_blocks": len(block_ids),
+        "prompt_tokens": captured["prompt_tokens"],
         "block_ids": list(selected_block_ids),
         "restore_blocks": len(selected_block_ids),
         "save_p50_ms": statistics.median(save_ms_values),
@@ -312,6 +329,8 @@ def print_summary(args, results: list[dict]) -> None:
         f"runtime_relays={args.runtime_relay_gpus}",
         f"cuda_visible_devices={os.environ.get('CUDA_VISIBLE_DEVICES', '')}",
         f"model={args.model}",
+        f"prompt_repeat={args.prompt_repeat}",
+        f"min_allocated_blocks={args.min_allocated_blocks}",
         f"restore_blocks={args.restore_blocks}",
         f"iterations={args.iterations}",
         f"chunk_bytes={args.chunk_bytes}",
@@ -332,7 +351,11 @@ def print_summary(args, results: list[dict]) -> None:
             f"mode={result['mode']}",
             f"layers={result['layer_count']}",
             f"block_bytes={result['block_bytes']}",
+            f"allocated_blocks={result['allocated_blocks']}",
+            f"prompt_tokens={result['prompt_tokens']}",
             f"restore_blocks={result['restore_blocks']}",
+            f"selected_ranges={result['selected_ranges']}",
+            f"bytes_per_iteration={result['bytes_per_iteration']}",
             f"save_p50_ms={result['save_p50_ms']:.3f}",
             f"restore_p50_ms={result['restore_p50_ms']:.3f}",
             f"restore_p95_ms={result['restore_p95_ms']:.3f}",
@@ -399,6 +422,12 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Save/restore real vLLM KV slots with TurboBus")
     parser.add_argument("--model", required=True)
     parser.add_argument("--prompt", default="The capital of France is")
+    parser.add_argument(
+        "--prompt-repeat",
+        type=int,
+        default=1,
+        help="Repeat the prompt text to force vLLM to allocate more KV blocks.",
+    )
     parser.add_argument("--max-tokens", type=int, default=8)
     parser.add_argument("--target-gpu", type=int, required=True)
     parser.add_argument("--relay-gpus", default="")
@@ -413,6 +442,7 @@ def parse_args():
     )
     parser.set_defaults(disable_multiproc_executor=True)
     parser.add_argument("--restore-blocks", type=int, default=1)
+    parser.add_argument("--min-allocated-blocks", type=int, default=1)
     parser.add_argument("--iterations", type=int, default=3)
     parser.add_argument("--chunk-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument("--profile-bytes", type=int, default=16 * 1024 * 1024)
@@ -446,6 +476,7 @@ def run(args) -> None:
         f"runtime_target={args.runtime_target_gpu}",
         f"runtime_relays={args.runtime_relay_gpus}",
         f"cuda_visible_devices={os.environ.get('CUDA_VISIBLE_DEVICES', '')}",
+        f"prompt_repeat={args.prompt_repeat}",
     )
     modes = ["direct", "relay", "pool"] if args.mode == "all" else [args.mode]
     captured = initialize_vllm(args, modes[0])
@@ -453,6 +484,8 @@ def run(args) -> None:
         "vllm_restore_capture",
         f"request_id={captured['request_id']}",
         f"layers={len(captured['kv_caches'])}",
+        f"allocated_blocks={len(captured['allocated_block_ids'])}",
+        f"prompt_tokens={captured['prompt_tokens']}",
         f"kv_device={captured['kv_caches'][0].device if captured['kv_caches'] else 'none'}",
         f"generated_text={captured['generated_text']!r}",
     )
