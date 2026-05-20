@@ -45,6 +45,14 @@ class VllmKVConnectorSweepTest(unittest.TestCase):
         self.assertEqual(parsed["vllm_kv_connector_save"]["elapsed_ms"], "12.5")
         self.assertEqual(parsed["vllm_kv_connector_result"]["shared_prefix"], "True")
 
+    def test_gib_per_second_formats_restore_bandwidth(self) -> None:
+        self.assertEqual(sweep.gib_per_second(str(1024**3), "1000"), "1.000")
+        self.assertEqual(sweep.gib_per_second("0", "1000"), "NA")
+
+    def test_speedup_formats_latency_ratio(self) -> None:
+        self.assertEqual(sweep.speedup("40", "20"), "2.000")
+        self.assertEqual(sweep.speedup("40", "0"), "NA")
+
 
 if __name__ == "__main__":
     unittest.main()

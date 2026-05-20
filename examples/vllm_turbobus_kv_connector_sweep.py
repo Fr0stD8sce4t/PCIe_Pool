@@ -53,6 +53,28 @@ def parse_copy_summary(text: str) -> dict[str, dict[str, str]]:
     return parsed
 
 
+def gib_per_second(byte_count: str, elapsed_ms: str) -> str:
+    try:
+        bytes_value = float(byte_count)
+        ms_value = float(elapsed_ms)
+    except ValueError:
+        return "NA"
+    if bytes_value <= 0.0 or ms_value <= 0.0:
+        return "NA"
+    return f"{bytes_value / (1024.0 ** 3) / (ms_value / 1000.0):.3f}"
+
+
+def speedup(numerator_ms: str, denominator_ms: str) -> str:
+    try:
+        numerator = float(numerator_ms)
+        denominator = float(denominator_ms)
+    except ValueError:
+        return "NA"
+    if numerator <= 0.0 or denominator <= 0.0:
+        return "NA"
+    return f"{numerator / denominator:.3f}"
+
+
 def run_case(args, mode: str, restore_blocks: int, matched_tokens: int, log_path: Path):
     script = Path(__file__).with_name("vllm_turbobus_kv_connector.py")
     repo_root = Path(__file__).resolve().parents[1]
@@ -114,6 +136,7 @@ def run_case(args, mode: str, restore_blocks: int, matched_tokens: int, log_path
 
 
 def print_sweep_summary(args, results) -> None:
+    case_rows = []
     print("SWEEP_SUMMARY_BEGIN")
     print(
         "vllm_kv_connector_sweep_config",
@@ -133,23 +156,61 @@ def print_sweep_summary(args, results) -> None:
         save = summary.get("vllm_kv_connector_save", {})
         restore = _restore_from_log(Path(result["log_path"]))
         output = summary.get("vllm_kv_connector_result", {})
+        row = {
+            "mode": result["mode"],
+            "restore_blocks": result["restore_blocks"],
+            "matched_tokens": result["matched_tokens"],
+            "returncode": result["returncode"],
+            "save_ms": save.get("elapsed_ms", "NA"),
+            "restore_ms": restore.get("elapsed_ms", "NA"),
+            "bytes": restore.get("bytes", save.get("bytes", "NA")),
+            "direct_chunks": restore.get("direct_chunks", "NA"),
+            "relay_chunks": restore.get("relay_chunks", "NA"),
+            "prompt_tokens": output.get("prompt_tokens", "NA"),
+            "shared_prefix": output.get("shared_prefix", "NA"),
+            "child_mode": config.get("mode", result["mode"]),
+            "log": result["log_path"],
+        }
+        row["restore_gib_s"] = gib_per_second(row["bytes"], row["restore_ms"])
+        case_rows.append(row)
         print(
             "vllm_kv_connector_sweep_case",
-            f"mode={result['mode']}",
-            f"restore_blocks={result['restore_blocks']}",
-            f"matched_tokens={result['matched_tokens']}",
-            f"returncode={result['returncode']}",
-            f"save_ms={save.get('elapsed_ms', 'NA')}",
-            f"restore_ms={restore.get('elapsed_ms', 'NA')}",
-            f"bytes={restore.get('bytes', save.get('bytes', 'NA'))}",
-            f"direct_chunks={restore.get('direct_chunks', 'NA')}",
-            f"relay_chunks={restore.get('relay_chunks', 'NA')}",
-            f"prompt_tokens={output.get('prompt_tokens', 'NA')}",
-            f"shared_prefix={output.get('shared_prefix', 'NA')}",
-            f"child_mode={config.get('mode', result['mode'])}",
-            f"log={result['log_path']}",
+            f"mode={row['mode']}",
+            f"restore_blocks={row['restore_blocks']}",
+            f"matched_tokens={row['matched_tokens']}",
+            f"returncode={row['returncode']}",
+            f"save_ms={row['save_ms']}",
+            f"restore_ms={row['restore_ms']}",
+            f"restore_gib_s={row['restore_gib_s']}",
+            f"bytes={row['bytes']}",
+            f"direct_chunks={row['direct_chunks']}",
+            f"relay_chunks={row['relay_chunks']}",
+            f"prompt_tokens={row['prompt_tokens']}",
+            f"shared_prefix={row['shared_prefix']}",
+            f"child_mode={row['child_mode']}",
+            f"log={row['log']}",
         )
+    _print_speedups(case_rows)
     print("SWEEP_SUMMARY_END")
+
+
+def _print_speedups(case_rows) -> None:
+    by_blocks = {}
+    for row in case_rows:
+        by_blocks.setdefault(row["restore_blocks"], {})[row["mode"]] = row
+    for restore_blocks in sorted(by_blocks):
+        rows = by_blocks[restore_blocks]
+        pool = rows.get("pool")
+        if pool is None:
+            continue
+        direct = rows.get("direct")
+        relay = rows.get("relay")
+        print(
+            "vllm_kv_connector_sweep_speedup",
+            f"restore_blocks={restore_blocks}",
+            f"direct_over_pool_restore={speedup(direct['restore_ms'], pool['restore_ms']) if direct else 'NA'}",
+            f"relay_over_pool_restore={speedup(relay['restore_ms'], pool['restore_ms']) if relay else 'NA'}",
+        )
 
 
 def _restore_from_log(log_path: Path) -> dict[str, str]:
