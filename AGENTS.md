@@ -99,8 +99,10 @@ Next steps:
    - Non-overlap and Python-sleep overlap simulator paths are available.
    - The simulator uses the packed range-batch manager path for
      KV-cache-style backing buffers.
-   - Next priority: add CUDA dummy compute overlap as the next simulator
-     realism step.
+   - Native CUDA dummy compute is available for overlap experiments through
+     `--compute-impl cuda`.
+   - Next priority: run and record CUDA dummy compute overlap results, then
+     compare them against the Python sleep scheduling model.
    - Compare direct, relay, and pool modes using the same manager API that a
      future vLLM/SGLang connector would call.
 

@@ -162,6 +162,12 @@ PYBIND11_MODULE(_turbobus, m) {
                     &turbobus::TransferStats::relay_device_chunks)
       .def_readonly("path_stats", &turbobus::TransferStats::path_stats);
 
+  py::class_<turbobus::DummyComputeStats>(m, "DummyComputeStats")
+      .def_readonly("elements", &turbobus::DummyComputeStats::elements)
+      .def_readonly("iterations", &turbobus::DummyComputeStats::iterations)
+      .def_readonly("cuda_elapsed_ms",
+                    &turbobus::DummyComputeStats::cuda_elapsed_ms);
+
   py::class_<turbobus::TransferHandle>(m, "TransferHandle")
       .def_property_readonly("id", [](const turbobus::TransferHandle& h) { return h.id; })
       .def_property_readonly("status",
@@ -221,6 +227,15 @@ PYBIND11_MODULE(_turbobus, m) {
            },
            py::arg("target_ptr"), py::arg("target_bytes"), py::arg("host_ptr"),
            py::arg("host_bytes"), py::arg("ranges"))
-      .def("wait", &turbobus::TurboBusRuntime::Wait, py::arg("handle"))
+      .def("run_dummy_compute",
+           [](turbobus::TurboBusRuntime& runtime, std::uintptr_t device_ptr,
+              std::size_t elements, int iterations) {
+             return runtime.RunDummyCompute(reinterpret_cast<void*>(device_ptr),
+                                            elements, iterations);
+           },
+           py::arg("device_ptr"), py::arg("elements"), py::arg("iterations"),
+           py::call_guard<py::gil_scoped_release>())
+      .def("wait", &turbobus::TurboBusRuntime::Wait, py::arg("handle"),
+           py::call_guard<py::gil_scoped_release>())
       .def("stats", &turbobus::TurboBusRuntime::GetStats, py::arg("handle"));
 }

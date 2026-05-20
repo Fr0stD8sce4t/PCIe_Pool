@@ -225,6 +225,24 @@ class Runtime:
     def stats(self, handle: "TransferHandle"):
         return self._runtime.stats(handle.native)
 
+    def run_dummy_compute(self, tensor, iterations: int):
+        _require_torch()
+        if not isinstance(tensor, torch.Tensor):
+            raise TypeError("tensor must be a torch.Tensor")
+        if tensor.device.type != "cuda":
+            raise ValueError("tensor must be on CUDA")
+        if tensor.device.index != self.target_gpu:
+            raise ValueError("tensor must be on the runtime target_gpu")
+        if tensor.dtype != torch.float32:
+            raise ValueError("tensor must be torch.float32")
+        if not tensor.is_contiguous():
+            raise ValueError("tensor must be contiguous")
+        return self._runtime.run_dummy_compute(
+            int(tensor.data_ptr()),
+            int(tensor.numel()),
+            int(iterations),
+        )
+
 
 def _validate_transfer_tensors(cpu_tensor, gpu_tensor, target_gpu: int, direction: str) -> int:
     if direction not in {"h2d", "d2h"}:

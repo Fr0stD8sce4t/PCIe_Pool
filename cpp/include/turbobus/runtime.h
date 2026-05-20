@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "turbobus/executor.h"
+#include "turbobus/dummy_compute.h"
 #include "turbobus/planner.h"
 #include "turbobus/profiler.h"
 #include "turbobus/topology.h"
@@ -27,6 +28,8 @@ class TurboBusRuntime {
   TransferHandle OffloadRangesToCpu(void* target_gpu_ptr, std::size_t target_bytes,
                                     void* host_ptr, std::size_t host_bytes,
                                     const std::vector<TransferRange>& ranges);
+  DummyComputeStats RunDummyCompute(void* device_ptr, std::size_t elements,
+                                    int iterations);
   void Wait(const TransferHandle& handle);
   TransferStats GetStats(const TransferHandle& handle) const;
   const ProfileResult& CachedProfile() const;

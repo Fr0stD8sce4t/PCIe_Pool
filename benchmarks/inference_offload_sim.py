@@ -174,6 +174,47 @@ class ResidentSet:
             self.touch(name)
 
 
+class DummyCompute:
+    def __init__(
+        self,
+        runtime: turbobus.Runtime,
+        impl: str,
+        compute_ms: float,
+        cuda_elements: int,
+        cuda_iterations: int,
+    ) -> None:
+        self.runtime = runtime
+        self.impl = impl
+        self.compute_ms = compute_ms
+        self.cuda_elements = cuda_elements
+        self.cuda_iterations = cuda_iterations
+        self.cuda_tensor = None
+        if self.impl == "cuda":
+            self.cuda_tensor = torch.zeros(
+                self.cuda_elements,
+                dtype=torch.float32,
+                device=f"cuda:{self.runtime.target_gpu}",
+            )
+
+    @property
+    def enabled(self) -> bool:
+        if self.impl == "cuda":
+            return True
+        return self.compute_ms > 0.0
+
+    def run(self) -> float:
+        if not self.enabled:
+            return 0.0
+        start = time.perf_counter()
+        if self.impl == "sleep":
+            time.sleep(self.compute_ms / 1000.0)
+        elif self.impl == "cuda":
+            self.runtime.run_dummy_compute(self.cuda_tensor, self.cuda_iterations)
+        else:
+            raise ValueError(f"unknown compute impl: {self.impl}")
+        return (time.perf_counter() - start) * 1000.0
+
+
 def transfer_batch(store: turbobus.OffloadManager, names: list[str], op: str) -> dict:
     if not names:
         return empty_transfer_batch(op)
@@ -229,11 +270,11 @@ def run_step_work(
     store: turbobus.OffloadManager,
     victims: list[str],
     missing: list[str],
-    compute_ms: float,
+    compute: DummyCompute,
     overlap_compute: bool,
 ) -> tuple[dict, dict, float, float]:
     transfer_start = time.perf_counter()
-    if overlap_compute and compute_ms > 0.0:
+    if overlap_compute and compute.enabled:
         result: dict[str, tuple[dict, dict]] = {}
         worker = threading.Thread(
             target=lambda: result.update(
@@ -241,13 +282,12 @@ def run_step_work(
             )
         )
         worker.start()
-        time.sleep(compute_ms / 1000.0)
+        compute.run()
         worker.join()
         evict, prefetch = result["transfers"]
     else:
         evict, prefetch = run_transfers(store, victims, missing)
-        if compute_ms > 0.0:
-            time.sleep(compute_ms / 1000.0)
+        compute.run()
     elapsed_ms = (time.perf_counter() - transfer_start) * 1000.0
     transfer_ms = evict["elapsed_ms"] + prefetch["elapsed_ms"]
     return evict, prefetch, transfer_ms, elapsed_ms
@@ -324,7 +364,7 @@ def run_mode(
     working_set_blocks: int,
     seed: int,
     decode_steps: int,
-    compute_ms: float,
+    compute: DummyCompute,
     overlap_compute: bool,
 ) -> dict:
     runtime.set_transfer_mode(mode)
@@ -350,7 +390,7 @@ def run_mode(
             store,
             victims,
             missing,
-            compute_ms,
+            compute,
             overlap_compute,
         )
         resident.add_many(needed)
@@ -366,7 +406,7 @@ def run_mode(
                 "evict": evict,
                 "prefetch": prefetch,
                 "transfer_ms": transfer_ms,
-                "compute_ms": compute_ms,
+                "compute_ms": compute.compute_ms,
                 "overlapped_ms": overlapped_ms,
                 "step_ms": step_ms,
             }
@@ -403,6 +443,9 @@ def compact_summary(result: dict) -> str:
             f"seed={config['seed']} storage_layout={config['storage_layout']} "
             f"block_bytes={config['block_bytes']} decode_steps={config['decode_steps']} "
             f"compute_ms={config['compute_ms']} overlap_compute={config['overlap_compute']} "
+            f"compute_impl={config['compute_impl']} "
+            f"cuda_compute_elements={config['cuda_compute_elements']} "
+            f"cuda_compute_iterations={config['cuda_compute_iterations']} "
             f"mode={config['mode']} "
             f"dynamic_weights={config['dynamic_weights']}"
         ),
@@ -418,8 +461,10 @@ def compact_summary(result: dict) -> str:
             f"blocks_per_step={config['blocks_per_step']} "
             f"dummy_compute_ms={config['compute_ms']} "
             f"overlap_compute={config['overlap_compute']} "
-            "compute_impl=python_sleep "
-            "note=not_cuda_kernel_overlap"
+            f"compute_impl={config['compute_impl']} "
+            f"cuda_compute_elements={config['cuda_compute_elements']} "
+            f"cuda_compute_iterations={config['cuda_compute_iterations']} "
+            f"note={config['compute_note']}"
         ),
         f"profile direct_h2d_bw_gbps={result['profile']['direct_h2d_bw_gbps']:.3f}",
     ]
@@ -488,6 +533,9 @@ def main() -> None:
     parser.add_argument("--block-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--decode-steps", type=int, default=32)
     parser.add_argument("--compute-ms", type=float, default=0.0)
+    parser.add_argument("--compute-impl", choices=["sleep", "cuda"], default="sleep")
+    parser.add_argument("--cuda-compute-elements", type=int, default=16 * 1024 * 1024)
+    parser.add_argument("--cuda-compute-iterations", type=int, default=64)
     parser.add_argument(
         "--overlap-compute",
         action="store_true",
@@ -512,6 +560,10 @@ def main() -> None:
         raise ValueError("--working-set-blocks must be at least --blocks-per-step")
     if working_set_blocks > args.blocks_per_request:
         raise ValueError("--working-set-blocks must be at most --blocks-per-request")
+    if args.cuda_compute_elements <= 0:
+        raise ValueError("--cuda-compute-elements must be positive")
+    if args.cuda_compute_iterations <= 0:
+        raise ValueError("--cuda-compute-iterations must be positive")
 
     relays = parse_relay_gpus(args.relay_gpus)
     torch.cuda.set_device(args.target_gpu)
@@ -523,6 +575,18 @@ def main() -> None:
     runtime = turbobus.Runtime(target_gpu=args.target_gpu, relay_gpus=relays, options=options)
     profile = runtime.profile(args.profile_bytes, force=True)
     store, request_block_names = create_store(args, runtime)
+    compute = DummyCompute(
+        runtime,
+        args.compute_impl,
+        args.compute_ms,
+        args.cuda_compute_elements,
+        args.cuda_compute_iterations,
+    )
+    compute_note = (
+        "cuda_kernel_overlap_model"
+        if args.compute_impl == "cuda"
+        else "python_sleep_not_cuda_kernel_overlap"
+    )
 
     result = {
         "config": {
@@ -539,6 +603,10 @@ def main() -> None:
             "block_bytes": args.block_bytes,
             "decode_steps": args.decode_steps,
             "compute_ms": args.compute_ms,
+            "compute_impl": args.compute_impl,
+            "cuda_compute_elements": args.cuda_compute_elements,
+            "cuda_compute_iterations": args.cuda_compute_iterations,
+            "compute_note": compute_note,
             "overlap_compute": args.overlap_compute,
             "chunk_bytes": args.chunk_bytes,
             "profile_bytes": args.profile_bytes,
@@ -564,7 +632,7 @@ def main() -> None:
             working_set_blocks,
             args.seed,
             args.decode_steps,
-            args.compute_ms,
+            compute,
             args.overlap_compute,
         )
 

@@ -70,6 +70,14 @@ TransferHandle TurboBusRuntime::OffloadRangesToCpu(
                       TransferDirection::D2H);
 }
 
+DummyComputeStats TurboBusRuntime::RunDummyCompute(void* device_ptr, std::size_t elements,
+                                                   int iterations) {
+  if (!initialized_) {
+    throw std::runtime_error("runtime is not initialized");
+  }
+  return turbobus::RunDummyCompute(target_device_, device_ptr, elements, iterations);
+}
+
 void TurboBusRuntime::EnsureProfile() {
   if (!initialized_) {
     throw std::runtime_error("runtime is not initialized");

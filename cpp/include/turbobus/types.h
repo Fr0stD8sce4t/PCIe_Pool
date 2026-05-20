@@ -146,4 +146,10 @@ struct TransferHandle {
   TransferStats stats;
 };
 
+struct DummyComputeStats {
+  std::size_t elements = 0;
+  int iterations = 0;
+  double cuda_elapsed_ms = 0.0;
+};
+
 }  // namespace turbobus

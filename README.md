@@ -183,6 +183,9 @@ python benchmarks/inference_offload_sim.py \
   --block-bytes 16777216 \
   --decode-steps 32 \
   --compute-ms 0 \
+  --compute-impl cuda \
+  --cuda-compute-elements 16777216 \
+  --cuda-compute-iterations 64 \
   --chunk-bytes 4194304 \
   --profile-bytes 16777216 \
   --mode all \
@@ -192,16 +195,18 @@ python benchmarks/inference_offload_sim.py \
 ```
 
 By default each step waits for eviction and prefetch before optional dummy
-compute. Add `--overlap-compute --compute-ms N` to run the dummy compute sleep
-concurrently with transfer as a first scheduling model. This is not yet a CUDA
-kernel overlap test. The default access pattern and GPU block capacity are
-chosen to create capacity pressure, so the run should exercise both prefetch
-and eviction. Use `tokens_s`, `step_p50_ms`, and `transfer_p50_ms` in the copy
-summary as the main metrics. The `sim_scenario` line describes what the run is
-modeling so the saved summary can be read without the full command. Use
-`--storage-layout packed` to store all simulated KV blocks in shared CPU/GPU
-backing tensors and exercise the range-batched manager path; use `separate` to
-keep one tensor per block.
+compute. Add `--overlap-compute` to run dummy compute concurrently with
+transfer. `--compute-impl sleep --compute-ms N` uses a Python sleep scheduling
+model. `--compute-impl cuda` runs a native CUDA dummy kernel on a preallocated
+target-GPU tensor; tune its runtime with `--cuda-compute-elements` and
+`--cuda-compute-iterations`. The default access pattern and GPU block capacity
+are chosen to create capacity pressure, so the run should exercise both
+prefetch and eviction. Use `tokens_s`, `step_p50_ms`, and `transfer_p50_ms` in
+the copy summary as the main metrics. The `sim_scenario` line describes what
+the run is modeling so the saved summary can be read without the full command.
+Use `--storage-layout packed` to store all simulated KV blocks in shared
+CPU/GPU backing tensors and exercise the range-batched manager path; use
+`separate` to keep one tensor per block.
 
 ```python
 opts = turbobus.RuntimeOptions.from_tuning_json(

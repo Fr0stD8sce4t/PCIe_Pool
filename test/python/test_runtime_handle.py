@@ -7,6 +7,11 @@ import tempfile
 from turbobus import runtime as runtime_module
 from turbobus.runtime import RuntimeOptions, TransferHandle, TransferMode
 
+try:
+    import torch
+except ImportError:  # pragma: no cover - optional dependency for validation tests
+    torch = None
+
 
 class NativeHandle:
     def __init__(self, handle_id: int = 1) -> None:
@@ -143,6 +148,33 @@ class RangeValidationTest(unittest.TestCase):
                 )
         finally:
             runtime_module._turbobus = old_extension
+
+
+@unittest.skipIf(torch is None, "PyTorch is not installed")
+class DummyComputeValidationTest(unittest.TestCase):
+    def make_runtime(self):
+        runtime = object.__new__(runtime_module.Runtime)
+        runtime.target_gpu = 0
+        runtime._runtime = None
+        return runtime
+
+    def test_run_dummy_compute_requires_cuda_tensor(self) -> None:
+        runtime = self.make_runtime()
+        tensor = torch.zeros(8, dtype=torch.float32)
+
+        with self.assertRaises(ValueError):
+            runtime.run_dummy_compute(tensor, 1)
+
+    def test_run_dummy_compute_requires_float32(self) -> None:
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA is not available")
+
+        runtime = self.make_runtime()
+        runtime.target_gpu = torch.cuda.current_device()
+        tensor = torch.zeros(8, dtype=torch.float16, device="cuda")
+
+        with self.assertRaises(ValueError):
+            runtime.run_dummy_compute(tensor, 1)
 
 
 if __name__ == "__main__":
