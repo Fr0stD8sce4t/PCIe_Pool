@@ -402,13 +402,15 @@ tensor copies only.
 
 ## Real Framework Connector Boundary
 
-`examples/framework_kv_slot_adapter.py` shows the first connector shape for a
-real framework POC. A framework owns the KV cache allocation and passes
-TurboBus a CPU backing tensor, a GPU KV backing tensor, and per-block byte
-offsets. TurboBus only restores or saves those registered slots:
+`turbobus.inference` is the connector API for real framework KV slots. A
+framework owns the KV cache allocation and passes TurboBus a CPU backing tensor,
+a GPU KV backing tensor, and per-block byte offsets. TurboBus only restores or
+saves those registered slots:
 
 ```python
-adapter = FrameworkKVSlotAdapter(rt, cpu_backing, gpu_kv_backing)
+from turbobus.inference import InferenceKVSlotAdapter
+
+adapter = InferenceKVSlotAdapter(rt, cpu_backing, gpu_kv_backing)
 adapter.register_slots(slots)
 adapter.restore_prefix(["prefix0", "prefix1"])
 ```
@@ -416,9 +418,9 @@ adapter.restore_prefix(["prefix0", "prefix1"])
 This is the intended next boundary for vLLM/SGLang-style experiments before
 attempting scheduler or full KV-cache changes.
 
-`examples/vllm_kv_slot_adapter.py` narrows that boundary for vLLM. It does not
-import vLLM directly; a vLLM patch should extract KV cache tensors and block ids
-from the local vLLM version, then pass them into `VllmKVSlotAdapter`.
+`turbobus.vllm` narrows that boundary for vLLM. It does not import vLLM
+directly; a vLLM patch should extract KV cache tensors and block ids from the
+local vLLM version, then pass them into `VllmKVSlotAdapter`.
 Use `examples/vllm_introspect.py` to print the installed vLLM version's
 KV-cache-related modules and methods before writing a version-specific patch.
 Use `examples/vllm_probe.py` with a real model to observe vLLM KV cache tensor

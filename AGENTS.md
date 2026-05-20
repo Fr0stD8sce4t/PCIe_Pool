@@ -124,11 +124,10 @@ Next steps:
      prefix/session KV-shaped buffers into target-GPU slots.
    - The first sidecar result is recorded and shows about 1.95x pooled restore
      speedup beside a real PyTorch Transformer layer.
-   - `docs/real_framework_connector.md` and
-     `examples/framework_kv_slot_adapter.py` define the first narrow connector
-     boundary for real framework KV slot addresses.
-   - vLLM is the first real framework POC target. `docs/vllm_poc.md` and
-     `examples/vllm_kv_slot_adapter.py` define the vLLM-shaped adapter boundary.
+   - `docs/real_framework_connector.md` and `turbobus.inference` define the
+     first narrow connector boundary for real framework KV slot addresses.
+   - vLLM is the first real framework target. `docs/vllm_poc.md` and
+     `turbobus.vllm` define the vLLM-shaped adapter boundary.
    - `examples/vllm_introspect.py` prints the installed vLLM version's
      KV-cache-related modules and methods before writing a version-specific
      patch.
