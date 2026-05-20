@@ -421,3 +421,5 @@ import vLLM directly; a vLLM patch should extract KV cache tensors and block ids
 from the local vLLM version, then pass them into `VllmKVSlotAdapter`.
 Use `examples/vllm_introspect.py` to print the installed vLLM version's
 KV-cache-related modules and methods before writing a version-specific patch.
+Use `examples/vllm_probe.py` with a real model to observe vLLM KV cache tensor
+shapes and allocated block ids without changing vLLM behavior.

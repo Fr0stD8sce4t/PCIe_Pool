@@ -132,7 +132,9 @@ Next steps:
    - `examples/vllm_introspect.py` prints the installed vLLM version's
      KV-cache-related modules and methods before writing a version-specific
      patch.
-   - Next priority: use vLLM introspection output to wire only vLLM's
+   - `examples/vllm_probe.py` is an observation-only vLLM run that prints KV
+     cache tensor shapes and allocated block ids without changing vLLM behavior.
+   - Next priority: run the vLLM probe on the server, then wire only vLLM's
      prefix/session restore hook to the adapter boundary, using vLLM-owned KV
      cache tensors and block ids.
    - Compare direct, relay, and pool modes using the same manager API that a

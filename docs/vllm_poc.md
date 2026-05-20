@@ -66,6 +66,25 @@ lists the actual module paths, classes, and KV-cache-related methods in the
 installed vLLM version, so the POC can target real source paths instead of an
 older API shape.
 
+For this version, introspection showed the main patch points:
+
+- `vllm.v1.worker.gpu_model_runner.GPUModelRunner.initialize_kv_cache`
+- `vllm.v1.worker.gpu_model_runner.GPUModelRunner._allocate_kv_cache_tensors`
+- `vllm.v1.worker.gpu_model_runner.GPUModelRunner._reshape_kv_cache_tensors`
+- `vllm.v1.core.kv_cache_manager.KVCacheManager.allocate_slots`
+- `vllm.v1.core.kv_cache_manager.KVCacheManager.get_computed_blocks`
+- `vllm.v1.core.kv_cache_manager.KVCacheManager.get_block_ids`
+
+Before modifying vLLM behavior, run the observation-only probe:
+
+```bash
+python examples/vllm_probe.py --model <model-path-or-name> --max-tokens 8
+```
+
+This monkey patches vLLM methods only inside the probe process and prints KV
+cache tensor shapes plus allocated block ids. It does not restore or modify KV
+bytes.
+
 ## Success Criteria
 
 The first vLLM POC passes when:
