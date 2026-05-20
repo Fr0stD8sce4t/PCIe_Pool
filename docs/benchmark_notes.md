@@ -578,7 +578,8 @@ python benchmarks/kv_offload.py \
   --mode all \
   --verify \
   --dynamic-weights \
-  --json-output benchmarks/results/kv_gpu6_relay5.json
+  --json-output benchmarks/results/kv_gpu6_relay5.json \
+  --summary-output benchmarks/results/kv_gpu6_relay5_summary.txt
 ```
 
 Copy summary:
@@ -586,40 +587,44 @@ Copy summary:
 ```text
 COPY_SUMMARY_BEGIN
 kv_config target=6 relays=[5] num_blocks=8 active_blocks=4 block_bytes=16777216 chunk_bytes=4194304 iterations=5 mode=all dynamic_weights=True
-profile direct_h2d_bw_gbps=7.566
-profile_relay relay=5 h2d=7.516 p2p=41.049 effective=7.516 p2p_enabled=True
-kv_op mode=direct op=prefetch count=20 gib_s=7.459 p50_ms=2.078 p95_ms=2.137 direct_chunks=80 relay_chunks=0 direct_bytes=335544320 relay_bytes=0
-kv_path mode=direct op=prefetch direction=h2d kind=direct relay=-1 median_gib_s=7.482 median_ms=2.088 bytes=335544320 chunks=80
-kv_op mode=direct op=evict count=20 gib_s=8.020 p50_ms=1.950 p95_ms=1.959 direct_chunks=80 relay_chunks=0 direct_bytes=335544320 relay_bytes=0
-kv_path mode=direct op=evict direction=d2h kind=direct relay=-1 median_gib_s=7.978 median_ms=1.958 bytes=335544320 chunks=80
+profile direct_h2d_bw_gbps=7.556
+profile_relay relay=5 h2d=7.577 p2p=39.736 effective=7.577 p2p_enabled=True
+kv_op mode=direct op=prefetch count=20 batch_gib_s=7.350 batch_p50_ms=8.432 batch_p95_ms=8.636 block_gib_s=3.008 block_p50_ms=5.196 block_p95_ms=8.392 direct_chunks=80 relay_chunks=0 direct_bytes=335544320 relay_bytes=0
+kv_path mode=direct op=prefetch direction=h2d kind=direct relay=-1 median_gib_s=7.499 median_ms=2.084 bytes=335544320 chunks=80
+kv_op mode=direct op=evict count=20 batch_gib_s=7.900 batch_p50_ms=7.913 batch_p95_ms=7.918 block_gib_s=3.249 block_p50_ms=4.803 block_p95_ms=7.697 direct_chunks=80 relay_chunks=0 direct_bytes=335544320 relay_bytes=0
+kv_path mode=direct op=evict direction=d2h kind=direct relay=-1 median_gib_s=8.008 median_ms=1.951 bytes=335544320 chunks=80
 kv_verify mode=direct match=True
-kv_op mode=relay op=prefetch count=20 gib_s=7.229 p50_ms=2.153 p95_ms=2.199 direct_chunks=0 relay_chunks=80 direct_bytes=0 relay_bytes=335544320
-kv_path mode=relay op=prefetch direction=h2d kind=relay relay=5 median_gib_s=7.159 median_ms=2.182 bytes=335544320 chunks=80
-kv_op mode=relay op=evict count=20 gib_s=7.739 p50_ms=2.023 p95_ms=2.034 direct_chunks=0 relay_chunks=80 direct_bytes=0 relay_bytes=335544320
-kv_path mode=relay op=evict direction=d2h kind=relay relay=5 median_gib_s=7.634 median_ms=2.047 bytes=335544320 chunks=80
+kv_op mode=relay op=prefetch count=20 batch_gib_s=7.288 batch_p50_ms=8.558 batch_p95_ms=8.673 block_gib_s=3.002 block_p50_ms=5.236 block_p95_ms=8.222 direct_chunks=0 relay_chunks=80 direct_bytes=0 relay_bytes=335544320
+kv_path mode=relay op=prefetch direction=h2d kind=relay relay=5 median_gib_s=7.182 median_ms=2.176 bytes=335544320 chunks=80
+kv_op mode=relay op=evict count=20 batch_gib_s=7.789 batch_p50_ms=8.035 batch_p95_ms=8.063 block_gib_s=3.232 block_p50_ms=4.815 block_p95_ms=7.697 direct_chunks=0 relay_chunks=80 direct_bytes=0 relay_bytes=335544320
+kv_path mode=relay op=evict direction=d2h kind=relay relay=5 median_gib_s=5.497 median_ms=2.842 bytes=335544320 chunks=80
 kv_verify mode=relay match=True
-kv_op mode=pool op=prefetch count=20 gib_s=13.880 p50_ms=1.122 p95_ms=1.148 direct_chunks=40 relay_chunks=40 direct_bytes=167772160 relay_bytes=167772160
-kv_path mode=pool op=prefetch direction=h2d kind=direct relay=-1 median_gib_s=7.456 median_ms=1.048 bytes=167772160 chunks=40
-kv_path mode=pool op=prefetch direction=h2d kind=relay relay=5 median_gib_s=6.906 median_ms=1.131 bytes=167772160 chunks=40
-kv_op mode=pool op=evict count=20 gib_s=14.675 p50_ms=1.063 p95_ms=1.080 direct_chunks=40 relay_chunks=40 direct_bytes=167772160 relay_bytes=167772160
-kv_path mode=pool op=evict direction=d2h kind=direct relay=-1 median_gib_s=7.912 median_ms=0.987 bytes=167772160 chunks=40
-kv_path mode=pool op=evict direction=d2h kind=relay relay=5 median_gib_s=7.246 median_ms=1.078 bytes=167772160 chunks=40
+kv_op mode=pool op=prefetch count=20 batch_gib_s=14.116 batch_p50_ms=4.422 batch_p95_ms=4.473 block_gib_s=5.986 block_p50_ms=2.633 block_p95_ms=4.061 direct_chunks=40 relay_chunks=40 direct_bytes=167772160 relay_bytes=167772160
+kv_path mode=pool op=prefetch direction=h2d kind=direct relay=-1 median_gib_s=7.517 median_ms=1.039 bytes=167772160 chunks=40
+kv_path mode=pool op=prefetch direction=h2d kind=relay relay=5 median_gib_s=6.946 median_ms=1.125 bytes=167772160 chunks=40
+kv_op mode=pool op=evict count=20 batch_gib_s=14.882 batch_p50_ms=4.196 batch_p95_ms=4.221 block_gib_s=6.362 block_p50_ms=2.442 block_p95_ms=3.887 direct_chunks=40 relay_chunks=40 direct_bytes=167772160 relay_bytes=167772160
+kv_path mode=pool op=evict direction=d2h kind=direct relay=-1 median_gib_s=7.894 median_ms=0.990 bytes=167772160 chunks=40
+kv_path mode=pool op=evict direction=d2h kind=relay relay=5 median_gib_s=4.121 median_ms=1.896 bytes=167772160 chunks=40
 kv_verify mode=pool match=True
-kv_speedup pool_over_direct_prefetch=1.861
-kv_speedup pool_over_relay_prefetch=1.920
-kv_speedup pool_over_direct_evict=1.830
-kv_speedup pool_over_relay_evict=1.896
+kv_speedup pool_over_direct_prefetch=1.921
+kv_speedup pool_over_relay_prefetch=1.937
+kv_speedup pool_over_direct_evict=1.884
+kv_speedup pool_over_relay_evict=1.911
 COPY_SUMMARY_END
 ```
 
 Analysis:
 
-The named-block KV offload benchmark validates the `OffloadStore` path for both
-prefetch and evict. Pooled transfer splits the work evenly between the direct
-and relay paths and improves effective bandwidth from 7.459 to 13.880 GiB/s for
-prefetch, and from 8.020 to 14.675 GiB/s for evict. This corresponds to 1.861x
-prefetch speedup and 1.830x evict speedup over direct-only transfer. All direct,
-relay, and pooled verification checks passed.
+The connector-ready KV offload benchmark validates the `OffloadStore`
+`prefetch_many` and `evict_many` paths. The primary metric is `batch_gib_s`,
+which measures a decode-step-style batch of active KV blocks from submission to
+all blocks complete. Pooled transfer splits the work evenly between direct and
+relay paths and improves batch throughput from 7.350 to 14.116 GiB/s for
+prefetch, and from 7.900 to 14.882 GiB/s for evict. This corresponds to 1.921x
+prefetch speedup and 1.884x evict speedup over direct-only transfer. All direct,
+relay, and pooled verification checks passed. The lower `block_gib_s` values
+are retained as a per-block submit-to-complete view and include queueing time
+when several blocks are submitted together.
 
 ## Next Implementation Steps
 
