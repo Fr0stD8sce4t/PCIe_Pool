@@ -64,8 +64,61 @@ def make_block(block_bytes: int, block_index: int):
     return tensor
 
 
+def fill_block(tensor, offset: int, block_bytes: int, block_index: int) -> None:
+    view = tensor.narrow(0, offset, block_bytes)
+    view.copy_(torch.arange(block_bytes, dtype=torch.uint8, pin_memory=True))
+    if block_index:
+        view.add_(block_index)
+
+
 def request_blocks(request_id: int, blocks_per_request: int) -> list[str]:
     return [f"req{request_id}_kv{index}" for index in range(blocks_per_request)]
+
+
+def create_store(args, runtime) -> tuple[turbobus.OffloadManager, list[list[str]]]:
+    store = turbobus.OffloadManager(runtime)
+    request_block_names = []
+    total_blocks = args.requests * args.blocks_per_request
+
+    if args.storage_layout == "packed":
+        total_bytes = total_blocks * args.block_bytes
+        cpu_backing = torch.empty(total_bytes, dtype=torch.uint8, pin_memory=True)
+        gpu_backing = torch.empty_like(cpu_backing, device=f"cuda:{args.target_gpu}")
+    else:
+        cpu_backing = None
+        gpu_backing = None
+
+    for request_id in range(args.requests):
+        names = request_blocks(request_id, args.blocks_per_request)
+        request_block_names.append(names)
+        for block_index, name in enumerate(names):
+            global_index = request_id * args.blocks_per_request + block_index
+            if args.storage_layout == "packed":
+                offset = global_index * args.block_bytes
+                fill_block(cpu_backing, offset, args.block_bytes, global_index)
+                store.add(
+                    name,
+                    cpu_backing,
+                    gpu_backing,
+                    block_id=(request_id, block_index),
+                    cpu_slot=global_index,
+                    gpu_slot=global_index,
+                    cpu_offset=offset,
+                    gpu_offset=offset,
+                    byte_count=args.block_bytes,
+                )
+            else:
+                cpu_tensor = make_block(args.block_bytes, global_index)
+                gpu_tensor = torch.empty_like(cpu_tensor, device=f"cuda:{args.target_gpu}")
+                store.add(
+                    name,
+                    cpu_tensor,
+                    gpu_tensor,
+                    block_id=(request_id, block_index),
+                    cpu_slot=global_index,
+                    gpu_slot=None,
+                )
+    return store, request_block_names
 
 
 def select_blocks(
@@ -340,7 +393,7 @@ def compact_summary(result: dict) -> str:
             f"requests={config['requests']} blocks_per_request={config['blocks_per_request']} "
             f"blocks_per_step={config['blocks_per_step']} gpu_block_capacity={config['gpu_block_capacity']} "
             f"access_pattern={config['access_pattern']} working_set_blocks={config['working_set_blocks']} "
-            f"seed={config['seed']} "
+            f"seed={config['seed']} storage_layout={config['storage_layout']} "
             f"block_bytes={config['block_bytes']} decode_steps={config['decode_steps']} "
             f"compute_ms={config['compute_ms']} overlap_compute={config['overlap_compute']} "
             f"mode={config['mode']} "
@@ -420,6 +473,11 @@ def main() -> None:
     )
     parser.add_argument("--working-set-blocks", type=int)
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument(
+        "--storage-layout",
+        choices=["separate", "packed"],
+        default="separate",
+    )
     parser.add_argument("--block-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--decode-steps", type=int, default=32)
     parser.add_argument("--compute-ms", type=float, default=0.0)
@@ -457,24 +515,7 @@ def main() -> None:
     )
     runtime = turbobus.Runtime(target_gpu=args.target_gpu, relay_gpus=relays, options=options)
     profile = runtime.profile(args.profile_bytes, force=True)
-    store = turbobus.OffloadManager(runtime)
-
-    request_block_names = []
-    for request_id in range(args.requests):
-        names = request_blocks(request_id, args.blocks_per_request)
-        request_block_names.append(names)
-        for block_index, name in enumerate(names):
-            global_index = request_id * args.blocks_per_request + block_index
-            cpu_tensor = make_block(args.block_bytes, global_index)
-            gpu_tensor = torch.empty_like(cpu_tensor, device=f"cuda:{args.target_gpu}")
-            store.add(
-                name,
-                cpu_tensor,
-                gpu_tensor,
-                block_id=(request_id, block_index),
-                cpu_slot=global_index,
-                gpu_slot=None,
-            )
+    store, request_block_names = create_store(args, runtime)
 
     result = {
         "config": {
@@ -487,6 +528,7 @@ def main() -> None:
             "access_pattern": args.access_pattern,
             "working_set_blocks": working_set_blocks,
             "seed": args.seed,
+            "storage_layout": args.storage_layout,
             "block_bytes": args.block_bytes,
             "decode_steps": args.decode_steps,
             "compute_ms": args.compute_ms,

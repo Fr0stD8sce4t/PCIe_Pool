@@ -175,6 +175,7 @@ python benchmarks/inference_offload_sim.py \
   --access-pattern round_robin \
   --working-set-blocks 8 \
   --seed 1 \
+  --storage-layout packed \
   --block-bytes 16777216 \
   --decode-steps 32 \
   --compute-ms 0 \
@@ -193,7 +194,10 @@ kernel overlap test. The default access pattern and GPU block capacity are
 chosen to create capacity pressure, so the run should exercise both prefetch
 and eviction. Use `tokens_s`, `step_p50_ms`, and `transfer_p50_ms` in the copy
 summary as the main metrics. The `sim_scenario` line describes what the run is
-modeling so the saved summary can be read without the full command.
+modeling so the saved summary can be read without the full command. Use
+`--storage-layout packed` to store all simulated KV blocks in shared CPU/GPU
+backing tensors and exercise the range-batched manager path; use `separate` to
+keep one tensor per block.
 
 ```python
 opts = turbobus.RuntimeOptions.from_tuning_json(
