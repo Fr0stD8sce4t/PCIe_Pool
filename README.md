@@ -208,6 +208,33 @@ Use `--storage-layout packed` to store all simulated KV blocks in shared
 CPU/GPU backing tensors and exercise the range-batched manager path; use
 `separate` to keep one tensor per block.
 
+`benchmarks/inference_workload_sim.py` adds a request-level workload model on
+top of the same manager API. It keeps the benchmark self-contained while adding
+request arrival, prefill, decode steps, scheduling, TTFT, request latency, and
+GPU KV cache hit-rate metrics:
+
+```bash
+python benchmarks/inference_workload_sim.py \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --request-count 8 \
+  --arrival-pattern burst \
+  --prompt-blocks-min 6 \
+  --prompt-blocks-max 10 \
+  --decode-steps-min 12 \
+  --decode-steps-max 20 \
+  --scheduler round_robin \
+  --access-pattern sliding \
+  --blocks-per-step 4 \
+  --gpu-block-capacity 12 \
+  --storage-layout packed \
+  --compute-impl cuda \
+  --cuda-compute-iterations 2048 \
+  --overlap-compute \
+  --mode all \
+  --dynamic-weights
+```
+
 ```python
 opts = turbobus.RuntimeOptions.from_tuning_json(
     "benchmarks/results/tune_gpu6_relay5.json"

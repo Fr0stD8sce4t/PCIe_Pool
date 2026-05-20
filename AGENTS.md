@@ -101,8 +101,12 @@ Next steps:
      KV-cache-style backing buffers.
    - Native CUDA dummy compute is available for overlap experiments through
      `--compute-impl cuda`.
-   - Next priority: run and record CUDA dummy compute overlap results, then
-     compare them against the Python sleep scheduling model.
+   - CUDA dummy compute overlap has been validated with heavier native kernels.
+   - A request-level workload simulator is available as
+     `benchmarks/inference_workload_sim.py`; it models request arrival, prefill,
+     decode steps, scheduling, TTFT, request latency, and GPU KV cache hit rate.
+   - Next priority: run and record workload simulator results across direct,
+     relay, and pool modes.
    - Compare direct, relay, and pool modes using the same manager API that a
      future vLLM/SGLang connector would call.
 
