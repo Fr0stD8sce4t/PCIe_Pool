@@ -196,6 +196,7 @@ python examples/vllm_turbobus_connector.py \
   --target-gpu 6 \
   --relay-gpus 5 \
   --prompt-repeat 64 \
+  --second-prompt-suffix " Italy" \
   --restore-blocks 8 \
   --chunk-bytes 4194304 \
   --profile-bytes 16777216 \
@@ -203,6 +204,26 @@ python examples/vllm_turbobus_connector.py \
   --enforce-eager \
   --log-output benchmarks/results/vllm_qwen3_connector_pool.log
 ```
+
+By default the second request is `<first prompt> + --second-prompt-suffix`, so
+the saved first request is a real prefix of the second request. The script also
+passes `enable_prefix_caching=False` to vLLM by default. That keeps vLLM's
+built-in prefix cache from hiding the TurboBus external restore path during
+this connector check. Pass `--enable-prefix-caching` only when testing
+interaction with vLLM's own prefix cache.
+
+The expected success signal is a summary like:
+
+```text
+vllm_connector_result ... allocation_events=1 shared_prefix=True
+vllm_connector_allocation ... available_blocks=<nonzero>
+vllm_connector_restore ... blocks=<restore-blocks> ...
+```
+
+This means TurboBus restored into real vLLM KV slots from inside the second
+request's allocation path. It is not the final TTFT measurement yet; the next
+step is to move the restore trigger to vLLM's KV connector load path so vLLM can
+skip recomputing externally restored prefix tokens.
 
 ## Success Criteria
 

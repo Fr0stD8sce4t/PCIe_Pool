@@ -270,6 +270,7 @@ python examples/vllm_turbobus_connector.py \
   --target-gpu 6 \
   --relay-gpus 5 \
   --prompt-repeat 64 \
+  --second-prompt-suffix " Italy" \
   --restore-blocks 8 \
   --chunk-bytes 4194304 \
   --profile-bytes 16777216 \
@@ -277,6 +278,11 @@ python examples/vllm_turbobus_connector.py \
   --enforce-eager \
   --log-output benchmarks/results/vllm_qwen3_connector_pool.log
 ```
+
+By default the second request is the first request plus
+`--second-prompt-suffix`, and vLLM prefix caching is disabled for this run. That
+forces the external TurboBus restore path to run in the real vLLM allocation
+path instead of being hidden by vLLM's built-in prefix cache.
 
 ```python
 opts = turbobus.RuntimeOptions.from_tuning_json(

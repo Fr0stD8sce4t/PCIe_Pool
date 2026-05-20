@@ -39,6 +39,12 @@ def prompt_text(prompt: str, repeat: int) -> str:
     return " ".join([prompt] * repeat)
 
 
+def second_prompt_text(args, first_prompt: str) -> str:
+    if args.second_prompt_mode == "append":
+        return first_prompt + args.second_prompt_suffix
+    return prompt_text(args.prompt + args.second_prompt_suffix, args.prompt_repeat)
+
+
 def make_runtime(args, mode: str):
     import turbobus
 
@@ -81,15 +87,24 @@ def run(args) -> None:
     connector.install()
 
     sampling = SamplingParams(temperature=0.0, max_tokens=args.max_tokens)
-    llm = LLM(
-        model=args.model,
-        tensor_parallel_size=args.tensor_parallel_size,
-        gpu_memory_utilization=args.gpu_memory_utilization,
-        enforce_eager=args.enforce_eager,
-    )
+    llm_kwargs = {
+        "model": args.model,
+        "tensor_parallel_size": args.tensor_parallel_size,
+        "gpu_memory_utilization": args.gpu_memory_utilization,
+        "enforce_eager": args.enforce_eager,
+    }
+    if args.disable_prefix_caching:
+        llm_kwargs["enable_prefix_caching"] = False
+    try:
+        llm = LLM(**llm_kwargs)
+    except TypeError as exc:
+        if "enable_prefix_caching" not in str(exc):
+            raise
+        llm_kwargs.pop("enable_prefix_caching", None)
+        llm = LLM(**llm_kwargs)
 
     first_prompt = prompt_text(args.prompt, args.prompt_repeat)
-    second_prompt = prompt_text(args.prompt + args.second_prompt_suffix, args.prompt_repeat)
+    second_prompt = second_prompt_text(args, first_prompt)
     start = time.perf_counter()
     first_outputs = llm.generate([first_prompt], sampling)
     first_ms = (time.perf_counter() - start) * 1000.0
@@ -134,6 +149,8 @@ def run(args) -> None:
         f"prompt_repeat={args.prompt_repeat}",
         f"restore_blocks={args.restore_blocks}",
         f"second_prompt_suffix={args.second_prompt_suffix!r}",
+        f"second_prompt_mode={args.second_prompt_mode}",
+        f"prefix_caching_disabled={args.disable_prefix_caching}",
         f"chunk_bytes={args.chunk_bytes}",
         f"mode={args.mode}",
         f"dynamic_weights={args.dynamic_weights}",
@@ -153,6 +170,7 @@ def run(args) -> None:
         f"first_generate_ms={first_ms:.3f}",
         f"second_generate_ms={second_ms:.3f}",
         f"text_match={text_match}",
+        f"shared_prefix={second_prompt.startswith(first_prompt)}",
         f"allocation_events={len(allocation_events)}",
     )
     for index, event in enumerate(allocation_events):
@@ -188,6 +206,12 @@ def parse_args():
     parser.add_argument("--model", required=True)
     parser.add_argument("--prompt", default="The capital of France is")
     parser.add_argument("--second-prompt-suffix", default=" Italy")
+    parser.add_argument(
+        "--second-prompt-mode",
+        choices=["append", "mutate"],
+        default="append",
+        help="append keeps the first request as a true prefix of the second request.",
+    )
     parser.add_argument("--prompt-repeat", type=int, default=64)
     parser.add_argument("--max-tokens", type=int, default=8)
     parser.add_argument("--target-gpu", type=int, required=True)
@@ -195,6 +219,13 @@ def parse_args():
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.8)
     parser.add_argument("--enforce-eager", action="store_true")
+    parser.add_argument(
+        "--enable-prefix-caching",
+        dest="disable_prefix_caching",
+        action="store_false",
+        help="Leave vLLM prefix caching enabled. Disabled by default so TurboBus handles the external restore path.",
+    )
+    parser.set_defaults(disable_prefix_caching=True)
     parser.add_argument(
         "--enable-multiproc-executor",
         dest="disable_multiproc_executor",
