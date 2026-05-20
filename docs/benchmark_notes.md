@@ -692,6 +692,55 @@ behavior, improving from 61.945 to 118.746 tokens/s. This indicates the
 capacity-pressure simulator path is stable and that PCIe bandwidth pooling
 reduces transfer stall in an inference-shaped workload.
 
+## Inference Offload Simulator Dummy Compute Overlap
+
+Scenario:
+
+This run uses the same capacity-pressure setup as above, but adds 5 ms of dummy
+decode compute per step. The non-overlap run waits for eviction and prefetch
+before compute. The overlap run starts dummy compute concurrently with transfer
+using a Python thread and `time.sleep`; it is a scheduling model, not a CUDA
+kernel overlap test.
+
+No-overlap copy summary:
+
+```text
+COPY_SUMMARY_BEGIN
+sim_config target=6 relays=[5] requests=4 blocks_per_request=8 blocks_per_step=4 gpu_block_capacity=4 access_pattern=round_robin working_set_blocks=8 seed=1 block_bytes=16777216 decode_steps=32 compute_ms=5.0 overlap_compute=False mode=all dynamic_weights=True
+profile direct_h2d_bw_gbps=7.611
+profile_relay relay=5 h2d=7.598 p2p=39.223 effective=7.598 p2p_enabled=True
+sim_mode mode=direct tokens_s=46.852 step_p50_ms=21.678 step_p95_ms=22.081 transfer_p50_ms=16.541 transfer_p95_ms=16.940 prefetch_gib_s=7.235 evict_gib_s=7.813 prefetch_blocks=128 evict_blocks=121 direct_chunks=996 relay_chunks=0
+sim_mode mode=relay tokens_s=46.374 step_p50_ms=21.917 step_p95_ms=22.286 transfer_p50_ms=16.767 transfer_p95_ms=17.135 prefetch_gib_s=7.151 evict_gib_s=7.692 prefetch_blocks=128 evict_blocks=121 direct_chunks=0 relay_chunks=996
+sim_mode mode=pool tokens_s=73.253 step_p50_ms=13.830 step_p95_ms=14.106 transfer_p50_ms=8.674 transfer_p95_ms=8.942 prefetch_gib_s=13.876 evict_gib_s=14.760 prefetch_blocks=128 evict_blocks=121 direct_chunks=498 relay_chunks=498
+sim_speedup pool_over_direct_tokens_per_second=1.563
+sim_speedup pool_over_relay_tokens_per_second=1.580
+COPY_SUMMARY_END
+```
+
+Overlap copy summary:
+
+```text
+COPY_SUMMARY_BEGIN
+sim_config target=6 relays=[5] requests=4 blocks_per_request=8 blocks_per_step=4 gpu_block_capacity=4 access_pattern=round_robin working_set_blocks=8 seed=1 block_bytes=16777216 decode_steps=32 compute_ms=5.0 overlap_compute=True mode=all dynamic_weights=True
+profile direct_h2d_bw_gbps=7.549
+profile_relay relay=5 h2d=7.592 p2p=40.761 effective=7.592 p2p_enabled=True
+sim_mode mode=direct tokens_s=60.479 step_p50_ms=16.915 step_p95_ms=17.128 transfer_p50_ms=16.596 transfer_p95_ms=16.724 prefetch_gib_s=7.225 evict_gib_s=7.822 prefetch_blocks=128 evict_blocks=121 direct_chunks=996 relay_chunks=0
+sim_mode mode=relay tokens_s=60.028 step_p50_ms=17.067 step_p95_ms=17.246 transfer_p50_ms=16.769 transfer_p95_ms=16.903 prefetch_gib_s=7.150 evict_gib_s=7.748 prefetch_blocks=128 evict_blocks=121 direct_chunks=0 relay_chunks=996
+sim_mode mode=pool tokens_s=112.934 step_p50_ms=9.011 step_p95_ms=9.244 transfer_p50_ms=8.668 transfer_p95_ms=8.848 prefetch_gib_s=13.902 evict_gib_s=14.799 prefetch_blocks=128 evict_blocks=121 direct_chunks=498 relay_chunks=498
+sim_speedup pool_over_direct_tokens_per_second=1.867
+sim_speedup pool_over_relay_tokens_per_second=1.881
+COPY_SUMMARY_END
+```
+
+Analysis:
+
+With 5 ms of dummy compute serialized after transfer, pooled transfer improves
+simulated throughput from 46.852 to 73.253 tokens/s. With the dummy compute
+overlapped with transfer, pooled transfer improves from 60.479 to 112.934
+tokens/s. The overlap run reduces step p50 from 13.830 ms to 9.011 ms in pooled
+mode because part of the compute time is hidden behind the transfer stall. The
+pool/direct speedup is 1.563x without overlap and 1.867x with overlap.
+
 ## Next Implementation Steps
 
 1. Replace the benchmark-only even/odd chunk split with the production

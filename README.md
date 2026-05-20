@@ -192,7 +192,8 @@ concurrently with transfer as a first scheduling model. This is not yet a CUDA
 kernel overlap test. The default access pattern and GPU block capacity are
 chosen to create capacity pressure, so the run should exercise both prefetch
 and eviction. Use `tokens_s`, `step_p50_ms`, and `transfer_p50_ms` in the copy
-summary as the main metrics.
+summary as the main metrics. The `sim_scenario` line describes what the run is
+modeling so the saved summary can be read without the full command.
 
 ```python
 opts = turbobus.RuntimeOptions.from_tuning_json(

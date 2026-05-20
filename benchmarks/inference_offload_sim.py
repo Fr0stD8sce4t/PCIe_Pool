@@ -346,6 +346,21 @@ def compact_summary(result: dict) -> str:
             f"mode={config['mode']} "
             f"dynamic_weights={config['dynamic_weights']}"
         ),
+        (
+            "sim_scenario "
+            "type=capacity_pressure "
+            "unit=decode_step "
+            "policy=lru_eviction "
+            "transfer=evict_then_prefetch "
+            f"access_pattern={config['access_pattern']} "
+            f"working_set_blocks={config['working_set_blocks']} "
+            f"gpu_block_capacity={config['gpu_block_capacity']} "
+            f"blocks_per_step={config['blocks_per_step']} "
+            f"dummy_compute_ms={config['compute_ms']} "
+            f"overlap_compute={config['overlap_compute']} "
+            "compute_impl=python_sleep "
+            "note=not_cuda_kernel_overlap"
+        ),
         f"profile direct_h2d_bw_gbps={result['profile']['direct_h2d_bw_gbps']:.3f}",
     ]
     for relay in result["profile"]["relays"]:
