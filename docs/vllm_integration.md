@@ -281,6 +281,35 @@ target is:
 get_num_new_matched_tokens -> update_state_after_alloc -> build_connector_meta -> start_load_kv
 ```
 
+`examples/vllm_turbobus_kv_connector.py --restore-enabled` runs that
+two-request path in one vLLM process:
+
+1. first request allocates real vLLM KV slots;
+2. TurboBus saves selected prefix blocks into pinned CPU backing;
+3. the saved backing is registered under `--prefix-key`;
+4. second request shares the first prompt as a prefix;
+5. `kv_transfer_params` names the same prefix key and matched-token count;
+6. vLLM calls the TurboBus KV connector, which restores into the second
+   request's allocated KV slots from `start_load_kv()`.
+
+```bash
+python examples/vllm_turbobus_kv_connector.py \
+  --model ~/huggingface/Qwen3-0.6B \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --prompt-repeat 64 \
+  --second-prompt-suffix " Italy" \
+  --prefix-key qwen3-prefix \
+  --matched-tokens 128 \
+  --restore-blocks 8 \
+  --restore-enabled \
+  --chunk-bytes 4194304 \
+  --profile-bytes 16777216 \
+  --mode pool \
+  --enforce-eager \
+  --log-output benchmarks/results/vllm_qwen3_kv_connector_restore.log
+```
+
 ## Success Criteria
 
 The first vLLM integration passes when:

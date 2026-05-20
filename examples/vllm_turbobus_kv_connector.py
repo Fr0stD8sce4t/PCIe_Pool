@@ -38,13 +38,38 @@ def prompt_text(prompt: str, repeat: int) -> str:
     return " ".join([prompt] * repeat)
 
 
+def second_prompt_text(args, first_prompt: str) -> str:
+    return first_prompt + args.second_prompt_suffix
+
+
 def run(args) -> None:
     configure_cuda_devices(args)
     if args.disable_multiproc_executor:
         os.environ.setdefault("VLLM_ENABLE_V1_MULTIPROCESSING", "0")
 
+    import torch
     from vllm import LLM, SamplingParams
     from vllm.config import KVTransferConfig
+
+    import turbobus
+    from turbobus.vllm_connector import VllmTurboBusConnector
+    from turbobus.vllm_integration import VllmTurboBusIntegration
+    from turbobus.vllm_kv_connector import clear_saved_prefixes, register_saved_prefix
+
+    torch.cuda.set_device(args.runtime_target_gpu)
+    clear_saved_prefixes()
+    runtime = turbobus.Runtime(
+        target_gpu=args.runtime_target_gpu,
+        relay_gpus=args.runtime_relay_gpus,
+        options=turbobus.RuntimeOptions(
+            chunk_bytes=args.chunk_bytes,
+            profile_bytes=args.profile_bytes,
+            transfer_mode=args.mode,
+        ),
+    )
+    integration = VllmTurboBusIntegration(runtime)
+    integration.install()
+    allocation_connector = VllmTurboBusConnector(integration)
 
     relay_gpus = ",".join(str(gpu) for gpu in args.runtime_relay_gpus)
     ktc = KVTransferConfig(
@@ -71,7 +96,30 @@ def run(args) -> None:
     }
     llm = LLM(**llm_kwargs)
 
-    prompt = prompt_text(args.prompt, args.prompt_repeat)
+    first_prompt = prompt_text(args.prompt, args.prompt_repeat)
+    second_prompt = second_prompt_text(args, first_prompt)
+    base_sampling = SamplingParams(temperature=0.0, max_tokens=args.max_tokens)
+    first_outputs = llm.generate([first_prompt], base_sampling)
+
+    source_request_id = _first_request_id(integration)
+    source_blocks = len(integration.block_ids_for_request(source_request_id))
+    if args.restore_enabled:
+        if source_blocks < args.restore_blocks:
+            raise RuntimeError(
+                f"source request has {source_blocks} blocks, need {args.restore_blocks}; "
+                "increase --prompt-repeat or lower --restore-blocks"
+            )
+        cpu_backings = allocation_connector.allocate_cpu_backings_for_blocks(args.restore_blocks)
+        save_event = allocation_connector.save_request(source_request_id, args.restore_blocks)
+        register_saved_prefix(
+            args.prefix_key,
+            cpu_backings,
+            block_count=args.restore_blocks,
+            matched_tokens=args.matched_tokens,
+        )
+    else:
+        save_event = None
+
     matched_tokens = max(0, args.matched_tokens) if args.restore_enabled else 0
     sampling = SamplingParams(
         temperature=0.0,
@@ -79,11 +127,13 @@ def run(args) -> None:
         extra_args={
             "kv_transfer_params": {
                 "turbobus.do_restore": True,
+                "turbobus.prefix_key": args.prefix_key,
                 "turbobus.matched_tokens": matched_tokens,
             }
         },
     )
-    outputs = llm.generate([prompt], sampling)
+    integration.state.allocations.clear()
+    outputs = llm.generate([second_prompt], sampling)
     generated_text = outputs[0].outputs[0].text if outputs and outputs[0].outputs else ""
 
     print("COPY_SUMMARY_BEGIN")
@@ -96,6 +146,8 @@ def run(args) -> None:
         f"cuda_visible_devices={os.environ.get('CUDA_VISIBLE_DEVICES', '')}",
         f"model={args.model}",
         f"prompt_repeat={args.prompt_repeat}",
+        f"prefix_key={args.prefix_key}",
+        f"second_prompt_suffix={args.second_prompt_suffix!r}",
         f"requested_matched_tokens={args.matched_tokens}",
         f"matched_tokens={matched_tokens}",
         f"restore_blocks={args.restore_blocks}",
@@ -108,10 +160,24 @@ def run(args) -> None:
         "type=real_vllm_kv_transfer_connector",
         "boundary=KVConnectorBase_V1",
         "entry=start_load_kv",
-        "note=official_vllm_external_kv_path_lifecycle_check",
+        "note=official_vllm_external_kv_path",
     )
+    if save_event is not None:
+        print(
+            "vllm_kv_connector_save",
+            f"source_request={source_request_id}",
+            f"source_blocks={source_blocks}",
+            f"blocks={save_event.block_count}",
+            f"bytes={save_event.bytes}",
+            f"elapsed_ms={save_event.elapsed_ms:.3f}",
+            f"direct_chunks={save_event.direct_chunks}",
+            f"relay_chunks={save_event.relay_chunks}",
+        )
     print(
         "vllm_kv_connector_result",
+        f"source_request={source_request_id}",
+        f"source_blocks={source_blocks}",
+        f"shared_prefix={second_prompt.startswith(first_prompt)}",
         f"prompt_tokens={len(getattr(outputs[0], 'prompt_token_ids', []) or []) if outputs else 0}",
         f"generated_text={generated_text!r}",
     )
@@ -123,6 +189,8 @@ def parse_args():
     parser.add_argument("--model", required=True)
     parser.add_argument("--prompt", default="The capital of France is")
     parser.add_argument("--prompt-repeat", type=int, default=64)
+    parser.add_argument("--second-prompt-suffix", default=" Italy")
+    parser.add_argument("--prefix-key", default="qwen3-prefix")
     parser.add_argument("--matched-tokens", type=int, default=128)
     parser.add_argument("--max-tokens", type=int, default=8)
     parser.add_argument("--target-gpu", type=int, required=True)
@@ -156,6 +224,12 @@ def parse_args():
     if args.log_output is None:
         args.log_output = default_log_path()
     return args
+
+
+def _first_request_id(integration) -> str:
+    if not integration.state.allocations:
+        raise RuntimeError("vLLM did not allocate any KV blocks")
+    return next(iter(integration.state.allocations))
 
 
 def main() -> None:

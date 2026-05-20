@@ -33,10 +33,19 @@ except ImportError:  # pragma: no cover - lets unit tests import without vLLM
 @dataclass
 class TurboBusRequestMetadata:
     request_id: str
+    prefix_key: str
     block_ids: tuple[int, ...]
     matched_tokens: int
     block_count: int
     cpu_slot_start: int = 0
+
+
+@dataclass
+class TurboBusSavedPrefix:
+    key: str
+    cpu_backings: list[Any]
+    block_count: int
+    matched_tokens: int
 
 
 class TurboBusConnectorMetadata(KVConnectorMetadata):
@@ -56,6 +65,41 @@ class TurboBusKVConnectorState:
     kv_caches: dict[str, Any] = field(default_factory=dict)
     pending_loads: dict[str, TurboBusRequestMetadata] = field(default_factory=dict)
     events: list[dict[str, Any]] = field(default_factory=list)
+
+
+_SAVED_PREFIXES: dict[str, TurboBusSavedPrefix] = {}
+
+
+def register_saved_prefix(
+    key: str,
+    cpu_backings: list[Any],
+    *,
+    block_count: int,
+    matched_tokens: int,
+) -> None:
+    if not key:
+        raise ValueError("prefix key must not be empty")
+    _SAVED_PREFIXES[str(key)] = TurboBusSavedPrefix(
+        key=str(key),
+        cpu_backings=list(cpu_backings),
+        block_count=int(block_count),
+        matched_tokens=int(matched_tokens),
+    )
+    _emit_event(
+        "register_saved_prefix",
+        prefix_key=str(key),
+        block_count=int(block_count),
+        matched_tokens=int(matched_tokens),
+        layers=len(cpu_backings),
+    )
+
+
+def clear_saved_prefixes() -> None:
+    _SAVED_PREFIXES.clear()
+
+
+def get_saved_prefix(key: str) -> TurboBusSavedPrefix | None:
+    return _SAVED_PREFIXES.get(str(key))
 
 
 class TurboBusConnector(KVConnectorBase_V1):
@@ -96,9 +140,8 @@ class TurboBusConnector(KVConnectorBase_V1):
             "turbobus.restore_enabled",
             os.environ.get("TURBOBUS_RESTORE_ENABLED", "0") == "1",
         )
-        self.runtime = _make_runtime_from_config(vllm_config) if self.restore_enabled else None
-        self._cpu_backings: list[Any] | None = None
-        self._adapter = None
+        self.runtime = None
+        self._adapters_by_prefix: dict[str, Any] = {}
         _emit_event(
             "init",
             role=str(role),
@@ -138,7 +181,26 @@ class TurboBusConnector(KVConnectorBase_V1):
                 restore_enabled=False,
             )
             return 0, False
+        prefix_key = _request_prefix_key(params)
+        saved = get_saved_prefix(prefix_key)
+        if saved is None:
+            self.state.events.append(
+                {
+                    "event": "match_miss",
+                    "request_id": str(getattr(request, "request_id", "unknown")),
+                    "prefix_key": prefix_key,
+                }
+            )
+            _emit_event(
+                "match_miss",
+                request_id=str(getattr(request, "request_id", "unknown")),
+                prefix_key=prefix_key,
+            )
+            return 0, False
         matched_tokens = int(params.get("turbobus.matched_tokens", 0))
+        if matched_tokens <= 0:
+            matched_tokens = saved.matched_tokens
+        matched_tokens = min(matched_tokens, saved.matched_tokens)
         if matched_tokens <= num_computed_tokens:
             return 0, False
         available = matched_tokens - int(num_computed_tokens)
@@ -148,6 +210,7 @@ class TurboBusConnector(KVConnectorBase_V1):
             {
                 "event": "match",
                 "request_id": str(getattr(request, "request_id", "unknown")),
+                "prefix_key": prefix_key,
                 "matched_tokens": matched_tokens,
                 "num_computed_tokens": int(num_computed_tokens),
                 "available_tokens": max(0, available),
@@ -156,6 +219,7 @@ class TurboBusConnector(KVConnectorBase_V1):
         _emit_event(
             "match",
             request_id=str(getattr(request, "request_id", "unknown")),
+            prefix_key=prefix_key,
             matched_tokens=matched_tokens,
             num_computed_tokens=int(num_computed_tokens),
             available_tokens=max(0, available),
@@ -165,16 +229,28 @@ class TurboBusConnector(KVConnectorBase_V1):
     def update_state_after_alloc(self, request, blocks, num_external_tokens: int) -> None:
         if num_external_tokens <= 0:
             return
+        params = _request_params(request)
+        prefix_key = _request_prefix_key(params)
+        saved = get_saved_prefix(prefix_key)
+        if saved is None:
+            _emit_event(
+                "alloc_miss",
+                request_id=str(getattr(request, "request_id", "unknown")),
+                prefix_key=prefix_key,
+            )
+            return
         block_ids = _flatten_block_ids(extract_vllm_block_ids(blocks))
         if not block_ids:
             return
         block_count = _block_count_for_tokens(num_external_tokens, self.vllm_block_size)
         if self.restore_block_limit > 0:
             block_count = min(block_count, self.restore_block_limit)
+        block_count = min(block_count, saved.block_count)
         block_ids = block_ids[:block_count]
         request_id = str(getattr(request, "request_id", "unknown"))
         meta = TurboBusRequestMetadata(
             request_id=request_id,
+            prefix_key=prefix_key,
             block_ids=tuple(block_ids),
             matched_tokens=int(num_external_tokens),
             block_count=len(block_ids),
@@ -184,6 +260,7 @@ class TurboBusConnector(KVConnectorBase_V1):
             {
                 "event": "alloc",
                 "request_id": request_id,
+                "prefix_key": prefix_key,
                 "matched_tokens": int(num_external_tokens),
                 "block_count": len(block_ids),
             }
@@ -191,6 +268,7 @@ class TurboBusConnector(KVConnectorBase_V1):
         _emit_event(
             "alloc",
             request_id=request_id,
+            prefix_key=prefix_key,
             matched_tokens=int(num_external_tokens),
             block_count=len(block_ids),
         )
@@ -224,7 +302,6 @@ class TurboBusConnector(KVConnectorBase_V1):
                     restore_enabled=False,
                 )
             return
-        self._ensure_adapter()
         for request in metadata.requests:
             self._restore_request(request)
 
@@ -246,33 +323,33 @@ class TurboBusConnector(KVConnectorBase_V1):
     def _get_connector_metadata(self):
         return getattr(self, "_connector_metadata", None)
 
-    def _ensure_adapter(self) -> None:
-        if self._adapter is not None:
-            return
+    def _adapter_for_saved_prefix(self, saved: TurboBusSavedPrefix):
+        adapter = self._adapters_by_prefix.get(saved.key)
+        if adapter is not None:
+            return adapter
         if self.runtime is None:
             self.runtime = _make_runtime_from_config(self._vllm_config)
         if not self.state.kv_caches:
             raise RuntimeError("vLLM did not register KV caches for TurboBus")
-        import torch
-        from .vllm import VllmKVSlotAdapter, block_bytes_from_vllm_kv_tensor
+        from .vllm import VllmKVSlotAdapter
         from .vllm import make_vllm_layer_groups_from_kv_caches
 
         kv_caches = list(self.state.kv_caches.values())
-        slots_per_layer = max(1, self.restore_block_limit) * _max_lanes_per_layer(kv_caches)
-        if slots_per_layer <= 0:
-            slots_per_layer = 128
-        self._cpu_backings = [
-            torch.empty(
-                slots_per_layer * block_bytes_from_vllm_kv_tensor(kv_cache),
-                dtype=torch.uint8,
-                pin_memory=True,
+        if len(saved.cpu_backings) != len(kv_caches):
+            raise RuntimeError(
+                f"saved prefix {saved.key!r} has {len(saved.cpu_backings)} backing tensors, "
+                f"but vLLM registered {len(kv_caches)} KV cache tensors"
             )
-            for kv_cache in kv_caches
-        ]
-        groups = make_vllm_layer_groups_from_kv_caches(self._cpu_backings, kv_caches)
-        self._adapter = VllmKVSlotAdapter(self.runtime, groups)
+        groups = make_vllm_layer_groups_from_kv_caches(saved.cpu_backings, kv_caches)
+        adapter = VllmKVSlotAdapter(self.runtime, groups)
+        self._adapters_by_prefix[saved.key] = adapter
+        return adapter
 
     def _restore_request(self, request: TurboBusRequestMetadata) -> None:
+        saved = get_saved_prefix(request.prefix_key)
+        if saved is None:
+            raise RuntimeError(f"saved prefix {request.prefix_key!r} is not registered")
+        adapter = self._adapter_for_saved_prefix(saved)
         kv_caches = list(self.state.kv_caches.values())
         refs = make_vllm_layer_range_refs_from_ids(
             request.request_id,
@@ -281,13 +358,14 @@ class TurboBusConnector(KVConnectorBase_V1):
             cpu_slot_start=request.cpu_slot_start,
         )
         start = time.perf_counter()
-        handles = self._adapter.restore_prefix(refs)
+        handles = adapter.restore_prefix(refs)
         elapsed_ms = (time.perf_counter() - start) * 1000.0
         stats = _summarize_handles(handles)
         self.state.events.append(
             {
                 "event": "restore",
                 "request_id": request.request_id,
+                "prefix_key": request.prefix_key,
                 "block_count": len(request.block_ids),
                 "matched_tokens": request.matched_tokens,
                 "elapsed_ms": elapsed_ms,
@@ -297,6 +375,7 @@ class TurboBusConnector(KVConnectorBase_V1):
         _emit_event(
             "restore",
             request_id=request.request_id,
+            prefix_key=request.prefix_key,
             block_count=len(request.block_ids),
             matched_tokens=request.matched_tokens,
             elapsed_ms=f"{elapsed_ms:.3f}",
@@ -315,6 +394,10 @@ def _request_params(request) -> dict[str, Any]:
         if isinstance(params, dict):
             return params
     return {}
+
+
+def _request_prefix_key(params: dict[str, Any]) -> str:
+    return str(params.get("turbobus.prefix_key", "default"))
 
 
 def _flatten_block_ids(groups: tuple[tuple[int, ...], ...]) -> tuple[int, ...]:
@@ -410,4 +493,8 @@ __all__ = [
     "TurboBusConnector",
     "TurboBusConnectorMetadata",
     "TurboBusRequestMetadata",
+    "TurboBusSavedPrefix",
+    "clear_saved_prefixes",
+    "get_saved_prefix",
+    "register_saved_prefix",
 ]

@@ -3,7 +3,12 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
-from turbobus.vllm_kv_connector import TurboBusConnector, TurboBusConnectorMetadata
+from turbobus.vllm_kv_connector import (
+    TurboBusConnector,
+    TurboBusConnectorMetadata,
+    clear_saved_prefixes,
+    register_saved_prefix,
+)
 
 
 class FakeCacheConfig:
@@ -41,11 +46,15 @@ class FakeBlocks:
 
 
 class TurboBusConnectorTest(unittest.TestCase):
+    def setUp(self) -> None:
+        clear_saved_prefixes()
+
     def make_connector(self, extra=None):
         with mock.patch("turbobus.vllm_kv_connector._make_runtime_from_config", return_value=object()):
             return TurboBusConnector(FakeVllmConfig(extra), role="scheduler")
 
     def test_reports_explicit_external_match(self) -> None:
+        register_saved_prefix("default", [object()], block_count=8, matched_tokens=96)
         connector = self.make_connector({"turbobus.restore_enabled": True})
         request = FakeRequest(
             {
@@ -59,6 +68,7 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertEqual(connector.state.events[-1]["available_tokens"], 64)
 
     def test_does_not_report_external_match_until_restore_enabled(self) -> None:
+        register_saved_prefix("default", [object()], block_count=8, matched_tokens=96)
         connector = self.make_connector()
         request = FakeRequest(
             {
@@ -74,7 +84,21 @@ class TurboBusConnectorTest(unittest.TestCase):
         connector = self.make_connector()
         self.assertEqual(connector.get_num_new_matched_tokens(FakeRequest(), 0), (0, False))
 
+    def test_restore_enabled_requires_registered_prefix(self) -> None:
+        connector = self.make_connector({"turbobus.restore_enabled": True})
+        request = FakeRequest(
+            {
+                "turbobus.do_restore": True,
+                "turbobus.prefix_key": "missing",
+                "turbobus.matched_tokens": 96,
+            }
+        )
+
+        self.assertEqual(connector.get_num_new_matched_tokens(request, 0), (0, False))
+        self.assertEqual(connector.state.events[-1]["event"], "match_miss")
+
     def test_records_allocated_blocks_for_connector_metadata(self) -> None:
+        register_saved_prefix("default", [object()], block_count=4, matched_tokens=128)
         connector = self.make_connector({"turbobus.restore_block_limit": 4})
         request = FakeRequest({"turbobus.do_restore": True, "turbobus.matched_tokens": 128})
         blocks = FakeBlocks(([1, 2, 3, 4, 5, 6],))
@@ -85,11 +109,13 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertIsInstance(metadata, TurboBusConnectorMetadata)
         self.assertEqual(len(metadata), 1)
         self.assertEqual(metadata.requests[0].request_id, "req0")
+        self.assertEqual(metadata.requests[0].prefix_key, "default")
         self.assertEqual(metadata.requests[0].block_ids, (1, 2, 3, 4))
         self.assertEqual(metadata.requests[0].block_count, 4)
         self.assertEqual(connector.state.pending_loads, {})
 
     def test_start_load_kv_is_safe_until_restore_enabled(self) -> None:
+        register_saved_prefix("default", [object()], block_count=4, matched_tokens=64)
         connector = self.make_connector({"turbobus.restore_block_limit": 4})
         request = FakeRequest({"turbobus.do_restore": True, "turbobus.matched_tokens": 64})
         connector.update_state_after_alloc(request, FakeBlocks(([1, 2, 3, 4],)), 64)

@@ -309,6 +309,29 @@ connector without claiming any external KV hit. It does not write KV bytes or
 ask vLLM to skip prefill unless `--restore-enabled` is passed. Keep that flag
 off until the saved prefix/session CPU backing is connected.
 
+To run the two-request official connector restore path, add
+`--restore-enabled`. The script first saves KV from a real request, registers
+that CPU backing under `--prefix-key`, then sends a second shared-prefix request
+whose `kv_transfer_params` trigger TurboBus restore from `start_load_kv()`:
+
+```bash
+python examples/vllm_turbobus_kv_connector.py \
+  --model ~/huggingface/Qwen3-0.6B \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --prompt-repeat 64 \
+  --second-prompt-suffix " Italy" \
+  --prefix-key qwen3-prefix \
+  --matched-tokens 128 \
+  --restore-blocks 8 \
+  --restore-enabled \
+  --chunk-bytes 4194304 \
+  --profile-bytes 16777216 \
+  --mode pool \
+  --enforce-eager \
+  --log-output benchmarks/results/vllm_qwen3_kv_connector_restore.log
+```
+
 ```python
 opts = turbobus.RuntimeOptions.from_tuning_json(
     "benchmarks/results/tune_gpu6_relay5.json"
