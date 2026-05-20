@@ -626,6 +626,63 @@ relay, and pooled verification checks passed. The lower `block_gib_s` values
 are retained as a per-block submit-to-complete view and include queueing time
 when several blocks are submitted together.
 
+## KV Block Offload Packed Storage
+
+Scenario:
+
+This run uses `benchmarks/kv_offload.py` with `--storage-layout packed`. The KV
+blocks share one pinned CPU backing tensor and one target-GPU backing tensor,
+with each block addressed by offset and byte count. This exercises the
+range-batched `OffloadStore.prefetch_many` and `evict_many` path without the
+full decode-step simulator.
+
+Copy summary:
+
+```text
+COPY_SUMMARY_BEGIN
+kv_config target=6 relays=[5] num_blocks=8 active_blocks=4 storage_layout=packed block_bytes=16777216 chunk_bytes=4194304 iterations=5 mode=all dynamic_weights=True
+profile direct_h2d_bw_gbps=7.611
+profile_relay relay=5 h2d=7.540 p2p=39.502 effective=7.540 p2p_enabled=True
+kv_op mode=direct op=prefetch count=20 batch_gib_s=7.261 batch_p50_ms=8.562 batch_p95_ms=8.787 block_gib_s=1.871 block_p50_ms=8.319 block_p95_ms=8.508 direct_chunks=80 relay_chunks=0 direct_bytes=335544320 relay_bytes=0
+kv_path mode=direct op=prefetch direction=h2d kind=direct relay=-1 median_gib_s=7.466 median_ms=8.371 bytes=335544320 chunks=80
+kv_op mode=direct op=evict count=20 batch_gib_s=7.782 batch_p50_ms=8.018 batch_p95_ms=8.068 block_gib_s=2.007 block_p50_ms=7.781 block_p95_ms=7.791 direct_chunks=80 relay_chunks=0 direct_bytes=335544320 relay_bytes=0
+kv_path mode=direct op=evict direction=d2h kind=direct relay=-1 median_gib_s=7.981 median_ms=7.831 bytes=335544320 chunks=80
+kv_verify mode=direct match=True
+kv_op mode=relay op=prefetch count=20 batch_gib_s=7.209 batch_p50_ms=8.643 batch_p95_ms=8.793 block_gib_s=1.868 block_p50_ms=8.320 block_p95_ms=8.549 direct_chunks=0 relay_chunks=80 direct_bytes=0 relay_bytes=335544320
+kv_path mode=relay op=prefetch direction=h2d kind=relay relay=5 median_gib_s=7.395 median_ms=8.452 bytes=335544320 chunks=80
+kv_op mode=relay op=evict count=20 batch_gib_s=7.711 batch_p50_ms=8.108 batch_p95_ms=8.121 block_gib_s=2.007 block_p50_ms=7.784 block_p95_ms=7.804 direct_chunks=0 relay_chunks=80 direct_bytes=0 relay_bytes=335544320
+kv_path mode=relay op=evict direction=d2h kind=relay relay=5 median_gib_s=7.883 median_ms=7.928 bytes=335544320 chunks=80
+kv_verify mode=relay match=True
+kv_op mode=pool op=prefetch count=20 batch_gib_s=13.813 batch_p50_ms=4.521 batch_p95_ms=4.535 block_gib_s=3.703 block_p50_ms=4.199 block_p95_ms=4.322 direct_chunks=40 relay_chunks=40 direct_bytes=167772160 relay_bytes=167772160
+kv_path mode=pool op=prefetch direction=h2d kind=direct relay=-1 median_gib_s=7.490 median_ms=4.172 bytes=167772160 chunks=40
+kv_path mode=pool op=prefetch direction=h2d kind=relay relay=5 median_gib_s=7.321 median_ms=4.268 bytes=167772160 chunks=40
+kv_op mode=pool op=evict count=20 batch_gib_s=14.648 batch_p50_ms=4.268 batch_p95_ms=4.274 block_gib_s=3.953 block_p50_ms=3.956 block_p95_ms=3.979 direct_chunks=40 relay_chunks=40 direct_bytes=167772160 relay_bytes=167772160
+kv_path mode=pool op=evict direction=d2h kind=direct relay=-1 median_gib_s=7.943 median_ms=3.934 bytes=167772160 chunks=40
+kv_path mode=pool op=evict direction=d2h kind=relay relay=5 median_gib_s=7.770 median_ms=4.022 bytes=167772160 chunks=40
+kv_verify mode=pool match=True
+kv_speedup pool_over_direct_prefetch=1.902
+kv_speedup pool_over_relay_prefetch=1.916
+kv_speedup pool_over_direct_evict=1.882
+kv_speedup pool_over_relay_evict=1.900
+COPY_SUMMARY_END
+```
+
+Analysis:
+
+Packed KV offload validates the shared backing-buffer path used by future
+connector-style KV stores. The primary `batch_gib_s` metric stays in the
+expected range: direct prefetch is 7.261 GiB/s, pooled prefetch is 13.813 GiB/s,
+direct evict is 7.782 GiB/s, and pooled evict is 14.648 GiB/s. The pool/direct
+speedups are 1.902x for prefetch and 1.882x for evict. The chunk counts also
+match the intended physical transfer work: direct uses 80 chunks, relay uses 80
+chunks, and pooled mode splits the same work into 40 direct and 40 relay chunks.
+All verification checks passed.
+
+In packed mode, `block_gib_s` is a per-block view of a shared batch transfer, so
+it is lower than `batch_gib_s` and should not be used as the main bandwidth
+metric. Use `batch_gib_s` and the path-level chunk counts for packed-storage
+results.
+
 ## Inference Offload Simulator Capacity Pressure
 
 Command shape:
