@@ -78,6 +78,33 @@ def stats_to_dict(stats) -> dict:
     }
 
 
+def summarize_plan(plan: dict) -> dict:
+    assignments = []
+    for assignment in plan["assignments"]:
+        chunks = assignment["chunks"]
+        assignments.append(
+            {
+                "path": assignment["path"],
+                "bytes": assignment["bytes"],
+                "chunk_count": assignment["chunk_count"],
+                "first_chunk": chunks[0] if chunks else None,
+                "last_chunk": chunks[-1] if chunks else None,
+            }
+        )
+    return {
+        "total_bytes": plan["total_bytes"],
+        "chunk_bytes": plan["chunk_bytes"],
+        "assignments": assignments,
+    }
+
+
+def plan_result(runtime: turbobus.Runtime, include_plan: bool) -> dict:
+    plan = runtime.last_plan_dict()
+    if include_plan:
+        return {"last_plan": plan}
+    return {"last_plan_summary": summarize_plan(plan)}
+
+
 def run_candidate(args, cpu, gpu, chunk_bytes: int, staging_slots: int) -> dict:
     options = turbobus.RuntimeOptions(
         chunk_bytes=chunk_bytes,
@@ -117,15 +144,16 @@ def run_candidate(args, cpu, gpu, chunk_bytes: int, staging_slots: int) -> dict:
         "relay_chunks",
         last_stats["relay_chunks"] if last_stats else 0,
     )
-    return {
+    result = {
         "chunk_bytes": chunk_bytes,
         "staging_slots": staging_slots,
         "median_gib_per_second": median,
         "profile": profile_to_dict(profile),
         "samples": samples,
         "last_stats": last_stats,
-        "last_plan": runtime.last_plan_dict(),
     }
+    result.update(plan_result(runtime, args.include_plan))
+    return result
 
 
 def write_json(path: str, result: dict) -> None:
@@ -145,6 +173,11 @@ def main() -> None:
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--iterations", type=int, default=5)
     parser.add_argument("--json-output")
+    parser.add_argument(
+        "--include-plan",
+        action="store_true",
+        help="include full per-chunk last_plan in JSON instead of a compact summary",
+    )
     args = parser.parse_args()
 
     torch.cuda.set_device(args.target_gpu)

@@ -92,6 +92,10 @@ python benchmarks/bandwidth_pool.py \
   --json-output benchmarks/results/gpu6_relay5.json
 ```
 
+JSON output is compact by default: it records per-sample stats and a
+`last_plan_summary` instead of dumping every chunk. Add `--include-plan` only
+when debugging exact chunk placement.
+
 Add `--dynamic-weights` to let repeated benchmark iterations update planner
 weights from completed H2D `path_stats`.
 

@@ -110,7 +110,42 @@ def print_path_stats_summary(mode: str, samples: list[dict]) -> None:
         )
 
 
-def run_mode(runtime: turbobus.Runtime, cpu, gpu, mode: str, warmup: int, iterations: int):
+def summarize_plan(plan: dict) -> dict:
+    assignments = []
+    for assignment in plan["assignments"]:
+        chunks = assignment["chunks"]
+        assignments.append(
+            {
+                "path": assignment["path"],
+                "bytes": assignment["bytes"],
+                "chunk_count": assignment["chunk_count"],
+                "first_chunk": chunks[0] if chunks else None,
+                "last_chunk": chunks[-1] if chunks else None,
+            }
+        )
+    return {
+        "total_bytes": plan["total_bytes"],
+        "chunk_bytes": plan["chunk_bytes"],
+        "assignments": assignments,
+    }
+
+
+def plan_result(runtime: turbobus.Runtime, include_plan: bool) -> dict:
+    plan = runtime.last_plan_dict()
+    if include_plan:
+        return {"last_plan": plan}
+    return {"last_plan_summary": summarize_plan(plan)}
+
+
+def run_mode(
+    runtime: turbobus.Runtime,
+    cpu,
+    gpu,
+    mode: str,
+    warmup: int,
+    iterations: int,
+    include_plan: bool,
+):
     runtime.set_transfer_mode(mode)
     for _ in range(warmup):
         handle = runtime.fetch_to_gpu(cpu, gpu)
@@ -144,13 +179,14 @@ def run_mode(runtime: turbobus.Runtime, cpu, gpu, mode: str, warmup: int, iterat
     median = statistics.median(sample_bandwidths) if sample_bandwidths else 0.0
     print("mode", mode, "median_gib_per_second", median)
     print_path_stats_summary(mode, samples)
-    return {
+    result = {
         "mode": mode,
         "median_gib_per_second": median,
         "samples": samples,
         "last_stats": stats_to_dict(last_stats) if last_stats is not None else None,
-        "last_plan": runtime.last_plan_dict(),
     }
+    result.update(plan_result(runtime, include_plan))
+    return result
 
 
 def write_json(path: str, result: dict) -> None:
@@ -170,6 +206,11 @@ def main() -> None:
     parser.add_argument("--iterations", type=int, default=5)
     parser.add_argument("--mode", choices=["pool", "direct", "relay", "all"], default="pool")
     parser.add_argument("--json-output")
+    parser.add_argument(
+        "--include-plan",
+        action="store_true",
+        help="include full per-chunk last_plan in JSON instead of a compact summary",
+    )
     parser.add_argument("--verify", action="store_true")
     parser.add_argument("--dynamic-weights", action="store_true")
     parser.add_argument("--dynamic-weight-alpha", type=float, default=0.25)
@@ -232,7 +273,15 @@ def main() -> None:
     modes = ["direct", "relay", "pool"] if args.mode == "all" else [args.mode]
     medians = {}
     for mode in modes:
-        mode_result = run_mode(runtime, cpu, gpu, mode, args.warmup, args.iterations)
+        mode_result = run_mode(
+            runtime,
+            cpu,
+            gpu,
+            mode,
+            args.warmup,
+            args.iterations,
+            args.include_plan,
+        )
         median = mode_result["median_gib_per_second"]
         medians[mode] = median
         result["modes"][mode] = mode_result
