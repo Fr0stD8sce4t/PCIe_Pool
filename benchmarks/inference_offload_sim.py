@@ -272,8 +272,9 @@ def run_step_work(
     missing: list[str],
     compute: DummyCompute,
     overlap_compute: bool,
-) -> tuple[dict, dict, float, float]:
+) -> tuple[dict, dict, float, float, float]:
     transfer_start = time.perf_counter()
+    compute_elapsed_ms = 0.0
     if overlap_compute and compute.enabled:
         result: dict[str, tuple[dict, dict]] = {}
         worker = threading.Thread(
@@ -282,15 +283,15 @@ def run_step_work(
             )
         )
         worker.start()
-        compute.run()
+        compute_elapsed_ms = compute.run()
         worker.join()
         evict, prefetch = result["transfers"]
     else:
         evict, prefetch = run_transfers(store, victims, missing)
-        compute.run()
+        compute_elapsed_ms = compute.run()
     elapsed_ms = (time.perf_counter() - transfer_start) * 1000.0
     transfer_ms = evict["elapsed_ms"] + prefetch["elapsed_ms"]
-    return evict, prefetch, transfer_ms, elapsed_ms
+    return evict, prefetch, transfer_ms, compute_elapsed_ms, elapsed_ms
 
 
 def empty_transfer_batch(op: str) -> dict:
@@ -311,6 +312,7 @@ def empty_transfer_batch(op: str) -> dict:
 def summarize_steps(steps: list[dict]) -> dict:
     step_latencies = [step["step_ms"] for step in steps]
     transfer_stalls = [step["transfer_ms"] for step in steps]
+    compute_latencies = [step["compute_elapsed_ms"] for step in steps]
     prefetch_batches = [step["prefetch"] for step in steps if step["prefetch"]["blocks"]]
     evict_batches = [step["evict"] for step in steps if step["evict"]["blocks"]]
     total_tokens = len(steps)
@@ -322,6 +324,8 @@ def summarize_steps(steps: list[dict]) -> dict:
         "step_ms_p95": percentile(step_latencies, 95.0),
         "transfer_ms_p50": statistics.median(transfer_stalls) if transfer_stalls else 0.0,
         "transfer_ms_p95": percentile(transfer_stalls, 95.0),
+        "compute_ms_p50": statistics.median(compute_latencies) if compute_latencies else 0.0,
+        "compute_ms_p95": percentile(compute_latencies, 95.0),
         "prefetch_gib_per_second": summarize_transfer_gib(prefetch_batches),
         "evict_gib_per_second": summarize_transfer_gib(evict_batches),
         "prefetch_batches": len(prefetch_batches),
@@ -386,7 +390,7 @@ def run_mode(
         victims = resident.victims_for(missing)
 
         step_start = time.perf_counter()
-        evict, prefetch, transfer_ms, overlapped_ms = run_step_work(
+        evict, prefetch, transfer_ms, compute_elapsed_ms, overlapped_ms = run_step_work(
             store,
             victims,
             missing,
@@ -407,6 +411,7 @@ def run_mode(
                 "prefetch": prefetch,
                 "transfer_ms": transfer_ms,
                 "compute_ms": compute.compute_ms,
+                "compute_elapsed_ms": compute_elapsed_ms,
                 "overlapped_ms": overlapped_ms,
                 "step_ms": step_ms,
             }
@@ -422,6 +427,8 @@ def run_mode(
         summary["step_ms_p50"],
         "transfer_ms_p50",
         summary["transfer_ms_p50"],
+        "compute_ms_p50",
+        summary["compute_ms_p50"],
         "prefetch_blocks",
         summary["prefetch_blocks"],
         "evict_blocks",
@@ -485,6 +492,8 @@ def compact_summary(result: dict) -> str:
             f"step_p95_ms={summary['step_ms_p95']:.3f} "
             f"transfer_p50_ms={summary['transfer_ms_p50']:.3f} "
             f"transfer_p95_ms={summary['transfer_ms_p95']:.3f} "
+            f"compute_p50_ms={summary['compute_ms_p50']:.3f} "
+            f"compute_p95_ms={summary['compute_ms_p95']:.3f} "
             f"prefetch_gib_s={summary['prefetch_gib_per_second']:.3f} "
             f"evict_gib_s={summary['evict_gib_per_second']:.3f} "
             f"prefetch_blocks={summary['prefetch_blocks']} "

@@ -834,6 +834,58 @@ bandwidth rather than repeated shared-handle bandwidth: direct prefetch is
 decode throughput from 62.025 to 119.213 tokens/s while keeping the expected
 chunk split, 498 direct chunks and 498 relay chunks.
 
+## Inference Offload Simulator Native CUDA Compute
+
+Scenario:
+
+This run uses the capacity-pressure simulator with packed KV storage and
+`--compute-impl cuda`. The dummy compute is a native CUDA kernel launched on a
+preallocated target-GPU tensor. This checks the CUDA-kernel path and the Python
+thread overlap path, rather than the earlier `time.sleep` scheduling model.
+
+No-overlap copy summary:
+
+```text
+COPY_SUMMARY_BEGIN
+sim_config target=6 relays=[5] requests=4 blocks_per_request=8 blocks_per_step=4 gpu_block_capacity=4 access_pattern=round_robin working_set_blocks=8 seed=1 storage_layout=packed block_bytes=16777216 decode_steps=32 compute_ms=0.0 overlap_compute=False compute_impl=cuda cuda_compute_elements=16777216 cuda_compute_iterations=64 mode=all dynamic_weights=True
+sim_scenario type=capacity_pressure unit=decode_step policy=lru_eviction transfer=evict_then_prefetch access_pattern=round_robin working_set_blocks=8 gpu_block_capacity=4 blocks_per_step=4 dummy_compute_ms=0.0 overlap_compute=False compute_impl=cuda cuda_compute_elements=16777216 cuda_compute_iterations=64 note=cuda_kernel_overlap_model
+profile direct_h2d_bw_gbps=7.631
+profile_relay relay=5 h2d=7.575 p2p=40.721 effective=7.575 p2p_enabled=True
+sim_mode mode=direct tokens_s=58.181 step_p50_ms=16.782 step_p95_ms=16.892 transfer_p50_ms=16.513 transfer_p95_ms=16.574 prefetch_gib_s=7.201 evict_gib_s=7.922 prefetch_blocks=128 evict_blocks=121 direct_chunks=996 relay_chunks=0
+sim_mode mode=relay tokens_s=60.330 step_p50_ms=16.972 step_p95_ms=17.145 transfer_p50_ms=16.701 transfer_p95_ms=16.821 prefetch_gib_s=7.143 evict_gib_s=7.827 prefetch_blocks=128 evict_blocks=121 direct_chunks=0 relay_chunks=996
+sim_mode mode=pool tokens_s=115.462 step_p50_ms=8.868 step_p95_ms=8.943 transfer_p50_ms=8.594 transfer_p95_ms=8.652 prefetch_gib_s=13.936 evict_gib_s=15.154 prefetch_blocks=128 evict_blocks=121 direct_chunks=498 relay_chunks=498
+sim_speedup pool_over_direct_tokens_per_second=1.985
+sim_speedup pool_over_relay_tokens_per_second=1.914
+COPY_SUMMARY_END
+```
+
+Overlap copy summary:
+
+```text
+COPY_SUMMARY_BEGIN
+sim_config target=6 relays=[5] requests=4 blocks_per_request=8 blocks_per_step=4 gpu_block_capacity=4 access_pattern=round_robin working_set_blocks=8 seed=1 storage_layout=packed block_bytes=16777216 decode_steps=32 compute_ms=0.0 overlap_compute=True compute_impl=cuda cuda_compute_elements=16777216 cuda_compute_iterations=64 mode=all dynamic_weights=True
+sim_scenario type=capacity_pressure unit=decode_step policy=lru_eviction transfer=evict_then_prefetch access_pattern=round_robin working_set_blocks=8 gpu_block_capacity=4 blocks_per_step=4 dummy_compute_ms=0.0 overlap_compute=True compute_impl=cuda cuda_compute_elements=16777216 cuda_compute_iterations=64 note=cuda_kernel_overlap_model
+profile direct_h2d_bw_gbps=7.542
+profile_relay relay=5 h2d=7.617 p2p=40.727 effective=7.617 p2p_enabled=True
+sim_mode mode=direct tokens_s=60.037 step_p50_ms=17.036 step_p95_ms=17.237 transfer_p50_ms=16.711 transfer_p95_ms=16.862 prefetch_gib_s=7.182 evict_gib_s=7.750 prefetch_blocks=128 evict_blocks=121 direct_chunks=996 relay_chunks=0
+sim_mode mode=relay tokens_s=59.328 step_p50_ms=17.281 step_p95_ms=17.399 transfer_p50_ms=16.938 transfer_p95_ms=17.071 prefetch_gib_s=7.109 evict_gib_s=7.642 prefetch_blocks=128 evict_blocks=121 direct_chunks=0 relay_chunks=996
+sim_mode mode=pool tokens_s=113.286 step_p50_ms=8.965 step_p95_ms=9.281 transfer_p50_ms=8.756 transfer_p95_ms=8.949 prefetch_gib_s=13.808 evict_gib_s=14.562 prefetch_blocks=128 evict_blocks=121 direct_chunks=498 relay_chunks=498
+sim_speedup pool_over_direct_tokens_per_second=1.887
+sim_speedup pool_over_relay_tokens_per_second=1.909
+COPY_SUMMARY_END
+```
+
+Analysis:
+
+The native CUDA dummy compute path works, and the transfer behavior remains in
+the expected range: pooled transfer still runs at roughly 1.9x direct/relay
+tokens/s under capacity pressure. With `cuda_compute_iterations=64`, the dummy
+kernel is too light compared with the 8-17 ms transfer stall, so overlap does
+not produce a clear throughput improvement. The next run should increase
+`--cuda-compute-iterations` and use the newer summary fields
+`compute_p50_ms/compute_p95_ms` to choose a kernel weight that is visible in
+step latency.
+
 ## Next Implementation Steps
 
 1. Replace the benchmark-only even/odd chunk split with the production
