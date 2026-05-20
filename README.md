@@ -153,7 +153,9 @@ python benchmarks/kv_offload.py \
 ```
 
 Copy only the final `COPY_SUMMARY_BEGIN` / `COPY_SUMMARY_END` block when
-sharing results.
+sharing results. In `kv_op` lines, `batch_gib_s` is the main decode-step style
+throughput metric; `block_gib_s` keeps the per-block submit-to-complete view and
+can include queueing time when several blocks are submitted together.
 
 ```python
 opts = turbobus.RuntimeOptions.from_tuning_json(

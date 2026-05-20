@@ -5,6 +5,7 @@ import json
 import math
 from pathlib import Path
 import statistics
+import time
 
 import torch
 
@@ -84,14 +85,18 @@ def percentile(values: list[float], percent: float) -> float:
     return ordered[index]
 
 
-def summarize_operation(samples: list[dict]) -> dict:
+def summarize_operation(samples: list[dict], batches: list[dict]) -> dict:
     if not samples:
         return {
             "count": 0,
             "bytes": 0,
-            "latency_ms_p50": 0.0,
-            "latency_ms_p95": 0.0,
-            "effective_gib_per_second": 0.0,
+            "block_latency_ms_p50": 0.0,
+            "block_latency_ms_p95": 0.0,
+            "block_gib_per_second": 0.0,
+            "batch_count": 0,
+            "batch_latency_ms_p50": 0.0,
+            "batch_latency_ms_p95": 0.0,
+            "batch_gib_per_second": 0.0,
             "direct_bytes": 0,
             "relay_bytes": 0,
             "direct_chunks": 0,
@@ -102,13 +107,24 @@ def summarize_operation(samples: list[dict]) -> dict:
     latencies = [sample["submit_to_complete_ms"] for sample in samples]
     total_bytes = sum(sample["bytes"] for sample in samples)
     total_seconds = sum(latencies) / 1000.0
+    batch_latencies = [batch["elapsed_ms"] for batch in batches]
+    batch_total_bytes = sum(batch["bytes"] for batch in batches)
+    batch_total_seconds = sum(batch_latencies) / 1000.0
     return {
         "count": len(samples),
         "bytes": total_bytes,
-        "latency_ms_p50": statistics.median(latencies),
-        "latency_ms_p95": percentile(latencies, 95.0),
-        "effective_gib_per_second": (
+        "block_latency_ms_p50": statistics.median(latencies),
+        "block_latency_ms_p95": percentile(latencies, 95.0),
+        "block_gib_per_second": (
             (total_bytes / (1024**3)) / total_seconds if total_seconds > 0.0 else 0.0
+        ),
+        "batch_count": len(batches),
+        "batch_latency_ms_p50": statistics.median(batch_latencies) if batch_latencies else 0.0,
+        "batch_latency_ms_p95": percentile(batch_latencies, 95.0),
+        "batch_gib_per_second": (
+            (batch_total_bytes / (1024**3)) / batch_total_seconds
+            if batch_total_seconds > 0.0
+            else 0.0
         ),
         "direct_bytes": sum(sample["direct_bytes"] for sample in samples),
         "relay_bytes": sum(sample["relay_bytes"] for sample in samples),
@@ -183,11 +199,13 @@ def run_mode(
     run_warmup(store, names[:active_blocks], warmup)
 
     samples = {"prefetch": [], "evict": []}
+    batches = {"prefetch": [], "evict": []}
     mismatches = []
     for iteration in range(iterations):
         indices = active_indices(iteration, active_blocks, len(names))
         active_names = [names[index] for index in indices]
 
+        batch_start = time.perf_counter()
         for name, handle in zip(
             active_names,
             store.prefetch_many(active_names),
@@ -201,11 +219,22 @@ def run_mode(
                     **stats_to_dict(handle.stats),
                 }
             )
+        batch_elapsed_ms = (time.perf_counter() - batch_start) * 1000.0
+        batch_samples = samples["prefetch"][-len(active_names) :]
+        batches["prefetch"].append(
+            {
+                "iteration": iteration,
+                "blocks": len(active_names),
+                "bytes": sum(sample["bytes"] for sample in batch_samples),
+                "elapsed_ms": batch_elapsed_ms,
+            }
+        )
 
         if verify:
             for name in active_names:
                 store.block(name).cpu_tensor.zero_()
 
+        batch_start = time.perf_counter()
         for name, handle in zip(
             active_names,
             store.evict_many(active_names),
@@ -219,6 +248,16 @@ def run_mode(
                     **stats_to_dict(handle.stats),
                 }
             )
+        batch_elapsed_ms = (time.perf_counter() - batch_start) * 1000.0
+        batch_samples = samples["evict"][-len(active_names) :]
+        batches["evict"].append(
+            {
+                "iteration": iteration,
+                "blocks": len(active_names),
+                "bytes": sum(sample["bytes"] for sample in batch_samples),
+                "elapsed_ms": batch_elapsed_ms,
+            }
+        )
 
         if verify and references is not None:
             for index in indices:
@@ -226,8 +265,8 @@ def run_mode(
                 if not torch.equal(block.cpu_tensor, references[index]):
                     mismatches.append(names[index])
 
-    prefetch = summarize_operation(samples["prefetch"])
-    evict = summarize_operation(samples["evict"])
+    prefetch = summarize_operation(samples["prefetch"], batches["prefetch"])
+    evict = summarize_operation(samples["evict"], batches["evict"])
     result = {
         "mode": mode,
         "active_blocks": active_blocks,
@@ -235,6 +274,7 @@ def run_mode(
         "prefetch": prefetch,
         "evict": evict,
         "samples": samples,
+        "batches": batches,
         "verify": len(mismatches) == 0 if verify else None,
         "mismatches": mismatches[:8],
     }
@@ -246,18 +286,18 @@ def print_mode_summary(result: dict) -> None:
     print(
         "mode",
         result["mode"],
-        "prefetch_gib_per_second",
-        result["prefetch"]["effective_gib_per_second"],
-        "prefetch_p50_ms",
-        result["prefetch"]["latency_ms_p50"],
-        "prefetch_p95_ms",
-        result["prefetch"]["latency_ms_p95"],
-        "evict_gib_per_second",
-        result["evict"]["effective_gib_per_second"],
-        "evict_p50_ms",
-        result["evict"]["latency_ms_p50"],
-        "evict_p95_ms",
-        result["evict"]["latency_ms_p95"],
+        "prefetch_batch_gib_per_second",
+        result["prefetch"]["batch_gib_per_second"],
+        "prefetch_batch_p50_ms",
+        result["prefetch"]["batch_latency_ms_p50"],
+        "prefetch_block_p50_ms",
+        result["prefetch"]["block_latency_ms_p50"],
+        "evict_batch_gib_per_second",
+        result["evict"]["batch_gib_per_second"],
+        "evict_batch_p50_ms",
+        result["evict"]["batch_latency_ms_p50"],
+        "evict_block_p50_ms",
+        result["evict"]["block_latency_ms_p50"],
         "verify",
         result["verify"],
     )
@@ -303,9 +343,12 @@ def compact_summary(result: dict) -> str:
             lines.append(
                 "kv_op "
                 f"mode={mode} op={op} count={summary['count']} "
-                f"gib_s={summary['effective_gib_per_second']:.3f} "
-                f"p50_ms={summary['latency_ms_p50']:.3f} "
-                f"p95_ms={summary['latency_ms_p95']:.3f} "
+                f"batch_gib_s={summary['batch_gib_per_second']:.3f} "
+                f"batch_p50_ms={summary['batch_latency_ms_p50']:.3f} "
+                f"batch_p95_ms={summary['batch_latency_ms_p95']:.3f} "
+                f"block_gib_s={summary['block_gib_per_second']:.3f} "
+                f"block_p50_ms={summary['block_latency_ms_p50']:.3f} "
+                f"block_p95_ms={summary['block_latency_ms_p95']:.3f} "
                 f"direct_chunks={summary['direct_chunks']} relay_chunks={summary['relay_chunks']} "
                 f"direct_bytes={summary['direct_bytes']} relay_bytes={summary['relay_bytes']}"
             )
@@ -409,9 +452,9 @@ def main() -> None:
 
     if args.mode == "all":
         for op in ("prefetch", "evict"):
-            direct = result["modes"]["direct"][op]["effective_gib_per_second"]
-            relay = result["modes"]["relay"][op]["effective_gib_per_second"]
-            pool = result["modes"]["pool"][op]["effective_gib_per_second"]
+            relay = result["modes"]["relay"][op]["batch_gib_per_second"]
+            pool = result["modes"]["pool"][op]["batch_gib_per_second"]
+            direct = result["modes"]["direct"][op]["batch_gib_per_second"]
             if direct > 0.0:
                 result["speedups"][f"pool_over_direct_{op}"] = pool / direct
             if relay > 0.0:
