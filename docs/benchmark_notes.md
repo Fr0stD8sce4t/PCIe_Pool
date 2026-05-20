@@ -495,6 +495,71 @@ The per-path stats are exposed through Python and included in benchmark JSON.
 For the pooled transfer, total elapsed time tracks the slower relay path, which
 is the signal needed for a future dynamic weighting pass.
 
+## 2026-05-20: Dynamic Weights and D2H Smoke Result
+
+This run validates that dynamic H2D weights do not break the pooled benchmark
+and that the new D2H offload path can round-trip data through direct + relay
+paths.
+
+H2D dynamic-weights benchmark:
+
+```text
+python benchmarks/bandwidth_pool.py \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --bytes 268435456 \
+  --chunk-bytes 4194304 \
+  --profile-bytes 16777216 \
+  --warmup 1 \
+  --iterations 5 \
+  --mode all \
+  --verify \
+  --json-output benchmarks/results/gpu6_relay5_dynamic_weights.json \
+  --dynamic-weights
+```
+
+Median transfer results:
+
+```text
+mode direct median_gib_per_second 7.304883937325309
+mode relay median_gib_per_second 7.272705481728514
+mode pool median_gib_per_second 14.437940659173856
+pool_over_direct_median 1.976477762418813
+pool_over_relay_median 1.9852227888846627
+match True
+```
+
+Representative pooled `path_stats` from the dynamic run:
+
+```text
+direct path bytes 134217728 chunks 32 gib_per_second 7.29-7.31
+relay5 path bytes 134217728 chunks 32 gib_per_second 7.25-7.26
+```
+
+The final pooled plan still split the transfer evenly at this data size, but
+the planner profile values moved from the initial profile toward observed
+path-local bandwidths:
+
+```text
+direct effective_bw_gbps 7.312435897427332
+relay5 effective_bw_gbps 7.273332880031879
+```
+
+D2H round-trip smoke result:
+
+```text
+match True
+stats 15.335706683081288 direct_chunks 8 relay_chunks 8
+path direct d2h relay -1 bytes 33554432 chunks 8 gib_per_second 7.911232341990831
+path relay d2h relay 5 bytes 33554432 chunks 8 gib_per_second 7.733433494135791
+```
+
+Conclusion:
+
+The dynamic-weight path is functional and conservative for this target/relay
+pair. The D2H offload API correctly copies data back to pinned CPU memory and
+uses both direct and relay paths in pooled mode.
+
 ## Next Implementation Steps
 
 1. Replace the benchmark-only even/odd chunk split with the production
