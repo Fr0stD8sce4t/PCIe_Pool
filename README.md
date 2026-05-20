@@ -284,6 +284,31 @@ By default the second request is the first request plus
 forces the external TurboBus restore path to run in the real vLLM allocation
 path instead of being hidden by vLLM's built-in prefix cache.
 
+TurboBus also exposes a vLLM `KVConnectorBase_V1` entry point:
+`turbobus.vllm_kv_connector.TurboBusConnector`. This is the path that vLLM can
+load through `KVTransferConfig`, matching the external KV connector shape used
+by systems such as LMCache and Mooncake:
+
+```bash
+python examples/vllm_turbobus_kv_connector.py \
+  --model ~/huggingface/Qwen3-0.6B \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --prompt-repeat 64 \
+  --matched-tokens 128 \
+  --restore-blocks 8 \
+  --chunk-bytes 4194304 \
+  --profile-bytes 16777216 \
+  --mode pool \
+  --enforce-eager \
+  --log-output benchmarks/results/vllm_qwen3_kv_connector.log
+```
+
+The first KV connector run is a lifecycle check. It lets vLLM load the TurboBus
+connector without claiming any external KV hit. It does not write KV bytes or
+ask vLLM to skip prefill unless `--restore-enabled` is passed. Keep that flag
+off until the saved prefix/session CPU backing is connected.
+
 ```python
 opts = turbobus.RuntimeOptions.from_tuning_json(
     "benchmarks/results/tune_gpu6_relay5.json"

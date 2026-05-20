@@ -31,6 +31,11 @@ from .vllm_integration import (
     extract_vllm_block_ids,
 )
 from .vllm_connector import VllmConnectorEvent, VllmTurboBusConnector
+from .vllm_kv_connector import (
+    TurboBusConnector,
+    TurboBusConnectorMetadata,
+    TurboBusRequestMetadata,
+)
 
 __all__ = [
     "BlockState",
@@ -53,6 +58,9 @@ __all__ = [
     "VllmTurboBusIntegration",
     "VllmConnectorEvent",
     "VllmTurboBusConnector",
+    "TurboBusConnector",
+    "TurboBusConnectorMetadata",
+    "TurboBusRequestMetadata",
     "block_bytes_from_vllm_kv_tensor",
     "extract_vllm_block_ids",
     "make_contiguous_kv_slots",

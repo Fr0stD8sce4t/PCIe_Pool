@@ -1,0 +1,185 @@
+from __future__ import annotations
+
+import argparse
+import contextlib
+from datetime import datetime
+import os
+from pathlib import Path
+import sys
+import traceback
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
+def parse_relay_gpus(value: str) -> list[int]:
+    return [int(item) for item in value.split(",") if item.strip()]
+
+
+def default_log_path() -> str:
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return str(Path("benchmarks") / "results" / f"vllm_turbobus_kv_connector_{stamp}.log")
+
+
+def configure_cuda_devices(args) -> None:
+    physical_relays = parse_relay_gpus(args.relay_gpus)
+    visible = [args.target_gpu, *physical_relays]
+    if args.map_physical_gpus and not os.environ.get("CUDA_VISIBLE_DEVICES"):
+        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(gpu) for gpu in visible)
+        args.runtime_target_gpu = 0
+        args.runtime_relay_gpus = list(range(1, len(visible)))
+        return
+    args.runtime_target_gpu = args.target_gpu
+    args.runtime_relay_gpus = physical_relays
+
+
+def prompt_text(prompt: str, repeat: int) -> str:
+    if repeat <= 1:
+        return prompt
+    return " ".join([prompt] * repeat)
+
+
+def run(args) -> None:
+    configure_cuda_devices(args)
+    if args.disable_multiproc_executor:
+        os.environ.setdefault("VLLM_ENABLE_V1_MULTIPROCESSING", "0")
+
+    from vllm import LLM, SamplingParams
+    from vllm.config import KVTransferConfig
+
+    relay_gpus = ",".join(str(gpu) for gpu in args.runtime_relay_gpus)
+    ktc = KVTransferConfig(
+        kv_connector="TurboBusConnector",
+        kv_role="kv_both",
+        kv_connector_module_path="turbobus.vllm_kv_connector",
+        kv_connector_extra_config={
+            "turbobus.target_gpu": args.runtime_target_gpu,
+            "turbobus.relay_gpus": relay_gpus,
+            "turbobus.chunk_bytes": args.chunk_bytes,
+            "turbobus.profile_bytes": args.profile_bytes,
+            "turbobus.mode": args.mode,
+            "turbobus.restore_block_limit": args.restore_blocks,
+            "turbobus.restore_enabled": args.restore_enabled,
+        },
+    )
+    llm_kwargs = {
+        "model": args.model,
+        "tensor_parallel_size": args.tensor_parallel_size,
+        "gpu_memory_utilization": args.gpu_memory_utilization,
+        "enforce_eager": args.enforce_eager,
+        "enable_prefix_caching": False,
+        "kv_transfer_config": ktc,
+    }
+    llm = LLM(**llm_kwargs)
+
+    prompt = prompt_text(args.prompt, args.prompt_repeat)
+    matched_tokens = max(0, args.matched_tokens) if args.restore_enabled else 0
+    sampling = SamplingParams(
+        temperature=0.0,
+        max_tokens=args.max_tokens,
+        extra_args={
+            "kv_transfer_params": {
+                "turbobus.do_restore": True,
+                "turbobus.matched_tokens": matched_tokens,
+            }
+        },
+    )
+    outputs = llm.generate([prompt], sampling)
+    generated_text = outputs[0].outputs[0].text if outputs and outputs[0].outputs else ""
+
+    print("COPY_SUMMARY_BEGIN")
+    print(
+        "vllm_kv_connector_config",
+        f"target={args.target_gpu}",
+        f"relays={parse_relay_gpus(args.relay_gpus)}",
+        f"runtime_target={args.runtime_target_gpu}",
+        f"runtime_relays={args.runtime_relay_gpus}",
+        f"cuda_visible_devices={os.environ.get('CUDA_VISIBLE_DEVICES', '')}",
+        f"model={args.model}",
+        f"prompt_repeat={args.prompt_repeat}",
+        f"requested_matched_tokens={args.matched_tokens}",
+        f"matched_tokens={matched_tokens}",
+        f"restore_blocks={args.restore_blocks}",
+        f"restore_enabled={args.restore_enabled}",
+        f"chunk_bytes={args.chunk_bytes}",
+        f"mode={args.mode}",
+    )
+    print(
+        "vllm_kv_connector_scenario",
+        "type=real_vllm_kv_transfer_connector",
+        "boundary=KVConnectorBase_V1",
+        "entry=start_load_kv",
+        "note=official_vllm_external_kv_path_lifecycle_check",
+    )
+    print(
+        "vllm_kv_connector_result",
+        f"prompt_tokens={len(getattr(outputs[0], 'prompt_token_ids', []) or []) if outputs else 0}",
+        f"generated_text={generated_text!r}",
+    )
+    print("COPY_SUMMARY_END")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run TurboBus through the vLLM KV connector entry")
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--prompt", default="The capital of France is")
+    parser.add_argument("--prompt-repeat", type=int, default=64)
+    parser.add_argument("--matched-tokens", type=int, default=128)
+    parser.add_argument("--max-tokens", type=int, default=8)
+    parser.add_argument("--target-gpu", type=int, required=True)
+    parser.add_argument("--relay-gpus", default="")
+    parser.add_argument("--tensor-parallel-size", type=int, default=1)
+    parser.add_argument("--gpu-memory-utilization", type=float, default=0.8)
+    parser.add_argument("--enforce-eager", action="store_true")
+    parser.add_argument(
+        "--enable-multiproc-executor",
+        dest="disable_multiproc_executor",
+        action="store_false",
+    )
+    parser.set_defaults(disable_multiproc_executor=True)
+    parser.add_argument("--restore-blocks", type=int, default=8)
+    parser.add_argument(
+        "--restore-enabled",
+        action="store_true",
+        help="Actually write TurboBus CPU backing into vLLM KV slots. Keep off until saved backing data is available.",
+    )
+    parser.add_argument("--chunk-bytes", type=int, default=4 * 1024 * 1024)
+    parser.add_argument("--profile-bytes", type=int, default=16 * 1024 * 1024)
+    parser.add_argument("--mode", choices=["direct", "relay", "pool"], default="pool")
+    parser.add_argument("--log-output", default=None)
+    parser.add_argument(
+        "--no-map-physical-gpus",
+        dest="map_physical_gpus",
+        action="store_false",
+    )
+    parser.set_defaults(map_physical_gpus=True)
+    args = parser.parse_args()
+    if args.log_output is None:
+        args.log_output = default_log_path()
+    return args
+
+
+def main() -> None:
+    args = parse_args()
+    log_path = Path(args.log_output)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    ok = False
+    with log_path.open("w", encoding="utf-8") as log_file:
+        with contextlib.redirect_stdout(log_file), contextlib.redirect_stderr(log_file):
+            try:
+                run(args)
+            except Exception:
+                print("VLLM_KV_CONNECTOR_ERROR_BEGIN")
+                traceback.print_exc()
+                print("VLLM_KV_CONNECTOR_ERROR_END")
+            else:
+                ok = True
+    print("vllm_turbobus_kv_connector log", log_path)
+    if ok:
+        print("vllm_turbobus_kv_connector status ok")
+    else:
+        print("vllm_turbobus_kv_connector status failed")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

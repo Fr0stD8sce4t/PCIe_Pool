@@ -225,6 +225,62 @@ request's allocation path. It is not the final TTFT measurement yet; the next
 step is to move the restore trigger to vLLM's KV connector load path so vLLM can
 skip recomputing externally restored prefix tokens.
 
+## vLLM KV Connector Entry
+
+`turbobus.vllm_kv_connector.TurboBusConnector` is the first vLLM
+`KVConnectorBase_V1` entry point. It lets vLLM load TurboBus through
+`KVTransferConfig` instead of relying on the allocation-hook example:
+
+```python
+from vllm.config import KVTransferConfig
+
+ktc = KVTransferConfig(
+    kv_connector="TurboBusConnector",
+    kv_role="kv_both",
+    kv_connector_module_path="turbobus.vllm_kv_connector",
+    kv_connector_extra_config={
+        "turbobus.target_gpu": 0,
+        "turbobus.relay_gpus": "1",
+        "turbobus.mode": "pool",
+    },
+)
+```
+
+Run the lifecycle check on the GPU6/GPU5 machine:
+
+```bash
+python examples/vllm_turbobus_kv_connector.py \
+  --model ~/huggingface/Qwen3-0.6B \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --prompt-repeat 64 \
+  --matched-tokens 128 \
+  --restore-blocks 8 \
+  --chunk-bytes 4194304 \
+  --profile-bytes 16777216 \
+  --mode pool \
+  --enforce-eager \
+  --log-output benchmarks/results/vllm_qwen3_kv_connector.log
+```
+
+This default run checks that vLLM can import and initialize the TurboBus
+connector through `KVTransferConfig`.
+
+```text
+KVTransferConfig -> TurboBusConnector.__init__ -> register_kv_caches
+```
+
+It intentionally leaves `turbobus.restore_enabled=False`, so the connector also
+reports zero external matches to vLLM. This avoids telling vLLM to skip prefill
+before TurboBus has saved prefix/session KV bytes available. Enable actual
+restore only after the saved prefix/session backing is connected to the
+connector. With restore enabled and saved backing available, the next lifecycle
+target is:
+
+```text
+get_num_new_matched_tokens -> update_state_after_alloc -> build_connector_meta -> start_load_kv
+```
+
 ## Success Criteria
 
 The first vLLM integration passes when:
