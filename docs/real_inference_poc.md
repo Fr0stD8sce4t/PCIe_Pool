@@ -74,6 +74,11 @@ to 13.910 GiB/s pool, a 1.958x speedup.
 Phase 1 should replace the synthetic GPU backing with addresses that match a
 real framework KV slot layout. Keep the scheduler outside TurboBus.
 
+Before Phase 1, use `benchmarks/real_model_sidecar_restore.py` to run real
+PyTorch model kernels while TurboBus restores prefix/session KV-shaped buffers.
+This checks a more realistic compute side without taking ownership of framework
+scheduling or KV allocation.
+
 Phase 2 can add a narrow vLLM/SGLang or LMCache-style connector that only handles
 prefix/session restore and save. Broader decode-time eviction can wait until the
 restore path is correct.

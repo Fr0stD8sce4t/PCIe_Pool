@@ -262,6 +262,37 @@ python benchmarks/prefix_restore_poc.py \
 Use `poc_mode.restore_gib_s`, `restore_p50_ms`, `step_p50_ms`, and the
 direct/relay chunk counts as the main POC metrics.
 
+`benchmarks/real_model_sidecar_restore.py` is the next step after the POC. It
+runs a real PyTorch `TransformerEncoderLayer` on the target GPU while TurboBus
+restores prefix/session KV-shaped blocks beside it. This still does not patch a
+real inference framework, but it replaces the dummy compute with real PyTorch
+model kernels:
+
+```bash
+python benchmarks/real_model_sidecar_restore.py \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --sessions 4 \
+  --blocks-per-session 8 \
+  --restore-blocks 8 \
+  --iterations 5 \
+  --storage-layout packed \
+  --block-bytes 16777216 \
+  --model-layers 1 \
+  --model-batch-size 1 \
+  --model-seq-len 128 \
+  --model-hidden-size 4096 \
+  --model-heads 32 \
+  --model-ff-size 11008 \
+  --model-dtype float16 \
+  --overlap-compute \
+  --mode all \
+  --dynamic-weights
+```
+
+Use `sidecar_mode.restore_gib_s`, `step_p50_ms`, `model_p50_ms`, and
+direct/relay chunks to compare direct, relay, and pool modes.
+
 ```python
 opts = turbobus.RuntimeOptions.from_tuning_json(
     "benchmarks/results/tune_gpu6_relay5.json"
