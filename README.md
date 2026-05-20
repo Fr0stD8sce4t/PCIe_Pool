@@ -334,7 +334,8 @@ python examples/vllm_turbobus_kv_connector.py \
 
 To compare direct, relay, and pooled transfer on the same official connector
 path, run the sweep wrapper. Each case starts a fresh vLLM process and writes
-its own log, then the wrapper prints a compact `SWEEP_SUMMARY`:
+its own log, then the wrapper prints a compact `SWEEP_SUMMARY` and saves the
+same block to `sweep_summary.txt` in the run log directory:
 
 ```bash
 python examples/vllm_turbobus_kv_connector_sweep.py \
@@ -348,6 +349,8 @@ python examples/vllm_turbobus_kv_connector_sweep.py \
   --profile-bytes 16777216 \
   --enforce-eager
 ```
+
+Pass `--summary-output <path>` to write the summary to a specific file.
 
 ```python
 opts = turbobus.RuntimeOptions.from_tuning_json(

@@ -135,20 +135,24 @@ def run_case(args, mode: str, restore_blocks: int, matched_tokens: int, log_path
     }
 
 
-def print_sweep_summary(args, results) -> None:
+def build_sweep_summary_lines(args, results) -> list[str]:
     case_rows = []
-    print("SWEEP_SUMMARY_BEGIN")
-    print(
-        "vllm_kv_connector_sweep_config",
-        f"target={args.target_gpu}",
-        f"relays={parse_csv_ints(args.relay_gpus)}",
-        f"cuda_visible_devices={os.environ.get('CUDA_VISIBLE_DEVICES', '')}",
-        f"model={args.model}",
-        f"prompt_repeat={args.prompt_repeat}",
-        f"modes={','.join(args.modes)}",
-        f"restore_blocks_list={','.join(str(item) for item in args.restore_blocks_list)}",
-        f"chunk_bytes={args.chunk_bytes}",
-        f"profile_bytes={args.profile_bytes}",
+    lines = ["SWEEP_SUMMARY_BEGIN"]
+    lines.append(
+        " ".join(
+            [
+                "vllm_kv_connector_sweep_config",
+                f"target={args.target_gpu}",
+                f"relays={parse_csv_ints(args.relay_gpus)}",
+                f"cuda_visible_devices={os.environ.get('CUDA_VISIBLE_DEVICES', '')}",
+                f"model={args.model}",
+                f"prompt_repeat={args.prompt_repeat}",
+                f"modes={','.join(args.modes)}",
+                f"restore_blocks_list={','.join(str(item) for item in args.restore_blocks_list)}",
+                f"chunk_bytes={args.chunk_bytes}",
+                f"profile_bytes={args.profile_bytes}",
+            ]
+        )
     )
     for result in results:
         summary = result["summary"]
@@ -173,28 +177,44 @@ def print_sweep_summary(args, results) -> None:
         }
         row["restore_gib_s"] = gib_per_second(row["bytes"], row["restore_ms"])
         case_rows.append(row)
-        print(
-            "vllm_kv_connector_sweep_case",
-            f"mode={row['mode']}",
-            f"restore_blocks={row['restore_blocks']}",
-            f"matched_tokens={row['matched_tokens']}",
-            f"returncode={row['returncode']}",
-            f"save_ms={row['save_ms']}",
-            f"restore_ms={row['restore_ms']}",
-            f"restore_gib_s={row['restore_gib_s']}",
-            f"bytes={row['bytes']}",
-            f"direct_chunks={row['direct_chunks']}",
-            f"relay_chunks={row['relay_chunks']}",
-            f"prompt_tokens={row['prompt_tokens']}",
-            f"shared_prefix={row['shared_prefix']}",
-            f"child_mode={row['child_mode']}",
-            f"log={row['log']}",
+        lines.append(
+            " ".join(
+                [
+                    "vllm_kv_connector_sweep_case",
+                    f"mode={row['mode']}",
+                    f"restore_blocks={row['restore_blocks']}",
+                    f"matched_tokens={row['matched_tokens']}",
+                    f"returncode={row['returncode']}",
+                    f"save_ms={row['save_ms']}",
+                    f"restore_ms={row['restore_ms']}",
+                    f"restore_gib_s={row['restore_gib_s']}",
+                    f"bytes={row['bytes']}",
+                    f"direct_chunks={row['direct_chunks']}",
+                    f"relay_chunks={row['relay_chunks']}",
+                    f"prompt_tokens={row['prompt_tokens']}",
+                    f"shared_prefix={row['shared_prefix']}",
+                    f"child_mode={row['child_mode']}",
+                    f"log={row['log']}",
+                ]
+            )
         )
-    _print_speedups(case_rows)
-    print("SWEEP_SUMMARY_END")
+    lines.extend(_speedup_lines(case_rows))
+    lines.append("SWEEP_SUMMARY_END")
+    return lines
 
 
-def _print_speedups(case_rows) -> None:
+def print_sweep_summary(args, results, output_path: Path | None = None) -> None:
+    lines = build_sweep_summary_lines(args, results)
+    text = "\n".join(lines)
+    print(text)
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(text + "\n", encoding="utf-8")
+        print("vllm_kv_connector_sweep summary", output_path)
+
+
+def _speedup_lines(case_rows) -> list[str]:
+    lines = []
     by_blocks = {}
     for row in case_rows:
         by_blocks.setdefault(row["restore_blocks"], {})[row["mode"]] = row
@@ -205,12 +225,17 @@ def _print_speedups(case_rows) -> None:
             continue
         direct = rows.get("direct")
         relay = rows.get("relay")
-        print(
-            "vllm_kv_connector_sweep_speedup",
-            f"restore_blocks={restore_blocks}",
-            f"direct_over_pool_restore={speedup(direct['restore_ms'], pool['restore_ms']) if direct else 'NA'}",
-            f"relay_over_pool_restore={speedup(relay['restore_ms'], pool['restore_ms']) if relay else 'NA'}",
+        lines.append(
+            " ".join(
+                [
+                    "vllm_kv_connector_sweep_speedup",
+                    f"restore_blocks={restore_blocks}",
+                    f"direct_over_pool_restore={speedup(direct['restore_ms'], pool['restore_ms']) if direct else 'NA'}",
+                    f"relay_over_pool_restore={speedup(relay['restore_ms'], pool['restore_ms']) if relay else 'NA'}",
+                ]
+            )
         )
+    return lines
 
 
 def _restore_from_log(log_path: Path) -> dict[str, str]:
@@ -243,6 +268,7 @@ def parse_args():
     parser.add_argument("--enable-multiproc-executor", action="store_true")
     parser.add_argument("--no-map-physical-gpus", action="store_true")
     parser.add_argument("--log-dir", default=None)
+    parser.add_argument("--summary-output", default=None)
     args = parser.parse_args()
     args.modes = parse_csv_strings(args.modes)
     args.restore_blocks_list = parse_csv_ints(args.restore_blocks_list)
@@ -261,6 +287,9 @@ def main() -> None:
     if not log_dir.is_absolute():
         log_dir = repo_root / log_dir
     log_dir.mkdir(parents=True, exist_ok=True)
+    summary_output = Path(args.summary_output) if args.summary_output is not None else log_dir / "sweep_summary.txt"
+    if not summary_output.is_absolute():
+        summary_output = repo_root / summary_output
 
     results = []
     failed = False
@@ -284,7 +313,7 @@ def main() -> None:
         if failed:
             break
 
-    print_sweep_summary(args, results)
+    print_sweep_summary(args, results, summary_output)
     if failed:
         sys.exit(1)
 

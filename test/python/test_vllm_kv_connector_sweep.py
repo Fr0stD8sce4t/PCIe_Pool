@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
+import contextlib
+import io
+import tempfile
 import unittest
 
 
@@ -52,6 +56,76 @@ class VllmKVConnectorSweepTest(unittest.TestCase):
     def test_speedup_formats_latency_ratio(self) -> None:
         self.assertEqual(sweep.speedup("40", "20"), "2.000")
         self.assertEqual(sweep.speedup("40", "0"), "NA")
+
+    def test_build_sweep_summary_lines_includes_bandwidth_and_speedup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            direct_log = Path(tmpdir) / "direct.log"
+            pool_log = Path(tmpdir) / "pool.log"
+            direct_log.write_text(
+                "turbobus_kv_connector_event event=restore elapsed_ms=40 bytes=1073741824 direct_chunks=1 relay_chunks=0\n",
+                encoding="utf-8",
+            )
+            pool_log.write_text(
+                "turbobus_kv_connector_event event=restore elapsed_ms=20 bytes=1073741824 direct_chunks=1 relay_chunks=1\n",
+                encoding="utf-8",
+            )
+            args = SimpleNamespace(
+                target_gpu=6,
+                relay_gpus="5",
+                model="model",
+                prompt_repeat=64,
+                modes=["direct", "pool"],
+                restore_blocks_list=[8],
+                chunk_bytes=4194304,
+                profile_bytes=16777216,
+            )
+            results = [
+                {
+                    "mode": "direct",
+                    "restore_blocks": 8,
+                    "matched_tokens": 128,
+                    "returncode": 0,
+                    "log_path": str(direct_log),
+                    "summary": {
+                        "vllm_kv_connector_save": {"elapsed_ms": "41", "bytes": "1073741824"},
+                        "vllm_kv_connector_result": {"prompt_tokens": "321", "shared_prefix": "True"},
+                    },
+                },
+                {
+                    "mode": "pool",
+                    "restore_blocks": 8,
+                    "matched_tokens": 128,
+                    "returncode": 0,
+                    "log_path": str(pool_log),
+                    "summary": {
+                        "vllm_kv_connector_save": {"elapsed_ms": "21", "bytes": "1073741824"},
+                        "vllm_kv_connector_result": {"prompt_tokens": "321", "shared_prefix": "True"},
+                    },
+                },
+            ]
+
+            lines = sweep.build_sweep_summary_lines(args, results)
+
+        self.assertTrue(any("mode=pool" in line and "restore_gib_s=50.000" in line for line in lines))
+        self.assertTrue(any("direct_over_pool_restore=2.000" in line for line in lines))
+
+    def test_print_sweep_summary_writes_output_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "summary.txt"
+            args = SimpleNamespace(
+                target_gpu=6,
+                relay_gpus="5",
+                model="model",
+                prompt_repeat=64,
+                modes=[],
+                restore_blocks_list=[],
+                chunk_bytes=4194304,
+                profile_bytes=16777216,
+            )
+            with contextlib.redirect_stdout(io.StringIO()):
+                sweep.print_sweep_summary(args, [], output)
+
+            self.assertIn("SWEEP_SUMMARY_BEGIN", output.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

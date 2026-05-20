@@ -330,7 +330,9 @@ The wrapper launches `examples/vllm_turbobus_kv_connector.py` once per case, so
 each row still goes through real vLLM `KVTransferConfig` initialization,
 `get_num_new_matched_tokens`, `update_state_after_alloc`, `build_connector_meta`,
 and `start_load_kv`. Copy the final `SWEEP_SUMMARY_BEGIN` /
-`SWEEP_SUMMARY_END` block when sharing results.
+`SWEEP_SUMMARY_END` block when sharing results. The same block is also written
+to `sweep_summary.txt` under the run log directory by default; use
+`--summary-output <path>` to choose a different file.
 
 ## Success Criteria
 
