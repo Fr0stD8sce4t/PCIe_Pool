@@ -104,8 +104,9 @@ def summarize_operation(samples: list[dict], batches: list[dict]) -> dict:
             "path_stats": [],
         }
 
+    unique_samples = list({sample["handle_key"]: sample for sample in samples}.values())
     latencies = [sample["submit_to_complete_ms"] for sample in samples]
-    total_bytes = sum(sample["bytes"] for sample in samples)
+    total_bytes = sum(sample["block_bytes"] for sample in samples)
     total_seconds = sum(latencies) / 1000.0
     batch_latencies = [batch["elapsed_ms"] for batch in batches]
     batch_total_bytes = sum(batch["bytes"] for batch in batches)
@@ -126,11 +127,11 @@ def summarize_operation(samples: list[dict], batches: list[dict]) -> dict:
             if batch_total_seconds > 0.0
             else 0.0
         ),
-        "direct_bytes": sum(sample["direct_bytes"] for sample in samples),
-        "relay_bytes": sum(sample["relay_bytes"] for sample in samples),
-        "direct_chunks": sum(sample["direct_chunks"] for sample in samples),
-        "relay_chunks": sum(sample["relay_chunks"] for sample in samples),
-        "path_stats": summarize_paths(samples),
+        "direct_bytes": sum(sample["direct_bytes"] for sample in unique_samples),
+        "relay_bytes": sum(sample["relay_bytes"] for sample in unique_samples),
+        "direct_chunks": sum(sample["direct_chunks"] for sample in unique_samples),
+        "relay_chunks": sum(sample["relay_chunks"] for sample in unique_samples),
+        "path_stats": summarize_paths(unique_samples),
     }
 
 
@@ -169,6 +170,23 @@ def make_block(block_bytes: int, block_index: int):
     if block_index:
         tensor.add_(block_index)
     return tensor
+
+
+def fill_block(tensor, offset: int, block_bytes: int, block_index: int) -> None:
+    view = tensor.narrow(0, offset, block_bytes)
+    view.copy_(torch.arange(block_bytes, dtype=torch.uint8, pin_memory=True))
+    if block_index:
+        view.add_(block_index)
+
+
+def cpu_block_view(block):
+    if block.byte_count is None:
+        return block.cpu_tensor
+    return block.cpu_tensor.narrow(0, block.cpu_offset, block.bytes)
+
+
+def zero_block_cpu(block) -> None:
+    cpu_block_view(block).zero_()
 
 
 def active_indices(iteration: int, active_blocks: int, num_blocks: int) -> list[int]:
@@ -212,10 +230,13 @@ def run_mode(
             strict=False,
         ):
             store.wait(name)
+            block = store.block(name)
             samples["prefetch"].append(
                 {
                     "block": name,
                     "iteration": iteration,
+                    "handle_key": f"{iteration}:{id(handle)}",
+                    "block_bytes": block.bytes,
                     **stats_to_dict(handle.stats),
                 }
             )
@@ -225,14 +246,14 @@ def run_mode(
             {
                 "iteration": iteration,
                 "blocks": len(active_names),
-                "bytes": sum(sample["bytes"] for sample in batch_samples),
+                "bytes": sum(sample["block_bytes"] for sample in batch_samples),
                 "elapsed_ms": batch_elapsed_ms,
             }
         )
 
         if verify:
             for name in active_names:
-                store.block(name).cpu_tensor.zero_()
+                zero_block_cpu(store.block(name))
 
         batch_start = time.perf_counter()
         for name, handle in zip(
@@ -241,10 +262,13 @@ def run_mode(
             strict=False,
         ):
             store.wait(name)
+            block = store.block(name)
             samples["evict"].append(
                 {
                     "block": name,
                     "iteration": iteration,
+                    "handle_key": f"{iteration}:{id(handle)}",
+                    "block_bytes": block.bytes,
                     **stats_to_dict(handle.stats),
                 }
             )
@@ -254,7 +278,7 @@ def run_mode(
             {
                 "iteration": iteration,
                 "blocks": len(active_names),
-                "bytes": sum(sample["bytes"] for sample in batch_samples),
+                "bytes": sum(sample["block_bytes"] for sample in batch_samples),
                 "elapsed_ms": batch_elapsed_ms,
             }
         )
@@ -262,7 +286,7 @@ def run_mode(
         if verify and references is not None:
             for index in indices:
                 block = store.block(names[index])
-                if not torch.equal(block.cpu_tensor, references[index]):
+                if not torch.equal(cpu_block_view(block), references[index]):
                     mismatches.append(names[index])
 
     prefetch = summarize_operation(samples["prefetch"], batches["prefetch"])
@@ -323,6 +347,7 @@ def compact_summary(result: dict) -> str:
             "kv_config "
             f"target={config['target_gpu']} relays={config['relay_gpus']} "
             f"num_blocks={config['num_blocks']} active_blocks={config['active_blocks']} "
+            f"storage_layout={config['storage_layout']} "
             f"block_bytes={config['block_bytes']} chunk_bytes={config['chunk_bytes']} "
             f"iterations={config['iterations']} mode={config['mode']} "
             f"dynamic_weights={config['dynamic_weights']}"
@@ -376,6 +401,7 @@ def main() -> None:
     parser.add_argument("--relay-gpus", required=True)
     parser.add_argument("--num-blocks", type=int, default=8)
     parser.add_argument("--active-blocks", type=int)
+    parser.add_argument("--storage-layout", choices=["separate", "packed"], default="separate")
     parser.add_argument("--block-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--chunk-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument("--profile-bytes", type=int, default=16 * 1024 * 1024)
@@ -407,14 +433,37 @@ def main() -> None:
 
     names = []
     references = [] if args.verify else None
+    if args.storage_layout == "packed":
+        total_bytes = args.num_blocks * args.block_bytes
+        cpu_backing = torch.empty(total_bytes, dtype=torch.uint8, pin_memory=True)
+        gpu_backing = torch.empty_like(cpu_backing, device=f"cuda:{args.target_gpu}")
+    else:
+        cpu_backing = None
+        gpu_backing = None
+
     for index in range(args.num_blocks):
         name = f"kv{index}"
-        cpu_tensor = make_block(args.block_bytes, index)
-        gpu_tensor = torch.empty_like(cpu_tensor, device=f"cuda:{args.target_gpu}")
-        store.add(name, cpu_tensor, gpu_tensor)
+        if args.storage_layout == "packed":
+            offset = index * args.block_bytes
+            fill_block(cpu_backing, offset, args.block_bytes, index)
+            block = store.add(
+                name,
+                cpu_backing,
+                gpu_backing,
+                block_id=index,
+                cpu_slot=index,
+                gpu_slot=index,
+                cpu_offset=offset,
+                gpu_offset=offset,
+                byte_count=args.block_bytes,
+            )
+        else:
+            cpu_tensor = make_block(args.block_bytes, index)
+            gpu_tensor = torch.empty_like(cpu_tensor, device=f"cuda:{args.target_gpu}")
+            block = store.add(name, cpu_tensor, gpu_tensor)
         names.append(name)
         if references is not None:
-            references.append(cpu_tensor.clone())
+            references.append(cpu_block_view(block).clone())
 
     result = {
         "config": {
@@ -422,6 +471,7 @@ def main() -> None:
             "relay_gpus": relays,
             "num_blocks": args.num_blocks,
             "active_blocks": active_blocks,
+            "storage_layout": args.storage_layout,
             "block_bytes": args.block_bytes,
             "chunk_bytes": args.chunk_bytes,
             "profile_bytes": args.profile_bytes,

@@ -87,18 +87,20 @@ Next steps:
    - `prefetch_many(names)` and `evict_many(names)` are the stable benchmark
      and future connector entry points.
    - The simple per-block path is available and tested.
-   - Next priority: support packed CPU/GPU backing buffers with per-block
-     offsets, then use `fetch_ranges_to_gpu` and `offload_ranges_to_cpu` for
-     many-block transfers when blocks share backing tensors.
+   - Packed CPU/GPU backing buffers with per-block offsets are supported by
+     `OffloadStore`, the simulator, and the KV benchmark. Shared backing buffers
+     use `fetch_ranges_to_gpu` and `offload_ranges_to_cpu` for many-block
+     transfers.
    - Keep the per-block path as a fallback for non-packed tensors.
 
 3. Add an inference offload simulator before patching real frameworks.
    - Simulate request arrival, block ownership, decode steps, GPU block capacity,
      prefetch, eviction, and transfer stall.
    - Non-overlap and Python-sleep overlap simulator paths are available.
-   - After packed range-batch manager support, make the simulator use that path
-     for packed KV-cache-style backing buffers.
-   - Then add CUDA dummy compute overlap as the next simulator realism step.
+   - The simulator uses the packed range-batch manager path for
+     KV-cache-style backing buffers.
+   - Next priority: add CUDA dummy compute overlap as the next simulator
+     realism step.
    - Compare direct, relay, and pool modes using the same manager API that a
      future vLLM/SGLang connector would call.
 

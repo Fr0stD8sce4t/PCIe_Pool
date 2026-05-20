@@ -741,6 +741,42 @@ tokens/s. The overlap run reduces step p50 from 13.830 ms to 9.011 ms in pooled
 mode because part of the compute time is hidden behind the transfer stall. The
 pool/direct speedup is 1.563x without overlap and 1.867x with overlap.
 
+## Inference Offload Simulator Packed Storage
+
+Scenario:
+
+This run uses the capacity-pressure simulator with `--storage-layout packed`.
+All simulated KV blocks share one pinned CPU backing tensor and one target-GPU
+backing tensor. Each block is represented by an offset and byte count, so
+`OffloadManager.prefetch_many` and `evict_many` use range-batched transfers.
+The setup still models decode-step capacity pressure with LRU eviction and no
+dummy compute.
+
+Copy summary:
+
+```text
+COPY_SUMMARY_BEGIN
+sim_config target=6 relays=[5] requests=4 blocks_per_request=8 blocks_per_step=4 gpu_block_capacity=4 access_pattern=round_robin working_set_blocks=8 seed=1 storage_layout=packed block_bytes=16777216 decode_steps=32 compute_ms=0.0 overlap_compute=False mode=all dynamic_weights=True
+sim_scenario type=capacity_pressure unit=decode_step policy=lru_eviction transfer=evict_then_prefetch access_pattern=round_robin working_set_blocks=8 gpu_block_capacity=4 blocks_per_step=4 dummy_compute_ms=0.0 overlap_compute=False compute_impl=python_sleep note=not_cuda_kernel_overlap
+profile direct_h2d_bw_gbps=7.507
+profile_relay relay=5 h2d=7.626 p2p=40.751 effective=7.626 p2p_enabled=True
+sim_mode mode=direct tokens_s=62.025 step_p50_ms=16.520 step_p95_ms=16.686 transfer_p50_ms=16.509 transfer_p95_ms=16.665 prefetch_gib_s=7.225 evict_gib_s=7.923 prefetch_blocks=128 evict_blocks=121 direct_chunks=996 relay_chunks=0
+sim_mode mode=relay tokens_s=61.248 step_p50_ms=16.715 step_p95_ms=16.986 transfer_p50_ms=16.700 transfer_p95_ms=16.968 prefetch_gib_s=7.138 evict_gib_s=7.821 prefetch_blocks=128 evict_blocks=121 direct_chunks=0 relay_chunks=996
+sim_mode mode=pool tokens_s=119.213 step_p50_ms=8.582 step_p95_ms=8.653 transfer_p50_ms=8.569 transfer_p95_ms=8.636 prefetch_gib_s=13.931 evict_gib_s=15.197 prefetch_blocks=128 evict_blocks=121 direct_chunks=498 relay_chunks=498
+sim_speedup pool_over_direct_tokens_per_second=1.922
+sim_speedup pool_over_relay_tokens_per_second=1.946
+COPY_SUMMARY_END
+```
+
+Analysis:
+
+Packed storage exercises the connector-ready range-batch path instead of one
+independent tensor per block. The corrected stats now report physical transfer
+bandwidth rather than repeated shared-handle bandwidth: direct prefetch is
+7.225 GiB/s and pooled prefetch is 13.931 GiB/s. Pooled mode improves simulated
+decode throughput from 62.025 to 119.213 tokens/s while keeping the expected
+chunk split, 498 direct chunks and 498 relay chunks.
+
 ## Next Implementation Steps
 
 1. Replace the benchmark-only even/odd chunk split with the production

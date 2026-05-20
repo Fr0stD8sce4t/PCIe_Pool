@@ -140,6 +140,7 @@ python benchmarks/kv_offload.py \
   --relay-gpus 5 \
   --num-blocks 8 \
   --active-blocks 4 \
+  --storage-layout packed \
   --block-bytes 16777216 \
   --chunk-bytes 4194304 \
   --profile-bytes 16777216 \
@@ -155,7 +156,10 @@ python benchmarks/kv_offload.py \
 Copy only the final `COPY_SUMMARY_BEGIN` / `COPY_SUMMARY_END` block when
 sharing results. In `kv_op` lines, `batch_gib_s` is the main decode-step style
 throughput metric; `block_gib_s` keeps the per-block submit-to-complete view and
-can include queueing time when several blocks are submitted together.
+can include queueing time when several blocks are submitted together. Use
+`--storage-layout packed` to place all KV blocks in shared CPU/GPU backing
+tensors and exercise the range-batched manager path; use `separate` to keep one
+tensor per block.
 
 ## Inference Offload Simulator
 
