@@ -110,6 +110,32 @@ def print_path_stats_summary(mode: str, samples: list[dict]) -> None:
         )
 
 
+def path_stats_summary(samples: list[dict]) -> list[dict]:
+    by_path: dict[tuple[str, int, int], list[dict]] = {}
+    for sample in samples:
+        for path in sample["path_stats"]:
+            by_path.setdefault(path_key(path), []).append(path)
+
+    summary = []
+    for (kind, target_device, relay_device), paths in sorted(by_path.items()):
+        summary.append(
+            {
+                "kind": kind,
+                "target_device": target_device,
+                "relay_device": relay_device,
+                "median_gib_per_second": statistics.median(
+                    path["gib_per_second"] for path in paths
+                ),
+                "median_cuda_ms": statistics.median(
+                    path["cuda_elapsed_ms"] for path in paths
+                ),
+                "median_bytes": int(statistics.median(path["bytes"] for path in paths)),
+                "median_chunks": int(statistics.median(path["chunks"] for path in paths)),
+            }
+        )
+    return summary
+
+
 def summarize_plan(plan: dict) -> dict:
     assignments = []
     for assignment in plan["assignments"]:
@@ -195,6 +221,54 @@ def write_json(path: str, result: dict) -> None:
     output_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
 
 
+def compact_summary(result: dict) -> str:
+    config = result["config"]
+    lines = [
+        "COPY_SUMMARY_BEGIN",
+        (
+            "config "
+            f"target={config['target_gpu']} relays={config['relay_gpus']} "
+            f"bytes={config['bytes']} chunk_bytes={config['chunk_bytes']} "
+            f"iterations={config['iterations']} mode={config['mode']} "
+            f"dynamic_weights={config['dynamic_weights']}"
+        ),
+        f"profile direct_h2d_bw_gbps={result['profile']['direct_h2d_bw_gbps']:.3f}",
+    ]
+    for relay in result["profile"]["relays"]:
+        lines.append(
+            "profile_relay "
+            f"relay={relay['relay_device']} h2d={relay['h2d_bw_gbps']:.3f} "
+            f"p2p={relay['p2p_bw_gbps']:.3f} effective={relay['effective_bw_gbps']:.3f} "
+            f"p2p_enabled={relay['p2p_enabled']}"
+        )
+
+    for mode, mode_result in result["modes"].items():
+        last_stats = mode_result.get("last_stats") or {}
+        lines.append(
+            "mode "
+            f"{mode} median_gib_s={mode_result['median_gib_per_second']:.3f} "
+            f"last_direct_chunks={last_stats.get('direct_chunks', 0)} "
+            f"last_relay_chunks={last_stats.get('relay_chunks', 0)} "
+            f"last_direct_bytes={last_stats.get('direct_bytes', 0)} "
+            f"last_relay_bytes={last_stats.get('relay_bytes', 0)}"
+        )
+        for path in path_stats_summary(mode_result["samples"]):
+            lines.append(
+                "path "
+                f"mode={mode} kind={path['kind']} relay={path['relay_device']} "
+                f"median_gib_s={path['median_gib_per_second']:.3f} "
+                f"median_ms={path['median_cuda_ms']:.3f} "
+                f"bytes={path['median_bytes']} chunks={path['median_chunks']}"
+            )
+
+    for key, value in result["speedups"].items():
+        lines.append(f"speedup {key}={value:.3f}")
+    if result["verify"] is not None:
+        lines.append(f"verify match={result['verify']}")
+    lines.append("COPY_SUMMARY_END")
+    return "\n".join(lines)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="TurboBus bandwidth pool smoke benchmark")
     parser.add_argument("--target-gpu", type=int, default=0)
@@ -214,6 +288,11 @@ def main() -> None:
     parser.add_argument("--verify", action="store_true")
     parser.add_argument("--dynamic-weights", action="store_true")
     parser.add_argument("--dynamic-weight-alpha", type=float, default=0.25)
+    parser.add_argument(
+        "--no-copy-summary",
+        action="store_true",
+        help="do not print the compact COPY_SUMMARY block at the end",
+    )
     args = parser.parse_args()
 
     relays = parse_relay_gpus(args.relay_gpus)
@@ -304,6 +383,8 @@ def main() -> None:
     if args.json_output:
         write_json(args.json_output, result)
         print("json_output", args.json_output)
+    if not args.no_copy_summary:
+        print(compact_summary(result))
 
 
 if __name__ == "__main__":

@@ -96,6 +96,14 @@ JSON output is compact by default: it records per-sample stats and a
 `last_plan_summary` instead of dumping every chunk. Add `--include-plan` only
 when debugging exact chunk placement.
 
+At the end of each run, the benchmark prints a `COPY_SUMMARY_BEGIN` /
+`COPY_SUMMARY_END` block. Copy only that block when sharing results in chat.
+For an existing JSON file:
+
+```bash
+python benchmarks/summarize_result.py benchmarks/results/gpu6_relay5.json
+```
+
 Add `--dynamic-weights` to let repeated benchmark iterations update planner
 weights from completed H2D `path_stats`.
 
