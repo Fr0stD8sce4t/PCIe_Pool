@@ -157,6 +157,35 @@ sharing results. In `kv_op` lines, `batch_gib_s` is the main decode-step style
 throughput metric; `block_gib_s` keeps the per-block submit-to-complete view and
 can include queueing time when several blocks are submitted together.
 
+## Inference Offload Simulator
+
+`benchmarks/inference_offload_sim.py` is a lightweight simulator for future
+LLM connector behavior. It does not patch vLLM or SGLang. It simulates request
+KV blocks, decode steps, limited GPU block residency, prefetch, eviction, and
+transfer stall using the same `OffloadManager` API as the KV benchmark:
+
+```bash
+python benchmarks/inference_offload_sim.py \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --requests 4 \
+  --blocks-per-request 8 \
+  --blocks-per-step 2 \
+  --gpu-block-capacity 8 \
+  --block-bytes 16777216 \
+  --decode-steps 32 \
+  --chunk-bytes 4194304 \
+  --profile-bytes 16777216 \
+  --mode all \
+  --dynamic-weights \
+  --json-output benchmarks/results/infer_sim_gpu6_relay5.json \
+  --summary-output benchmarks/results/infer_sim_gpu6_relay5_summary.txt
+```
+
+The first simulator version is non-overlap: each step waits for eviction and
+prefetch before optional dummy compute. Use `tokens_s`, `step_p50_ms`, and
+`transfer_p50_ms` in the copy summary as the main metrics.
+
 ```python
 opts = turbobus.RuntimeOptions.from_tuning_json(
     "benchmarks/results/tune_gpu6_relay5.json"
