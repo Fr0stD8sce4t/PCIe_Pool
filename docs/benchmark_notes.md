@@ -907,6 +907,38 @@ sim_speedup pool_over_relay_tokens_per_second=1.896
 COPY_SUMMARY_END
 ```
 
+No-overlap copy summary (`cuda_compute_iterations=2048`):
+
+```text
+COPY_SUMMARY_BEGIN
+sim_config target=6 relays=[5] requests=4 blocks_per_request=8 blocks_per_step=4 gpu_block_capacity=4 access_pattern=round_robin working_set_blocks=8 seed=1 storage_layout=packed block_bytes=16777216 decode_steps=32 compute_ms=0.0 overlap_compute=False compute_impl=cuda cuda_compute_elements=16777216 cuda_compute_iterations=2048 mode=all dynamic_weights=True
+sim_scenario type=capacity_pressure unit=decode_step policy=lru_eviction transfer=evict_then_prefetch access_pattern=round_robin working_set_blocks=8 gpu_block_capacity=4 blocks_per_step=4 dummy_compute_ms=0.0 overlap_compute=False compute_impl=cuda cuda_compute_elements=16777216 cuda_compute_iterations=2048 note=cuda_kernel_overlap_model
+profile direct_h2d_bw_gbps=7.518
+profile_relay relay=5 h2d=7.502 p2p=39.521 effective=7.502 p2p_enabled=True
+sim_mode mode=direct tokens_s=48.977 step_p50_ms=20.763 step_p95_ms=20.999 transfer_p50_ms=16.509 transfer_p95_ms=16.707 compute_p50_ms=4.239 compute_p95_ms=4.265 prefetch_gib_s=7.195 evict_gib_s=7.918 prefetch_blocks=128 evict_blocks=121 direct_chunks=996 relay_chunks=0
+sim_mode mode=relay tokens_s=48.528 step_p50_ms=21.006 step_p95_ms=21.128 transfer_p50_ms=16.739 transfer_p95_ms=16.849 compute_p50_ms=4.246 compute_p95_ms=4.281 prefetch_gib_s=7.130 evict_gib_s=7.804 prefetch_blocks=128 evict_blocks=121 direct_chunks=0 relay_chunks=996
+sim_mode mode=pool tokens_s=78.467 step_p50_ms=12.902 step_p95_ms=13.038 transfer_p50_ms=8.640 transfer_p95_ms=8.752 compute_p50_ms=4.240 compute_p95_ms=4.288 prefetch_gib_s=13.724 evict_gib_s=15.054 prefetch_blocks=128 evict_blocks=121 direct_chunks=498 relay_chunks=498
+sim_speedup pool_over_direct_tokens_per_second=1.602
+sim_speedup pool_over_relay_tokens_per_second=1.617
+COPY_SUMMARY_END
+```
+
+Overlap copy summary (`cuda_compute_iterations=2048`):
+
+```text
+COPY_SUMMARY_BEGIN
+sim_config target=6 relays=[5] requests=4 blocks_per_request=8 blocks_per_step=4 gpu_block_capacity=4 access_pattern=round_robin working_set_blocks=8 seed=1 storage_layout=packed block_bytes=16777216 decode_steps=32 compute_ms=0.0 overlap_compute=True compute_impl=cuda cuda_compute_elements=16777216 cuda_compute_iterations=2048 mode=all dynamic_weights=True
+sim_scenario type=capacity_pressure unit=decode_step policy=lru_eviction transfer=evict_then_prefetch access_pattern=round_robin working_set_blocks=8 gpu_block_capacity=4 blocks_per_step=4 dummy_compute_ms=0.0 overlap_compute=True compute_impl=cuda cuda_compute_elements=16777216 cuda_compute_iterations=2048 note=cuda_kernel_overlap_model
+profile direct_h2d_bw_gbps=7.625
+profile_relay relay=5 h2d=7.619 p2p=40.471 effective=7.619 p2p_enabled=True
+sim_mode mode=direct tokens_s=59.556 step_p50_ms=17.042 step_p95_ms=17.212 transfer_p50_ms=16.703 transfer_p95_ms=16.801 compute_p50_ms=4.346 compute_p95_ms=4.376 prefetch_gib_s=7.184 evict_gib_s=7.750 prefetch_blocks=128 evict_blocks=121 direct_chunks=996 relay_chunks=0
+sim_mode mode=relay tokens_s=59.584 step_p50_ms=17.160 step_p95_ms=17.425 transfer_p50_ms=16.887 transfer_p95_ms=17.106 compute_p50_ms=4.290 compute_p95_ms=4.406 prefetch_gib_s=7.108 evict_gib_s=7.659 prefetch_blocks=128 evict_blocks=121 direct_chunks=0 relay_chunks=996
+sim_mode mode=pool tokens_s=114.267 step_p50_ms=8.895 step_p95_ms=9.168 transfer_p50_ms=8.735 transfer_p95_ms=8.896 compute_p50_ms=4.368 compute_p95_ms=4.402 prefetch_gib_s=13.803 evict_gib_s=14.689 prefetch_blocks=128 evict_blocks=121 direct_chunks=498 relay_chunks=498
+sim_speedup pool_over_direct_tokens_per_second=1.919
+sim_speedup pool_over_relay_tokens_per_second=1.918
+COPY_SUMMARY_END
+```
+
 Analysis:
 
 The native CUDA dummy compute path works, and pooled transfer remains around
@@ -915,9 +947,16 @@ The native CUDA dummy compute path works, and pooled transfer remains around
 behavior. With `cuda_compute_iterations=512`, compute becomes visible at about
 1.1-1.2 ms per step. Overlap reduces direct step p50 from 17.633 ms to
 17.156 ms and pool step p50 from 9.747 ms to 9.086 ms, so some compute is
-hidden behind transfer. The compute is still much smaller than the 8-17 ms
-transfer stall; the next useful setting is a heavier kernel such as
-`--cuda-compute-iterations 2048`.
+hidden behind transfer.
+
+With `cuda_compute_iterations=2048`, compute rises to about 4.3 ms. The
+no-overlap step p50 is roughly transfer plus compute: direct is 20.763 ms
+versus 16.509 ms transfer and 4.239 ms compute, while pool is 12.902 ms versus
+8.640 ms transfer and 4.240 ms compute. With overlap enabled, direct step p50
+drops to 17.042 ms and pool step p50 drops to 8.895 ms, close to the transfer
+stall alone. This indicates most of the native CUDA dummy compute is hidden
+behind transfer in this simulator. Under overlap, pooled transfer reaches
+114.267 tokens/s versus 59.556 direct, a 1.919x speedup.
 
 ## Next Implementation Steps
 
