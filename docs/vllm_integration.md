@@ -310,6 +310,28 @@ python examples/vllm_turbobus_kv_connector.py \
   --log-output benchmarks/results/vllm_qwen3_kv_connector_restore.log
 ```
 
+For a repeatable direct/relay/pool comparison on the same official vLLM
+connector path, use the sweep wrapper:
+
+```bash
+python examples/vllm_turbobus_kv_connector_sweep.py \
+  --model ~/huggingface/Qwen3-0.6B \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --prompt-repeat 64 \
+  --restore-blocks-list 8,16 \
+  --modes direct,relay,pool \
+  --chunk-bytes 4194304 \
+  --profile-bytes 16777216 \
+  --enforce-eager
+```
+
+The wrapper launches `examples/vllm_turbobus_kv_connector.py` once per case, so
+each row still goes through real vLLM `KVTransferConfig` initialization,
+`get_num_new_matched_tokens`, `update_state_after_alloc`, `build_connector_meta`,
+and `start_load_kv`. Copy the final `SWEEP_SUMMARY_BEGIN` /
+`SWEEP_SUMMARY_END` block when sharing results.
+
 ## Success Criteria
 
 The first vLLM integration passes when:

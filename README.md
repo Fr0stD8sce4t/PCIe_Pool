@@ -332,6 +332,23 @@ python examples/vllm_turbobus_kv_connector.py \
   --log-output benchmarks/results/vllm_qwen3_kv_connector_restore.log
 ```
 
+To compare direct, relay, and pooled transfer on the same official connector
+path, run the sweep wrapper. Each case starts a fresh vLLM process and writes
+its own log, then the wrapper prints a compact `SWEEP_SUMMARY`:
+
+```bash
+python examples/vllm_turbobus_kv_connector_sweep.py \
+  --model ~/huggingface/Qwen3-0.6B \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --prompt-repeat 64 \
+  --restore-blocks-list 8,16 \
+  --modes direct,relay,pool \
+  --chunk-bytes 4194304 \
+  --profile-bytes 16777216 \
+  --enforce-eager
+```
+
 ```python
 opts = turbobus.RuntimeOptions.from_tuning_json(
     "benchmarks/results/tune_gpu6_relay5.json"
