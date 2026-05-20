@@ -124,8 +124,11 @@ Next steps:
      prefix/session KV-shaped buffers into target-GPU slots.
    - The first sidecar result is recorded and shows about 1.95x pooled restore
      speedup beside a real PyTorch Transformer layer.
-   - Next priority: add or run heavier sidecar compute sweeps, then design the
-     first narrow connector boundary for real framework KV slot addresses.
+   - `docs/real_framework_connector.md` and
+     `examples/framework_kv_slot_adapter.py` define the first narrow connector
+     boundary for real framework KV slot addresses.
+   - Next priority: choose one real framework POC target and wire only its
+     prefix/session restore hook to the adapter boundary.
    - Compare direct, relay, and pool modes using the same manager API that a
      future vLLM/SGLang connector would call.
 

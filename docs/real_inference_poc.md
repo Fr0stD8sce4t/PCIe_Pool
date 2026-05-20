@@ -85,6 +85,11 @@ restore throughput from 7.101 GiB/s direct to 13.866 GiB/s pool, a 1.953x
 speedup. The model compute was light at about 1.2 ms, so heavier model sweeps
 are still needed before judging compute-heavy overlap.
 
+The next connector boundary is described in `docs/real_framework_connector.md`.
+The minimal adapter sketch is `examples/framework_kv_slot_adapter.py`. It expects
+a framework to provide existing CPU/GPU KV backing tensors and per-block byte
+offsets, then calls `OffloadManager.prefetch_many()` for restore.
+
 Phase 2 can add a narrow vLLM/SGLang or LMCache-style connector that only handles
 prefix/session restore and save. Broader decode-time eviction can wait until the
 restore path is correct.

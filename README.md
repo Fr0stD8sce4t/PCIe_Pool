@@ -40,6 +40,8 @@ references/             Cloned reference repositories
 Initial server benchmark notes are recorded in `docs/benchmark_notes.md`.
 The narrow real inference POC plan is recorded in
 `docs/real_inference_poc.md`.
+The real framework connector boundary is recorded in
+`docs/real_framework_connector.md`.
 
 ## Build Python Extension
 
@@ -395,3 +397,19 @@ handle.wait()
 This is intentionally thin: it does not implement a full KV-cache state
 machine, but it gives the next benchmarks a named block API instead of raw
 tensor copies only.
+
+## Real Framework Connector Boundary
+
+`examples/framework_kv_slot_adapter.py` shows the first connector shape for a
+real framework POC. A framework owns the KV cache allocation and passes
+TurboBus a CPU backing tensor, a GPU KV backing tensor, and per-block byte
+offsets. TurboBus only restores or saves those registered slots:
+
+```python
+adapter = FrameworkKVSlotAdapter(rt, cpu_backing, gpu_kv_backing)
+adapter.register_slots(slots)
+adapter.restore_prefix(["prefix0", "prefix1"])
+```
+
+This is the intended next boundary for vLLM/SGLang-style experiments before
+attempting scheduler or full KV-cache changes.
