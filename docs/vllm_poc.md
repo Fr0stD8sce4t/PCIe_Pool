@@ -47,6 +47,25 @@ For each KV cache group, the adapter needs:
 If vLLM stores key and value tensors separately, register each tensor as a
 separate group or use separate slot names for key and value.
 
+## Version Discovery
+
+The first tested target is:
+
+```text
+vllm 0.17.1rc1.dev171+ga3e2e250f.d20260324
+```
+
+Before writing a patch for this dev build, run:
+
+```bash
+python examples/vllm_introspect.py
+```
+
+Copy only the `VLLM_INTROSPECT_BEGIN` / `VLLM_INTROSPECT_END` block. The output
+lists the actual module paths, classes, and KV-cache-related methods in the
+installed vLLM version, so the POC can target real source paths instead of an
+older API shape.
+
 ## Success Criteria
 
 The first vLLM POC passes when:

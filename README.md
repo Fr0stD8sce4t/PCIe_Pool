@@ -419,3 +419,5 @@ attempting scheduler or full KV-cache changes.
 `examples/vllm_kv_slot_adapter.py` narrows that boundary for vLLM. It does not
 import vLLM directly; a vLLM patch should extract KV cache tensors and block ids
 from the local vLLM version, then pass them into `VllmKVSlotAdapter`.
+Use `examples/vllm_introspect.py` to print the installed vLLM version's
+KV-cache-related modules and methods before writing a version-specific patch.
