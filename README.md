@@ -170,8 +170,11 @@ python benchmarks/inference_offload_sim.py \
   --relay-gpus 5 \
   --requests 4 \
   --blocks-per-request 8 \
-  --blocks-per-step 2 \
-  --gpu-block-capacity 8 \
+  --blocks-per-step 4 \
+  --gpu-block-capacity 4 \
+  --access-pattern round_robin \
+  --working-set-blocks 8 \
+  --seed 1 \
   --block-bytes 16777216 \
   --decode-steps 32 \
   --chunk-bytes 4194304 \
@@ -183,8 +186,10 @@ python benchmarks/inference_offload_sim.py \
 ```
 
 The first simulator version is non-overlap: each step waits for eviction and
-prefetch before optional dummy compute. Use `tokens_s`, `step_p50_ms`, and
-`transfer_p50_ms` in the copy summary as the main metrics.
+prefetch before optional dummy compute. The default access pattern and GPU block
+capacity are chosen to create capacity pressure, so the run should exercise both
+prefetch and eviction. Use `tokens_s`, `step_p50_ms`, and `transfer_p50_ms` in
+the copy summary as the main metrics.
 
 ```python
 opts = turbobus.RuntimeOptions.from_tuning_json(

@@ -5,6 +5,7 @@ from collections import OrderedDict
 import json
 import math
 from pathlib import Path
+import random
 import statistics
 import time
 
@@ -66,8 +67,25 @@ def request_blocks(request_id: int, blocks_per_request: int) -> list[str]:
     return [f"req{request_id}_kv{index}" for index in range(blocks_per_request)]
 
 
-def step_window(blocks: list[str], step: int, blocks_per_step: int) -> list[str]:
-    start = (step * blocks_per_step) % len(blocks)
+def select_blocks(
+    blocks: list[str],
+    step: int,
+    blocks_per_step: int,
+    access_pattern: str,
+    rng: random.Random,
+) -> list[str]:
+    if access_pattern == "round_robin":
+        start = (step * blocks_per_step) % len(blocks)
+        return block_window(blocks, start, blocks_per_step)
+    if access_pattern == "sliding":
+        start = step % len(blocks)
+        return block_window(blocks, start, blocks_per_step)
+    if access_pattern == "random":
+        return rng.sample(blocks, blocks_per_step)
+    raise ValueError(f"unknown access pattern: {access_pattern}")
+
+
+def block_window(blocks: list[str], start: int, blocks_per_step: int) -> list[str]:
     return [blocks[(start + offset) % len(blocks)] for offset in range(blocks_per_step)]
 
 
@@ -203,16 +221,27 @@ def run_mode(
     mode: str,
     gpu_block_capacity: int,
     blocks_per_step: int,
+    access_pattern: str,
+    working_set_blocks: int,
+    seed: int,
     decode_steps: int,
     compute_ms: float,
 ) -> dict:
     runtime.set_transfer_mode(mode)
     resident = ResidentSet(gpu_block_capacity)
+    rng = random.Random(seed)
     steps = []
 
     for step_index in range(decode_steps):
         request_id = step_index % len(request_block_names)
-        needed = step_window(request_block_names[request_id], step_index, blocks_per_step)
+        working_set = request_block_names[request_id][:working_set_blocks]
+        needed = select_blocks(
+            working_set,
+            step_index,
+            blocks_per_step,
+            access_pattern,
+            rng,
+        )
         missing = [name for name in needed if not resident.contains(name)]
         victims = resident.victims_for(missing)
 
@@ -266,6 +295,8 @@ def compact_summary(result: dict) -> str:
             f"target={config['target_gpu']} relays={config['relay_gpus']} "
             f"requests={config['requests']} blocks_per_request={config['blocks_per_request']} "
             f"blocks_per_step={config['blocks_per_step']} gpu_block_capacity={config['gpu_block_capacity']} "
+            f"access_pattern={config['access_pattern']} working_set_blocks={config['working_set_blocks']} "
+            f"seed={config['seed']} "
             f"block_bytes={config['block_bytes']} decode_steps={config['decode_steps']} "
             f"compute_ms={config['compute_ms']} mode={config['mode']} "
             f"dynamic_weights={config['dynamic_weights']}"
@@ -320,8 +351,15 @@ def main() -> None:
     parser.add_argument("--relay-gpus", required=True)
     parser.add_argument("--requests", type=int, default=4)
     parser.add_argument("--blocks-per-request", type=int, default=8)
-    parser.add_argument("--blocks-per-step", type=int, default=2)
-    parser.add_argument("--gpu-block-capacity", type=int, default=8)
+    parser.add_argument("--blocks-per-step", type=int, default=4)
+    parser.add_argument("--gpu-block-capacity", type=int, default=4)
+    parser.add_argument(
+        "--access-pattern",
+        choices=["round_robin", "sliding", "random"],
+        default="round_robin",
+    )
+    parser.add_argument("--working-set-blocks", type=int)
+    parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--block-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--decode-steps", type=int, default=32)
     parser.add_argument("--compute-ms", type=float, default=0.0)
@@ -339,6 +377,11 @@ def main() -> None:
         raise ValueError("--blocks-per-step must be between 1 and --blocks-per-request")
     if args.gpu_block_capacity < args.blocks_per_step:
         raise ValueError("--gpu-block-capacity must be at least --blocks-per-step")
+    working_set_blocks = args.working_set_blocks or args.blocks_per_request
+    if working_set_blocks < args.blocks_per_step:
+        raise ValueError("--working-set-blocks must be at least --blocks-per-step")
+    if working_set_blocks > args.blocks_per_request:
+        raise ValueError("--working-set-blocks must be at most --blocks-per-request")
 
     relays = parse_relay_gpus(args.relay_gpus)
     torch.cuda.set_device(args.target_gpu)
@@ -376,6 +419,9 @@ def main() -> None:
             "blocks_per_request": args.blocks_per_request,
             "blocks_per_step": args.blocks_per_step,
             "gpu_block_capacity": args.gpu_block_capacity,
+            "access_pattern": args.access_pattern,
+            "working_set_blocks": working_set_blocks,
+            "seed": args.seed,
             "block_bytes": args.block_bytes,
             "decode_steps": args.decode_steps,
             "compute_ms": args.compute_ms,
@@ -399,6 +445,9 @@ def main() -> None:
             mode,
             args.gpu_block_capacity,
             args.blocks_per_step,
+            args.access_pattern,
+            working_set_blocks,
+            args.seed,
             args.decode_steps,
             args.compute_ms,
         )
