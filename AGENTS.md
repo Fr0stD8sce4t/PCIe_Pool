@@ -107,9 +107,11 @@ Next steps:
      decode steps, scheduling, TTFT, request latency, and GPU KV cache hit rate.
    - The initial burst workload result is recorded and shows enough KV pressure
      to compare direct, relay, and pool modes.
-   - Next priority: add workload presets such as `light`, `pressure`, and
-     `long_context`, then add a prefill restore mode that can model prompt KV
-     blocks loaded from CPU instead of always produced on GPU.
+   - Workload presets `light`, `pressure`, and `long_context` are available.
+   - Prefill supports both `produce_kv_on_gpu` and `restore_from_cpu`.
+   - Next priority: run and record preset workload results, especially
+     `pressure` with `restore_from_cpu`, then decide whether the simulator is
+     ready for a narrow real-framework POC.
    - Compare direct, relay, and pool modes using the same manager API that a
      future vLLM/SGLang connector would call.
 

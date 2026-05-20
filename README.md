@@ -217,23 +217,22 @@ GPU KV cache hit-rate metrics:
 python benchmarks/inference_workload_sim.py \
   --target-gpu 6 \
   --relay-gpus 5 \
-  --request-count 8 \
-  --arrival-pattern burst \
-  --prompt-blocks-min 6 \
-  --prompt-blocks-max 10 \
-  --decode-steps-min 12 \
-  --decode-steps-max 20 \
+  --preset pressure \
   --scheduler round_robin \
-  --access-pattern sliding \
-  --blocks-per-step 4 \
-  --gpu-block-capacity 12 \
   --storage-layout packed \
+  --prefill-mode restore_from_cpu \
   --compute-impl cuda \
   --cuda-compute-iterations 2048 \
   --overlap-compute \
   --mode all \
   --dynamic-weights
 ```
+
+Use `--preset light`, `--preset pressure`, or `--preset long_context` for
+repeatable workload shapes. `--prefill-mode produce_kv_on_gpu` models prompt KV
+being produced on the target GPU; `--prefill-mode restore_from_cpu` models
+prompt/prefix KV blocks being loaded from pinned CPU backing memory before
+decode.
 
 ```python
 opts = turbobus.RuntimeOptions.from_tuning_json(

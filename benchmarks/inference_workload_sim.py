@@ -25,6 +25,40 @@ from inference_offload_sim import (
 )
 
 
+PRESETS = {
+    "light": {
+        "request_count": 4,
+        "prompt_blocks_min": 4,
+        "prompt_blocks_max": 6,
+        "decode_steps_min": 8,
+        "decode_steps_max": 12,
+        "gpu_block_capacity": 16,
+        "blocks_per_step": 2,
+        "access_pattern": "sliding",
+    },
+    "pressure": {
+        "request_count": 8,
+        "prompt_blocks_min": 6,
+        "prompt_blocks_max": 10,
+        "decode_steps_min": 12,
+        "decode_steps_max": 20,
+        "gpu_block_capacity": 12,
+        "blocks_per_step": 4,
+        "access_pattern": "sliding",
+    },
+    "long_context": {
+        "request_count": 8,
+        "prompt_blocks_min": 12,
+        "prompt_blocks_max": 18,
+        "decode_steps_min": 16,
+        "decode_steps_max": 28,
+        "gpu_block_capacity": 16,
+        "blocks_per_step": 6,
+        "access_pattern": "sliding",
+    },
+}
+
+
 @dataclass
 class RequestSpec:
     request_id: int
@@ -149,18 +183,36 @@ def run_prefill(
     store: turbobus.OffloadManager,
     blocks: list[str],
     prefill_compute_ms: float,
+    prefill_mode: str,
 ) -> tuple[float, dict]:
     incoming = resident_prefill_blocks(blocks, resident.capacity)
     victims = resident.victims_for(incoming)
-    evict, _prefetch, transfer_ms, _compute_elapsed_ms, elapsed_ms = run_step_work(
-        store,
-        victims,
-        [],
-        NullCompute(prefill_compute_ms),
-        overlap_compute=False,
-    )
+    if prefill_mode == "produce_kv_on_gpu":
+        evict, prefetch, transfer_ms, _compute_elapsed_ms, elapsed_ms = run_step_work(
+            store,
+            victims,
+            [],
+            NullCompute(prefill_compute_ms),
+            overlap_compute=False,
+        )
+    elif prefill_mode == "restore_from_cpu":
+        evict, prefetch, transfer_ms, _compute_elapsed_ms, elapsed_ms = run_step_work(
+            store,
+            victims,
+            incoming,
+            NullCompute(prefill_compute_ms),
+            overlap_compute=False,
+        )
+    else:
+        raise ValueError(f"unknown prefill mode: {prefill_mode}")
     resident.add_many(incoming)
-    return elapsed_ms, {"evict": evict, "transfer_ms": transfer_ms, "blocks": len(blocks)}
+    return elapsed_ms, {
+        "evict": evict,
+        "prefetch": prefetch,
+        "transfer_ms": transfer_ms,
+        "blocks": len(blocks),
+        "restored_blocks": len(incoming) if prefill_mode == "restore_from_cpu" else 0,
+    }
 
 
 class NullCompute:
@@ -217,6 +269,7 @@ def run_mode(
                 store,
                 state.blocks,
                 args.prefill_compute_ms,
+                args.prefill_mode,
             )
             now_ms += prefill_ms
             event.update(
@@ -319,6 +372,12 @@ def summarize_workload(
     compute = [step["compute_ms"] for step in steps]
     prefetch_batches = [step["prefetch"] for step in steps if step["prefetch"]["blocks"]]
     evict_batches = [step["evict"] for step in steps if step["evict"]["blocks"]]
+    prefill_prefetch_batches = [
+        event["prefetch"] for event in prefill_events if event["prefetch"]["blocks"]
+    ]
+    prefill_evict_batches = [
+        event["evict"] for event in prefill_events if event["evict"]["blocks"]
+    ]
     total_needed = sum(len(step["needed"]) for step in steps)
     total_hits = sum(step["hits"] for step in steps)
     total_tokens = len(steps)
@@ -343,15 +402,28 @@ def summarize_workload(
         "compute_ms_p95": percentile(compute, 95.0),
         "prefetch_blocks": sum(batch["blocks"] for batch in prefetch_batches),
         "evict_blocks": sum(batch["blocks"] for batch in evict_batches),
+        "prefill_restore_blocks": sum(event["restored_blocks"] for event in prefill_events),
+        "prefill_prefetch_blocks": sum(
+            batch["blocks"] for batch in prefill_prefetch_batches
+        ),
+        "prefill_evict_blocks": sum(batch["blocks"] for batch in prefill_evict_batches),
         "prefetch_gib_per_second": summarize_transfer_gib(prefetch_batches),
         "evict_gib_per_second": summarize_transfer_gib(evict_batches),
         "direct_chunks": sum(
             step["prefetch"]["direct_chunks"] + step["evict"]["direct_chunks"]
             for step in steps
+        )
+        + sum(
+            event["prefetch"]["direct_chunks"] + event["evict"]["direct_chunks"]
+            for event in prefill_events
         ),
         "relay_chunks": sum(
             step["prefetch"]["relay_chunks"] + step["evict"]["relay_chunks"]
             for step in steps
+        )
+        + sum(
+            event["prefetch"]["relay_chunks"] + event["evict"]["relay_chunks"]
+            for event in prefill_events
         ),
         "gpu_cache_hit_rate": total_hits / total_needed if total_needed else 0.0,
         "prefill_count": len(prefill_events),
@@ -376,6 +448,7 @@ def compact_summary(result: dict) -> str:
         (
             "workload_config "
             f"target={config['target_gpu']} relays={config['relay_gpus']} "
+            f"preset={config['preset']} "
             f"arrival_pattern={config['arrival_pattern']} request_count={config['request_count']} "
             f"prompt_blocks={config['prompt_blocks_min']}..{config['prompt_blocks_max']} "
             f"decode_steps={config['decode_steps_min']}..{config['decode_steps_max']} "
@@ -383,6 +456,7 @@ def compact_summary(result: dict) -> str:
             f"blocks_per_step={config['blocks_per_step']} gpu_block_capacity={config['gpu_block_capacity']} "
             f"storage_layout={config['storage_layout']} block_bytes={config['block_bytes']} "
             f"compute_impl={config['compute_impl']} overlap_compute={config['overlap_compute']} "
+            f"prefill_mode={config['prefill_mode']} "
             f"mode={config['mode']} dynamic_weights={config['dynamic_weights']}"
         ),
         (
@@ -390,7 +464,7 @@ def compact_summary(result: dict) -> str:
             "type=prefill_decode "
             "policy=lru_eviction "
             "transfer=evict_then_prefetch_on_decode "
-            "prefill=produce_kv_on_gpu "
+            f"prefill={config['prefill_mode']} "
             f"arrival_interval_ms={config['arrival_interval_ms']} "
             f"prefill_compute_ms={config['prefill_compute_ms']} "
             f"decode_compute_ms={config['compute_ms']} "
@@ -421,6 +495,8 @@ def compact_summary(result: dict) -> str:
             f"hit_rate={summary['gpu_cache_hit_rate']:.3f} "
             f"prefetch_blocks={summary['prefetch_blocks']} "
             f"evict_blocks={summary['evict_blocks']} "
+            f"prefill_restore_blocks={summary['prefill_restore_blocks']} "
+            f"prefill_evict_blocks={summary['prefill_evict_blocks']} "
             f"direct_chunks={summary['direct_chunks']} relay_chunks={summary['relay_chunks']}"
         )
     for key, value in result["speedups"].items():
@@ -431,6 +507,7 @@ def compact_summary(result: dict) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="TurboBus prefill/decode workload simulator")
+    parser.add_argument("--preset", choices=["light", "pressure", "long_context"])
     parser.add_argument("--target-gpu", type=int, required=True)
     parser.add_argument("--relay-gpus", required=True)
     parser.add_argument("--request-count", type=int, default=8)
@@ -454,6 +531,11 @@ def main() -> None:
     parser.add_argument("--gpu-block-capacity", type=int, default=12)
     parser.add_argument("--storage-layout", choices=["separate", "packed"], default="packed")
     parser.add_argument("--block-bytes", type=int, default=16 * 1024 * 1024)
+    parser.add_argument(
+        "--prefill-mode",
+        choices=["produce_kv_on_gpu", "restore_from_cpu"],
+        default="produce_kv_on_gpu",
+    )
     parser.add_argument("--prefill-compute-ms", type=float, default=0.0)
     parser.add_argument("--compute-ms", type=float, default=0.0)
     parser.add_argument("--compute-impl", choices=["sleep", "cuda"], default="cuda")
@@ -471,6 +553,7 @@ def main() -> None:
     parser.add_argument("--no-copy-summary", action="store_true")
     args = parser.parse_args()
 
+    apply_preset(args, parser)
     validate_args(args)
 
     relays = parse_relay_gpus(args.relay_gpus)
@@ -488,6 +571,7 @@ def main() -> None:
         "config": {
             "target_gpu": args.target_gpu,
             "relay_gpus": relays,
+            "preset": args.preset or "custom",
             "request_count": args.request_count,
             "arrival_pattern": args.arrival_pattern,
             "arrival_interval_ms": args.arrival_interval_ms,
@@ -501,6 +585,7 @@ def main() -> None:
             "gpu_block_capacity": args.gpu_block_capacity,
             "storage_layout": args.storage_layout,
             "block_bytes": args.block_bytes,
+            "prefill_mode": args.prefill_mode,
             "prefill_compute_ms": args.prefill_compute_ms,
             "compute_ms": args.compute_ms,
             "compute_impl": args.compute_impl,
@@ -579,6 +664,20 @@ def validate_args(args) -> None:
         raise ValueError("--cuda-compute-elements must be positive")
     if args.cuda_compute_iterations <= 0:
         raise ValueError("--cuda-compute-iterations must be positive")
+
+
+def apply_preset(args, parser: argparse.ArgumentParser) -> None:
+    if args.preset is None:
+        return
+    preset = PRESETS[args.preset]
+    defaults = {
+        action.dest: action.default
+        for action in parser._actions
+        if action.dest is not argparse.SUPPRESS
+    }
+    for name, value in preset.items():
+        if getattr(args, name) == defaults[name]:
+            setattr(args, name, value)
 
 
 if __name__ == "__main__":
