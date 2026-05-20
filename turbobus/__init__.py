@@ -30,6 +30,7 @@ from .vllm_integration import (
     VllmTurboBusIntegration,
     extract_vllm_block_ids,
 )
+from .vllm_connector import VllmConnectorEvent, VllmTurboBusConnector
 
 __all__ = [
     "BlockState",
@@ -50,6 +51,8 @@ __all__ = [
     "VllmAllocationEvent",
     "VllmIntegrationState",
     "VllmTurboBusIntegration",
+    "VllmConnectorEvent",
+    "VllmTurboBusConnector",
     "block_bytes_from_vllm_kv_tensor",
     "extract_vllm_block_ids",
     "make_contiguous_kv_slots",

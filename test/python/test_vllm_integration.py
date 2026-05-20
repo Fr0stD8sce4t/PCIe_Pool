@@ -80,6 +80,10 @@ class VllmTurboBusIntegrationTest(unittest.TestCase):
     def test_hooks_capture_real_runner_cache_and_allocated_blocks(self) -> None:
         runtime = FakeRuntime()
         integration = VllmTurboBusIntegration(runtime, cpu_backings=[object(), object()])
+        callbacks = []
+        integration.set_allocation_callback(
+            lambda integration, request, blocks, event: callbacks.append(event)
+        )
         integration.install_on_classes(FakeRunner, FakeManager)
 
         runner = FakeRunner()
@@ -92,6 +96,7 @@ class VllmTurboBusIntegrationTest(unittest.TestCase):
         self.assertEqual(integration.state.kv_cache_config, "config")
         self.assertEqual(integration.block_ids_for_request("req0"), (1, 3, 5))
         self.assertEqual(integration.state.allocations["req0"].event_count, 2)
+        self.assertEqual([event.block_ids for event in callbacks], [(1, 3), (1, 3, 5)])
 
         integration.restore_request_prefix("req0")
 

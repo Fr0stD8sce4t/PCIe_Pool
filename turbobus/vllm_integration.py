@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import functools
 from dataclasses import dataclass, field
-from typing import Iterable
+from typing import Callable, Iterable
 
 from .runtime import Runtime
 from .vllm import (
@@ -63,6 +63,12 @@ class VllmAllocationEvent:
         )
 
 
+AllocationCallback = Callable[
+    ["VllmTurboBusIntegration", object, object, VllmAllocationEvent],
+    None,
+]
+
+
 @dataclass
 class VllmIntegrationState:
     """Runtime state observed from a real vLLM process."""
@@ -89,6 +95,7 @@ class VllmTurboBusIntegration:
         self.runtime = runtime
         self.state = VllmIntegrationState()
         self._cpu_backings = list(cpu_backings) if cpu_backings is not None else None
+        self._allocation_callback: AllocationCallback | None = None
 
     def install(self) -> None:
         """Install hooks into the imported vLLM V1 classes."""
@@ -134,7 +141,7 @@ class VllmTurboBusIntegration:
                 result = original_allocate(manager, request, *args, **kwargs)
                 integration = getattr(type(manager), "_turbobus_integration", None)
                 if integration is not None:
-                    integration.record_allocation(request, result)
+                    integration.handle_allocation(request, result)
                 return result
 
             manager_cls.allocate_slots = wrapped_allocate
@@ -151,6 +158,9 @@ class VllmTurboBusIntegration:
     def set_cpu_backings(self, cpu_backings: Iterable) -> None:
         self._cpu_backings = list(cpu_backings)
         self._refresh_adapter()
+
+    def set_allocation_callback(self, callback: AllocationCallback | None) -> None:
+        self._allocation_callback = callback
 
     def allocate_cpu_backings(self, slots_per_layer: int, *, pin_memory: bool = True) -> list:
         """Allocate pinned CPU byte buffers for the observed vLLM layer caches."""
@@ -185,6 +195,12 @@ class VllmTurboBusIntegration:
         self.state.allocations[request_id] = event
         return event
 
+    def handle_allocation(self, request, blocks) -> VllmAllocationEvent | None:
+        event = self.record_allocation(request, blocks)
+        if event is not None and self._allocation_callback is not None:
+            self._allocation_callback(self, request, blocks, event)
+        return event
+
     def block_ids_for_request(self, request_id: str) -> tuple[int, ...]:
         event = self.state.allocations[str(request_id)]
         return event.block_ids
@@ -204,13 +220,13 @@ class VllmTurboBusIntegration:
         )
 
     def restore_request_prefix(self, request_id: str, *, cpu_slot_start: int = 0) -> list:
-        adapter = self._require_adapter()
+        adapter = self.require_adapter()
         return adapter.restore_prefix(
             self.make_refs_for_request(request_id, cpu_slot_start=cpu_slot_start)
         )
 
     def save_request_prefix(self, request_id: str, *, cpu_slot_start: int = 0) -> list:
-        adapter = self._require_adapter()
+        adapter = self.require_adapter()
         return adapter.save_prefix(
             self.make_refs_for_request(request_id, cpu_slot_start=cpu_slot_start)
         )
@@ -227,10 +243,12 @@ class VllmTurboBusIntegration:
         )
         self.state.adapter = VllmKVSlotAdapter(self.runtime, groups)
 
-    def _require_adapter(self) -> VllmKVSlotAdapter:
+    def require_adapter(self) -> VllmKVSlotAdapter:
         if self.state.adapter is None:
             raise RuntimeError("vLLM KV caches and CPU backings must be bound before restore/save")
         return self.state.adapter
+
+    _require_adapter = require_adapter
 
 
 def extract_vllm_block_ids(blocks) -> tuple[tuple[int, ...], ...]:

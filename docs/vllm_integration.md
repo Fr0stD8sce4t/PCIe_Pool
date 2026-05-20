@@ -114,6 +114,11 @@ The hook records real `kv_caches` tensors and allocated block ids, then exposes
 `restore_request_prefix()` and `save_request_prefix()` for those real vLLM
 slots.
 
+`turbobus.vllm_connector` builds on that hook and runs TurboBus restore from a
+real vLLM `KVCacheManager.allocate_slots()` call. This is the first integration
+path that runs during vLLM inference instead of after `generate()` has already
+finished.
+
 ## Real KV Slot Restore Check
 
 `examples/vllm_turbobus_restore.py` is the first real vLLM test entry point.
@@ -173,6 +178,31 @@ then uses logical CUDA ids internally. This prevents vLLM from allocating
 `--no-map-physical-gpus` only when the visible-device mapping is already
 configured outside the script. All vLLM logs, TurboBus mode lines, summary
 blocks, and tracebacks are written to `--log-output`.
+
+## Real Inference Connector Check
+
+`examples/vllm_turbobus_connector.py` exercises the real inference path:
+
+1. run a real vLLM request;
+2. save selected KV blocks into pinned CPU memory;
+3. arm the connector;
+4. run a second real vLLM request;
+5. restore runs inside the second request's `KVCacheManager.allocate_slots()`
+   hook.
+
+```bash
+python examples/vllm_turbobus_connector.py \
+  --model ~/huggingface/Qwen3-0.6B \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --prompt-repeat 64 \
+  --restore-blocks 8 \
+  --chunk-bytes 4194304 \
+  --profile-bytes 16777216 \
+  --mode pool \
+  --enforce-eager \
+  --log-output benchmarks/results/vllm_qwen3_connector_pool.log
+```
 
 ## Success Criteria
 

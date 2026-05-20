@@ -260,6 +260,24 @@ ids and sets `CUDA_VISIBLE_DEVICES` before importing PyTorch/vLLM, so vLLM's
 when the CUDA visible-device mapping is already set outside the script. vLLM
 logs and the `COPY_SUMMARY` block are written to `--log-output`.
 
+To run TurboBus from the real vLLM allocation path, use the connector entry
+point. It runs one real request to save KV blocks, then a second real request
+where TurboBus restore is invoked inside `KVCacheManager.allocate_slots()`:
+
+```bash
+python examples/vllm_turbobus_connector.py \
+  --model ~/huggingface/Qwen3-0.6B \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --prompt-repeat 64 \
+  --restore-blocks 8 \
+  --chunk-bytes 4194304 \
+  --profile-bytes 16777216 \
+  --mode pool \
+  --enforce-eager \
+  --log-output benchmarks/results/vllm_qwen3_connector_pool.log
+```
+
 ```python
 opts = turbobus.RuntimeOptions.from_tuning_json(
     "benchmarks/results/tune_gpu6_relay5.json"
