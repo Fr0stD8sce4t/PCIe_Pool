@@ -47,15 +47,17 @@ class InferenceKVSlotAdapter:
                 byte_count=slot.byte_count,
             )
 
-    def restore_prefix(self, names: Iterable[str]) -> None:
+    def restore_prefix(self, names: Iterable[str]) -> list:
         names = list(names)
-        self.manager.prefetch_many(names)
+        handles = self.manager.prefetch_many(names)
         self.manager.wait_many(names)
+        return handles
 
-    def save_prefix(self, names: Iterable[str]) -> None:
+    def save_prefix(self, names: Iterable[str]) -> list:
         names = list(names)
-        self.manager.evict_many(names)
+        handles = self.manager.evict_many(names)
         self.manager.wait_many(names)
+        return handles
 
 
 def make_contiguous_kv_slots(

@@ -149,6 +149,58 @@ class RangeValidationTest(unittest.TestCase):
         finally:
             runtime_module._turbobus = old_extension
 
+    def test_range_tensor_validation_does_not_require_equal_sizes_for_d2h(self) -> None:
+        class TensorType:
+            pass
+
+        class FakeDevice:
+            def __init__(self, type_: str, index: int | None = None) -> None:
+                self.type = type_
+                self.index = index
+
+        class FakeTensor(TensorType):
+            def __init__(
+                self,
+                numel: int,
+                *,
+                device_type: str,
+                device_index: int | None = None,
+                pinned: bool = False,
+            ) -> None:
+                self._numel = numel
+                self.device = FakeDevice(device_type, device_index)
+                self._pinned = pinned
+
+            def numel(self) -> int:
+                return self._numel
+
+            def element_size(self) -> int:
+                return 1
+
+            def is_pinned(self) -> bool:
+                return self._pinned
+
+            def is_contiguous(self) -> bool:
+                return True
+
+        old_torch = runtime_module.torch
+        runtime_module.torch = type("Torch", (), {"Tensor": TensorType})
+        try:
+            cpu = FakeTensor(128, device_type="cpu", pinned=True)
+            gpu = FakeTensor(1024, device_type="cuda", device_index=6)
+
+            source_bytes, destination_bytes = runtime_module._validate_range_tensors(
+                cpu,
+                gpu,
+                target_gpu=6,
+                direction="d2h",
+            )
+        finally:
+            runtime_module.torch = old_torch
+
+        self.assertEqual(source_bytes, 1024)
+        self.assertEqual(destination_bytes, 128)
+
 
 @unittest.skipIf(torch is None, "PyTorch is not installed")
 class DummyComputeValidationTest(unittest.TestCase):

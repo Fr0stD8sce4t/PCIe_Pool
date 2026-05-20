@@ -16,6 +16,9 @@ class VllmKVBlockRef:
     block_id: int
     cpu_slot: int
     gpu_slot: int
+    lane_id: int | None = None
+    cpu_offset: int | None = None
+    gpu_offset: int | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,7 @@ class VllmKVSlotAdapter:
             )
             for group in self.groups.values()
         }
+        self._registered_names: set[str] = set()
 
     def register_blocks(self, refs: Iterable[VllmKVBlockRef]) -> list[str]:
         slots_by_group: dict[int, list[InferenceKVSlot]] = {}
@@ -55,31 +59,47 @@ class VllmKVSlotAdapter:
             group = self.groups[ref.group_id]
             name = vllm_block_name(ref)
             names.append(name)
+            if name in self._registered_names:
+                continue
             slots_by_group.setdefault(ref.group_id, []).append(
                 InferenceKVSlot(
                     name=name,
                     block_id=(ref.request_id, ref.group_id, ref.block_id),
                     cpu_slot=ref.cpu_slot,
                     gpu_slot=ref.gpu_slot,
-                    cpu_offset=ref.cpu_slot * group.block_bytes,
-                    gpu_offset=ref.gpu_slot * group.block_bytes,
+                    cpu_offset=(
+                        ref.cpu_offset
+                        if ref.cpu_offset is not None
+                        else ref.cpu_slot * group.block_bytes
+                    ),
+                    gpu_offset=(
+                        ref.gpu_offset
+                        if ref.gpu_offset is not None
+                        else ref.gpu_slot * group.block_bytes
+                    ),
                     byte_count=group.block_bytes,
                 )
             )
 
         for group_id, slots in slots_by_group.items():
             self.adapters[group_id].register_slots(slots)
+            for slot in slots:
+                self._registered_names.add(slot.name)
         return names
 
-    def restore_prefix(self, refs: Iterable[VllmKVBlockRef]) -> None:
+    def restore_prefix(self, refs: Iterable[VllmKVBlockRef]) -> list:
         names_by_group = self._register_and_group(refs)
+        handles = []
         for group_id, names in names_by_group.items():
-            self.adapters[group_id].restore_prefix(names)
+            handles.extend(self.adapters[group_id].restore_prefix(names))
+        return handles
 
-    def save_prefix(self, refs: Iterable[VllmKVBlockRef]) -> None:
+    def save_prefix(self, refs: Iterable[VllmKVBlockRef]) -> list:
         names_by_group = self._register_and_group(refs)
+        handles = []
         for group_id, names in names_by_group.items():
-            self.adapters[group_id].save_prefix(names)
+            handles.extend(self.adapters[group_id].save_prefix(names))
+        return handles
 
     def _register_and_group(
         self,
@@ -94,7 +114,8 @@ class VllmKVSlotAdapter:
 
 
 def vllm_block_name(ref: VllmKVBlockRef) -> str:
-    return f"{ref.request_id}:g{ref.group_id}:b{ref.block_id}"
+    lane = "" if ref.lane_id is None else f":l{ref.lane_id}"
+    return f"{ref.request_id}:g{ref.group_id}:b{ref.block_id}{lane}"
 
 
 def make_vllm_block_refs_from_ids(
@@ -169,7 +190,52 @@ def make_vllm_layer_block_refs_from_ids(
     return refs
 
 
+def make_vllm_layer_range_refs_from_ids(
+    request_id: str,
+    block_ids: Iterable[int],
+    kv_caches: Iterable,
+    cpu_slot_start: int = 0,
+) -> list[VllmKVBlockRef]:
+    """Create byte-range refs for vLLM tensors shaped like [kv, blocks, ...].
+
+    vLLM commonly stores K and V in dimension 0 and block id in dimension 1.
+    The K and V ranges for the same block are not necessarily contiguous, so a
+    logical KV block can become more than one TurboBus byte range.
+    """
+
+    refs = []
+    block_ids = [int(block_id) for block_id in block_ids]
+    for layer_id, kv_cache in enumerate(kv_caches):
+        lane_count = int(kv_cache.shape[0]) if len(kv_cache.shape) >= 3 else 1
+        block_bytes = block_bytes_from_vllm_kv_tensor(kv_cache)
+        for index, block_id in enumerate(block_ids):
+            for lane_id in range(lane_count):
+                cpu_slot = cpu_slot_start + index * lane_count + lane_id
+                if lane_count == 1:
+                    gpu_offset = block_id * block_bytes
+                    lane = None
+                else:
+                    gpu_offset = int(
+                        (lane_id * kv_cache.stride(0) + block_id * kv_cache.stride(1))
+                        * kv_cache.element_size()
+                    )
+                    lane = lane_id
+                refs.append(
+                    VllmKVBlockRef(
+                        request_id=request_id,
+                        group_id=layer_id,
+                        block_id=block_id,
+                        cpu_slot=cpu_slot,
+                        gpu_slot=block_id,
+                        lane_id=lane,
+                        gpu_offset=gpu_offset,
+                    )
+                )
+    return refs
+
+
 block_name = vllm_block_name
 make_block_refs_from_ids = make_vllm_block_refs_from_ids
 make_layer_groups_from_kv_caches = make_vllm_layer_groups_from_kv_caches
 make_layer_block_refs_from_ids = make_vllm_layer_block_refs_from_ids
+make_layer_range_refs_from_ids = make_vllm_layer_range_refs_from_ids

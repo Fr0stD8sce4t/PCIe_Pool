@@ -281,12 +281,33 @@ def _validate_range_tensors(
     target_gpu: int,
     direction: str,
 ) -> tuple[int, int]:
-    _validate_transfer_tensors(cpu_tensor, gpu_tensor, target_gpu, direction)
+    _validate_tensor_pair(cpu_tensor, gpu_tensor, target_gpu)
     cpu_bytes = cpu_tensor.numel() * cpu_tensor.element_size()
     gpu_bytes = gpu_tensor.numel() * gpu_tensor.element_size()
     if direction == "h2d":
         return cpu_bytes, gpu_bytes
+    if direction != "d2h":
+        raise ValueError(f"unsupported transfer direction: {direction}")
     return gpu_bytes, cpu_bytes
+
+
+def _validate_tensor_pair(cpu_tensor, gpu_tensor, target_gpu: int) -> None:
+    if torch is None:
+        raise RuntimeError("PyTorch is required for tensor based TurboBus APIs")
+    if not isinstance(cpu_tensor, torch.Tensor):
+        raise TypeError("cpu_tensor must be a torch.Tensor")
+    if not isinstance(gpu_tensor, torch.Tensor):
+        raise TypeError("gpu_tensor must be a torch.Tensor")
+    if cpu_tensor.device.type != "cpu":
+        raise ValueError("cpu_tensor must be on CPU")
+    if not cpu_tensor.is_pinned():
+        raise ValueError("cpu_tensor must be pinned memory")
+    if gpu_tensor.device.type != "cuda":
+        raise ValueError("gpu_tensor must be on CUDA")
+    if gpu_tensor.device.index != target_gpu:
+        raise ValueError("gpu_tensor must be on the runtime target_gpu")
+    if not cpu_tensor.is_contiguous() or not gpu_tensor.is_contiguous():
+        raise ValueError("cpu_tensor and gpu_tensor must be contiguous")
 
 
 def _native_ranges(

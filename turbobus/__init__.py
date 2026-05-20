@@ -21,6 +21,7 @@ from .vllm import (
     make_vllm_block_refs_from_ids,
     make_vllm_layer_block_refs_from_ids,
     make_vllm_layer_groups_from_kv_caches,
+    make_vllm_layer_range_refs_from_ids,
     vllm_block_name,
 )
 from .vllm_integration import (
@@ -55,5 +56,6 @@ __all__ = [
     "make_vllm_block_refs_from_ids",
     "make_vllm_layer_block_refs_from_ids",
     "make_vllm_layer_groups_from_kv_caches",
+    "make_vllm_layer_range_refs_from_ids",
     "vllm_block_name",
 ]

@@ -170,13 +170,17 @@ class VllmTurboBusIntegration:
             cpu_slot_start=cpu_slot_start,
         )
 
-    def restore_request_prefix(self, request_id: str, *, cpu_slot_start: int = 0) -> None:
+    def restore_request_prefix(self, request_id: str, *, cpu_slot_start: int = 0) -> list:
         adapter = self._require_adapter()
-        adapter.restore_prefix(self.make_refs_for_request(request_id, cpu_slot_start=cpu_slot_start))
+        return adapter.restore_prefix(
+            self.make_refs_for_request(request_id, cpu_slot_start=cpu_slot_start)
+        )
 
-    def save_request_prefix(self, request_id: str, *, cpu_slot_start: int = 0) -> None:
+    def save_request_prefix(self, request_id: str, *, cpu_slot_start: int = 0) -> list:
         adapter = self._require_adapter()
-        adapter.save_prefix(self.make_refs_for_request(request_id, cpu_slot_start=cpu_slot_start))
+        return adapter.save_prefix(
+            self.make_refs_for_request(request_id, cpu_slot_start=cpu_slot_start)
+        )
 
     def _refresh_adapter(self) -> None:
         if not self.state.kv_caches or self._cpu_backings is None:
@@ -215,4 +219,3 @@ def extract_vllm_block_ids(blocks) -> tuple[tuple[int, ...], ...]:
         else:
             groups.append(tuple(int(block_id) for block_id in group_ids if block_id is not None))
     return tuple(groups)
-

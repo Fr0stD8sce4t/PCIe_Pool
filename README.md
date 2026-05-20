@@ -223,6 +223,30 @@ integration.restore_request_prefix(request_id)
 This is intentionally narrow: it moves real vLLM KV slots, but does not replace
 vLLM's scheduler or cache manager.
 
+Use the real vLLM restore check to prove TurboBus is moving vLLM-owned KV cache
+bytes, not simulator buffers:
+
+```bash
+python examples/vllm_turbobus_restore.py \
+  --model ~/huggingface/Qwen3-0.6B \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --restore-blocks 1 \
+  --iterations 3 \
+  --chunk-bytes 4194304 \
+  --profile-bytes 16777216 \
+  --mode all \
+  --enforce-eager
+```
+
+The script starts vLLM once, captures real `GPUModelRunner.kv_caches` tensors
+and real `KVCacheManager.allocate_slots()` block ids, then runs direct, relay,
+and pool save/zero/restore/verify on the same vLLM GPU slots. The vLLM engine
+must run in-process so the hook can see the real Python tensor objects; the
+script disables vLLM V1 multiprocessing by default.
+For tensors shaped like `(2, num_blocks, ...)`, it transfers K and V lanes as
+separate byte ranges for each logical KV block.
+
 ```python
 opts = turbobus.RuntimeOptions.from_tuning_json(
     "benchmarks/results/tune_gpu6_relay5.json"

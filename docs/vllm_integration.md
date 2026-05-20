@@ -114,14 +114,56 @@ The hook records real `kv_caches` tensors and allocated block ids, then exposes
 `restore_request_prefix()` and `save_request_prefix()` for those real vLLM
 slots.
 
+## Real KV Slot Restore Check
+
+`examples/vllm_turbobus_restore.py` is the first real vLLM test entry point.
+It does not change vLLM scheduling. It starts vLLM, captures the real
+`GPUModelRunner.kv_caches` tensors and the real block ids returned by
+`KVCacheManager.allocate_slots()`, then runs this correctness loop on those
+same GPU slots:
+
+```text
+save real vLLM KV block -> pinned CPU backing
+zero the same vLLM GPU KV block
+restore from pinned CPU backing -> same vLLM GPU block
+save again and compare CPU bytes
+```
+
+Run on the GPU6/GPU5 test pair:
+
+```bash
+python examples/vllm_turbobus_restore.py \
+  --model ~/huggingface/Qwen3-0.6B \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --restore-blocks 1 \
+  --iterations 3 \
+  --chunk-bytes 4194304 \
+  --profile-bytes 16777216 \
+  --mode all \
+  --enforce-eager
+```
+
+The script starts vLLM once and reuses the same captured KV block ids for
+direct, relay, and pool modes. This keeps the comparison on the same real vLLM
+KV cache slots. It disables vLLM V1 multiprocessing by default because the hook
+must run in the same Python process as the vLLM engine to access the actual
+tensor objects.
+
+For vLLM tensors shaped like `(2, num_blocks, ...)`, K and V live in separate
+lanes. The script maps one logical KV block into separate K/V byte ranges, so
+the correctness check covers both lanes instead of assuming the block is one
+contiguous byte range.
+
 ## Success Criteria
 
 The first vLLM integration passes when:
 
-- a fixed prompt produces the same output with and without TurboBus restore;
+- `examples/vllm_turbobus_restore.py` reports `verified=True`;
 - direct, relay, and pool modes restore the same block list;
 - pooled restore splits chunks across direct and relay paths;
-- TTFT improves for restored prefix/session requests;
+- TTFT improves for restored prefix/session requests after the correctness
+  check is stable;
 - the patch touches only a narrow restore hook and adapter code.
 
 ## Non-Goals

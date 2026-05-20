@@ -8,6 +8,7 @@ from turbobus.vllm import (
     VllmKVSlotAdapter,
     block_bytes_from_vllm_kv_tensor,
     make_vllm_layer_block_refs_from_ids,
+    make_vllm_layer_range_refs_from_ids,
 )
 
 
@@ -71,8 +72,8 @@ class InferenceKVSlotAdapterTest(unittest.TestCase):
         slots = make_contiguous_kv_slots("prefix", 2, 32)
 
         adapter.register_slots(slots)
-        adapter.restore_prefix(["prefix0", "prefix1"])
-        adapter.save_prefix(["prefix0", "prefix1"])
+        restore_handles = adapter.restore_prefix(["prefix0", "prefix1"])
+        save_handles = adapter.save_prefix(["prefix0", "prefix1"])
 
         self.assertEqual(runtime.calls[0][0], "prefetch_ranges")
         self.assertEqual(
@@ -92,6 +93,8 @@ class InferenceKVSlotAdapterTest(unittest.TestCase):
         )
         self.assertEqual(runtime.calls[0][4].wait_calls, 1)
         self.assertEqual(runtime.calls[1][4].wait_calls, 1)
+        self.assertEqual(len(restore_handles), 2)
+        self.assertEqual(len(save_handles), 2)
 
 
 class VllmKVSlotAdapterTest(unittest.TestCase):
@@ -108,6 +111,23 @@ class VllmKVSlotAdapterTest(unittest.TestCase):
             [(0, 1, 0, 1), (0, 3, 1, 3), (1, 1, 0, 1), (1, 3, 1, 3)],
         )
 
+    def test_layer_range_refs_expand_kv_lanes(self) -> None:
+        tensor = FakeTensor(
+            shape=(2, 8, 4),
+            stride=(32, 4, 1),
+            element_size=2,
+        )
+
+        refs = make_vllm_layer_range_refs_from_ids("req0", [1], [tensor])
+
+        self.assertEqual(len(refs), 2)
+        self.assertEqual(refs[0].lane_id, 0)
+        self.assertEqual(refs[0].cpu_slot, 0)
+        self.assertEqual(refs[0].gpu_offset, 8)
+        self.assertEqual(refs[1].lane_id, 1)
+        self.assertEqual(refs[1].cpu_slot, 1)
+        self.assertEqual(refs[1].gpu_offset, 72)
+
     def test_restore_groups_refs_by_layer(self) -> None:
         runtime = FakeRuntime()
         group0 = VllmKVGroup(0, FakeTensor(128), object(), block_bytes=32)
@@ -116,11 +136,15 @@ class VllmKVSlotAdapterTest(unittest.TestCase):
         refs = make_vllm_layer_block_refs_from_ids("req0", [1], layer_count=2)
 
         adapter.restore_prefix(refs)
+        adapter.save_prefix(refs)
+        adapter.restore_prefix(refs)
 
-        self.assertEqual(len(runtime.calls), 2)
+        self.assertEqual(len(runtime.calls), 6)
         self.assertEqual(runtime.calls[0][0], "prefetch_ranges")
         self.assertEqual(runtime.calls[0][3], [{"src_offset": 0, "dst_offset": 32, "bytes": 32}])
         self.assertEqual(runtime.calls[1][3], [{"src_offset": 0, "dst_offset": 32, "bytes": 32}])
+        self.assertEqual(runtime.calls[2][0], "evict_ranges")
+        self.assertEqual(runtime.calls[4][0], "prefetch_ranges")
 
 
 if __name__ == "__main__":
