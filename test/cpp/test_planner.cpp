@@ -92,6 +92,24 @@ int main() {
   assert(filtered_plan.assignments.size() == 1);
   assert(filtered_plan.assignments.front().path.kind == turbobus::PathKind::DirectH2D);
 
+  const auto d2h_plan =
+      planner.Plan(total_bytes, chunk_bytes, profile, turbobus::TransferMode::Pool,
+                   2, 0.0, 0.0, turbobus::TransferDirection::D2H);
+  assert(d2h_plan.assignments.size() == 2);
+  bool has_direct_d2h = false;
+  bool has_relay_d2h = false;
+  for (const auto& assignment : d2h_plan.assignments) {
+    assert(assignment.path.direction == turbobus::TransferDirection::D2H);
+    if (assignment.path.kind == turbobus::PathKind::DirectD2H) {
+      has_direct_d2h = true;
+    }
+    if (assignment.path.kind == turbobus::PathKind::RelayP2PThenD2H) {
+      has_relay_d2h = true;
+    }
+  }
+  assert(has_direct_d2h);
+  assert(has_relay_d2h);
+
   std::cout << "planner test passed\n";
   return 0;
 }

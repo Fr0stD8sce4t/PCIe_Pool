@@ -1,5 +1,6 @@
 #include "turbobus/runtime.h"
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace turbobus {
@@ -12,6 +13,7 @@ void TurboBusRuntime::Init(int target_device, const std::vector<int>& relay_devi
   target_device_ = target_device;
   requested_relays_ = relay_devices;
   profile_ = {};
+  planner_profile_ = {};
   last_plan_ = {};
   has_profile_ = false;
 
@@ -34,6 +36,7 @@ ProfileResult TurboBusRuntime::Profile(std::size_t bytes, bool force) {
   }
   if (force || !has_profile_ || !options_.profile_cache_enabled) {
     profile_ = profiler_.Profile(target_device_, enabled_relays_, bytes);
+    planner_profile_ = profile_;
     has_profile_ = true;
   }
   return profile_;
@@ -45,6 +48,15 @@ void TurboBusRuntime::SetTransferMode(TransferMode mode) {
 
 TransferHandle TurboBusRuntime::FetchToGpu(void* host_ptr, void* target_gpu_ptr,
                                            std::size_t bytes) {
+  return SubmitTransfer(host_ptr, target_gpu_ptr, bytes, TransferDirection::H2D);
+}
+
+TransferHandle TurboBusRuntime::OffloadToCpu(void* target_gpu_ptr, void* host_ptr,
+                                             std::size_t bytes) {
+  return SubmitTransfer(target_gpu_ptr, host_ptr, bytes, TransferDirection::D2H);
+}
+
+void TurboBusRuntime::EnsureProfile() {
   if (!initialized_) {
     throw std::runtime_error("runtime is not initialized");
   }
@@ -64,31 +76,51 @@ TransferHandle TurboBusRuntime::FetchToGpu(void* host_ptr, void* target_gpu_ptr,
       relay.p2p_enabled = true;
       profile_.relays.push_back(relay);
     }
+    planner_profile_ = profile_;
     has_profile_ = true;
   }
+}
 
-  BufferView host;
-  host.ptr = host_ptr;
-  host.bytes = bytes;
-  host.kind = MemoryKind::HostPinned;
-  host.device = kHostDevice;
+TransferHandle TurboBusRuntime::SubmitTransfer(void* source_ptr, void* destination_ptr,
+                                               std::size_t bytes,
+                                               TransferDirection direction) {
+  EnsureProfile();
 
-  BufferView target;
-  target.ptr = target_gpu_ptr;
-  target.bytes = bytes;
-  target.kind = MemoryKind::Device;
-  target.device = target_device_;
+  BufferView source;
+  source.ptr = source_ptr;
+  source.bytes = bytes;
+  source.device =
+      direction == TransferDirection::H2D ? kHostDevice : target_device_;
+  source.kind = direction == TransferDirection::H2D ? MemoryKind::HostPinned
+                                                    : MemoryKind::Device;
 
-  last_plan_ = planner_.Plan(bytes, options_.chunk_bytes, profile_,
+  BufferView destination;
+  destination.ptr = destination_ptr;
+  destination.bytes = bytes;
+  destination.device =
+      direction == TransferDirection::H2D ? target_device_ : kHostDevice;
+  destination.kind = direction == TransferDirection::H2D ? MemoryKind::Device
+                                                         : MemoryKind::HostPinned;
+
+  const auto& plan_profile =
+      options_.enable_dynamic_weights ? planner_profile_ : profile_;
+  last_plan_ = planner_.Plan(bytes, options_.chunk_bytes, plan_profile,
                              options_.transfer_mode,
                              options_.min_chunks_for_relay,
                              options_.relay_min_effective_bw_gbps,
-                             options_.relay_min_direct_ratio);
-  return executor_.Submit(host, target, last_plan_);
+                             options_.relay_min_direct_ratio,
+                             direction);
+  if (direction == TransferDirection::H2D) {
+    return executor_.Submit(source, destination, last_plan_);
+  }
+  return executor_.SubmitD2H(source, destination, last_plan_);
 }
 
 void TurboBusRuntime::Wait(const TransferHandle& handle) {
   executor_.Wait(handle);
+  if (options_.enable_dynamic_weights) {
+    UpdateDynamicWeights(executor_.GetStats(handle));
+  }
 }
 
 TransferStats TurboBusRuntime::GetStats(const TransferHandle& handle) const {
@@ -99,8 +131,43 @@ const ProfileResult& TurboBusRuntime::CachedProfile() const {
   return profile_;
 }
 
+const ProfileResult& TurboBusRuntime::PlannerProfile() const {
+  return planner_profile_;
+}
+
 const TransferPlan& TurboBusRuntime::LastPlan() const {
   return last_plan_;
+}
+
+void TurboBusRuntime::UpdateDynamicWeights(const TransferStats& stats) {
+  if (!has_profile_) {
+    return;
+  }
+  const double alpha = std::clamp(options_.dynamic_weight_alpha, 0.0, 1.0);
+  for (const auto& path : stats.path_stats) {
+    if (path.gib_per_second <= 0.0 || path.direction != TransferDirection::H2D) {
+      continue;
+    }
+    if (path.relay_device == kHostDevice) {
+      planner_profile_.direct_h2d_bw_gbps =
+          alpha * path.gib_per_second +
+          (1.0 - alpha) * planner_profile_.direct_h2d_bw_gbps;
+      continue;
+    }
+    auto relay_it = std::find_if(
+        planner_profile_.relays.begin(), planner_profile_.relays.end(),
+        [&](const RelayProfile& relay) {
+          return relay.relay_device == path.relay_device;
+        });
+    if (relay_it == planner_profile_.relays.end()) {
+      continue;
+    }
+    relay_it->h2d_bw_gbps =
+        alpha * path.gib_per_second + (1.0 - alpha) * relay_it->h2d_bw_gbps;
+    relay_it->effective_bw_gbps =
+        alpha * path.gib_per_second +
+        (1.0 - alpha) * relay_it->effective_bw_gbps;
+  }
 }
 
 }  // namespace turbobus

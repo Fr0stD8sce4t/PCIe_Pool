@@ -51,6 +51,8 @@ class RuntimeOptions:
     min_chunks_for_relay: int = 2
     relay_min_effective_bw_gbps: float = 0.0
     relay_min_direct_ratio: float = 0.0
+    enable_dynamic_weights: bool = False
+    dynamic_weight_alpha: float = 0.25
 
     @classmethod
     def from_tuning_json(cls, path: str | Path) -> "RuntimeOptions":
@@ -88,6 +90,8 @@ class RuntimeOptions:
         options.min_chunks_for_relay = self.min_chunks_for_relay
         options.relay_min_effective_bw_gbps = self.relay_min_effective_bw_gbps
         options.relay_min_direct_ratio = self.relay_min_direct_ratio
+        options.enable_dynamic_weights = self.enable_dynamic_weights
+        options.dynamic_weight_alpha = self.dynamic_weight_alpha
         return options
 
 
@@ -132,6 +136,9 @@ class Runtime:
     def cached_profile(self):
         return self._runtime.cached_profile()
 
+    def planner_profile(self):
+        return self._runtime.planner_profile()
+
     def last_plan(self):
         return self._runtime.last_plan()
 
@@ -144,28 +151,32 @@ class Runtime:
 
     def fetch_to_gpu(self, cpu_tensor, gpu_tensor):
         _require_torch()
-        if not isinstance(cpu_tensor, torch.Tensor):
-            raise TypeError("cpu_tensor must be a torch.Tensor")
-        if not isinstance(gpu_tensor, torch.Tensor):
-            raise TypeError("gpu_tensor must be a torch.Tensor")
-        if cpu_tensor.device.type != "cpu":
-            raise ValueError("cpu_tensor must be on CPU")
-        if not cpu_tensor.is_pinned():
-            raise ValueError("cpu_tensor must be pinned memory")
-        if gpu_tensor.device.type != "cuda":
-            raise ValueError("gpu_tensor must be on CUDA")
-        if gpu_tensor.device.index != self.target_gpu:
-            raise ValueError("gpu_tensor must be on the runtime target_gpu")
-        if not cpu_tensor.is_contiguous() or not gpu_tensor.is_contiguous():
-            raise ValueError("cpu_tensor and gpu_tensor must be contiguous")
-
-        bytes_to_copy = cpu_tensor.numel() * cpu_tensor.element_size()
-        if gpu_tensor.numel() * gpu_tensor.element_size() < bytes_to_copy:
-            raise ValueError("gpu_tensor is smaller than cpu_tensor")
+        bytes_to_copy = _validate_transfer_tensors(
+            cpu_tensor=cpu_tensor,
+            gpu_tensor=gpu_tensor,
+            target_gpu=self.target_gpu,
+            direction="h2d",
+        )
 
         handle = self._runtime.fetch_to_gpu(
             int(cpu_tensor.data_ptr()),
             int(gpu_tensor.data_ptr()),
+            int(bytes_to_copy),
+        )
+        return TransferHandle(self, handle)
+
+    def offload_to_cpu(self, gpu_tensor, cpu_tensor):
+        _require_torch()
+        bytes_to_copy = _validate_transfer_tensors(
+            cpu_tensor=cpu_tensor,
+            gpu_tensor=gpu_tensor,
+            target_gpu=self.target_gpu,
+            direction="d2h",
+        )
+
+        handle = self._runtime.offload_to_cpu(
+            int(gpu_tensor.data_ptr()),
+            int(cpu_tensor.data_ptr()),
             int(bytes_to_copy),
         )
         return TransferHandle(self, handle)
@@ -177,6 +188,37 @@ class Runtime:
 
     def stats(self, handle: "TransferHandle"):
         return self._runtime.stats(handle.native)
+
+
+def _validate_transfer_tensors(cpu_tensor, gpu_tensor, target_gpu: int, direction: str) -> int:
+    if direction not in {"h2d", "d2h"}:
+        raise ValueError(f"unsupported transfer direction: {direction}")
+    if torch is None:
+        raise RuntimeError("PyTorch is required for tensor based TurboBus APIs")
+    if not isinstance(cpu_tensor, torch.Tensor):
+        raise TypeError("cpu_tensor must be a torch.Tensor")
+    if not isinstance(gpu_tensor, torch.Tensor):
+        raise TypeError("gpu_tensor must be a torch.Tensor")
+    if cpu_tensor.device.type != "cpu":
+        raise ValueError("cpu_tensor must be on CPU")
+    if not cpu_tensor.is_pinned():
+        raise ValueError("cpu_tensor must be pinned memory")
+    if gpu_tensor.device.type != "cuda":
+        raise ValueError("gpu_tensor must be on CUDA")
+    if gpu_tensor.device.index != target_gpu:
+        raise ValueError("gpu_tensor must be on the runtime target_gpu")
+    if not cpu_tensor.is_contiguous() or not gpu_tensor.is_contiguous():
+        raise ValueError("cpu_tensor and gpu_tensor must be contiguous")
+
+    if direction == "h2d":
+        bytes_to_copy = cpu_tensor.numel() * cpu_tensor.element_size()
+        if gpu_tensor.numel() * gpu_tensor.element_size() < bytes_to_copy:
+            raise ValueError("gpu_tensor is smaller than cpu_tensor")
+    else:
+        bytes_to_copy = gpu_tensor.numel() * gpu_tensor.element_size()
+        if cpu_tensor.numel() * cpu_tensor.element_size() < bytes_to_copy:
+            raise ValueError("cpu_tensor is smaller than gpu_tensor")
+    return bytes_to_copy
 
 
 class TransferHandle:
@@ -235,6 +277,7 @@ def transfer_plan_to_dict(plan) -> dict:
             {
                 "path": {
                     "kind": path.kind,
+                    "direction": path.direction,
                     "target_device": path.target_device,
                     "relay_device": path.relay_device,
                     "h2d_bw_gbps": path.h2d_bw_gbps,

@@ -84,6 +84,11 @@ The Python wrapper only accepts contiguous PyTorch tensors:
 - destination tensor must be CUDA memory on the runtime target GPU
 - copy size is derived from the source tensor byte size
 
+The runtime also exposes `offload_to_cpu(gpu_tensor, cpu_tensor)` for D2H
+offload into pinned CPU memory. The first D2H implementation mirrors the H2D
+planner shape: direct copies use `target GPU -> CPU pinned`, and relay copies
+use `target GPU -> relay GPU staging -> CPU pinned`.
+
 The native extension receives raw tensor pointers and byte counts.
 
 `TransferHandle.wait()` populates a lightweight stats object with total bytes,
@@ -94,9 +99,16 @@ direct/relay chunk counts. `gib_per_second` is based on CUDA event timing;
 completion.
 
 `TransferStats.path_stats` records one entry per planned path assignment. Each
-entry includes the path kind, relay device, bytes, chunks, CUDA elapsed time, and
-path-local GiB/s. For a pooled direct + relay transfer this makes it possible to
-see which path is the bottleneck without changing the transfer schedule.
+entry includes the path kind, transfer direction, relay device, bytes, chunks,
+CUDA elapsed time, and path-local GiB/s. For a pooled direct + relay transfer
+this makes it possible to see which path is the bottleneck without changing the
+transfer schedule.
+
+Dynamic weights can be enabled through `RuntimeOptions.enable_dynamic_weights`.
+When enabled, completed H2D `path_stats` update a per-runtime planner profile
+using an exponential moving average controlled by `dynamic_weight_alpha`. The
+default is disabled, so profile-based planning and transfer behavior stay
+unchanged unless requested.
 
 The runtime keeps the last generated `TransferPlan`. Python callers can inspect
 it through `Runtime.last_plan_dict()` to see which chunks used the direct path

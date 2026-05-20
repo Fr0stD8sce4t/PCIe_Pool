@@ -50,6 +50,7 @@ def stats_to_dict(stats) -> dict:
     path_stats = [
         {
             "kind": path.kind,
+            "direction": path.direction,
             "target_device": path.target_device,
             "relay_device": path.relay_device,
             "bytes": path.bytes,
@@ -72,6 +73,41 @@ def stats_to_dict(stats) -> dict:
         "per_relay": per_relay,
         "path_stats": path_stats,
     }
+
+
+def path_key(path: dict) -> tuple[str, int, int]:
+    return (path["kind"], path["target_device"], path["relay_device"])
+
+
+def print_path_stats_summary(mode: str, samples: list[dict]) -> None:
+    by_path: dict[tuple[str, int, int], list[dict]] = {}
+    for sample in samples:
+        for path in sample["path_stats"]:
+            by_path.setdefault(path_key(path), []).append(path)
+
+    for (kind, target_device, relay_device), paths in sorted(by_path.items()):
+        path_bandwidths = [path["gib_per_second"] for path in paths]
+        path_milliseconds = [path["cuda_elapsed_ms"] for path in paths]
+        bytes_values = [path["bytes"] for path in paths]
+        chunks_values = [path["chunks"] for path in paths]
+        print(
+            "mode",
+            mode,
+            "path",
+            kind,
+            "target",
+            target_device,
+            "relay",
+            relay_device,
+            "median_path_gib_per_second",
+            statistics.median(path_bandwidths),
+            "median_path_cuda_milliseconds",
+            statistics.median(path_milliseconds),
+            "median_path_bytes",
+            int(statistics.median(bytes_values)),
+            "median_path_chunks",
+            int(statistics.median(chunks_values)),
+        )
 
 
 def run_mode(runtime: turbobus.Runtime, cpu, gpu, mode: str, warmup: int, iterations: int):
@@ -107,6 +143,7 @@ def run_mode(runtime: turbobus.Runtime, cpu, gpu, mode: str, warmup: int, iterat
     sample_bandwidths = [sample["gib_per_second"] for sample in samples]
     median = statistics.median(sample_bandwidths) if sample_bandwidths else 0.0
     print("mode", mode, "median_gib_per_second", median)
+    print_path_stats_summary(mode, samples)
     return {
         "mode": mode,
         "median_gib_per_second": median,
@@ -134,6 +171,8 @@ def main() -> None:
     parser.add_argument("--mode", choices=["pool", "direct", "relay", "all"], default="pool")
     parser.add_argument("--json-output")
     parser.add_argument("--verify", action="store_true")
+    parser.add_argument("--dynamic-weights", action="store_true")
+    parser.add_argument("--dynamic-weight-alpha", type=float, default=0.25)
     args = parser.parse_args()
 
     relays = parse_relay_gpus(args.relay_gpus)
@@ -142,7 +181,11 @@ def main() -> None:
     cpu = torch.arange(args.bytes, dtype=torch.uint8, pin_memory=True)
     gpu = torch.empty(args.bytes, dtype=torch.uint8, device=f"cuda:{args.target_gpu}")
 
-    options = turbobus.RuntimeOptions(chunk_bytes=args.chunk_bytes)
+    options = turbobus.RuntimeOptions(
+        chunk_bytes=args.chunk_bytes,
+        enable_dynamic_weights=args.dynamic_weights,
+        dynamic_weight_alpha=args.dynamic_weight_alpha,
+    )
     runtime = turbobus.Runtime(target_gpu=args.target_gpu, relay_gpus=relays, options=options)
     profile = runtime.profile(args.profile_bytes)
     result = {
@@ -155,6 +198,8 @@ def main() -> None:
             "warmup": args.warmup,
             "iterations": args.iterations,
             "mode": args.mode,
+            "dynamic_weights": args.dynamic_weights,
+            "dynamic_weight_alpha": args.dynamic_weight_alpha,
         },
         "profile": profile_to_dict(profile),
         "modes": {},
@@ -169,6 +214,8 @@ def main() -> None:
     print("warmup", args.warmup)
     print("iterations", args.iterations)
     print("mode", args.mode)
+    print("dynamic_weights", args.dynamic_weights)
+    print("dynamic_weight_alpha", args.dynamic_weight_alpha)
     print("direct_h2d_bw_gbps", profile.direct_h2d_bw_gbps)
     for relay in profile.relays:
         print(

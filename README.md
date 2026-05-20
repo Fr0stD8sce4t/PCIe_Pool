@@ -66,7 +66,7 @@ handle = rt.fetch_to_gpu(cpu_tensor, gpu_tensor)
 handle.wait()
 print(handle.stats.gib_per_second)
 for path in handle.stats.path_stats:
-    print(path.kind, path.relay_device, path.gib_per_second)
+    print(path.kind, path.direction, path.relay_device, path.gib_per_second)
 print(rt.last_plan_dict())
 ```
 
@@ -91,6 +91,9 @@ python benchmarks/bandwidth_pool.py \
   --verify \
   --json-output benchmarks/results/gpu6_relay5.json
 ```
+
+Add `--dynamic-weights` to let repeated benchmark iterations update planner
+weights from completed H2D `path_stats`.
 
 Use physical CUDA device IDs. Avoid setting `CUDA_VISIBLE_DEVICES` in a way that
 renumbers GPUs unless the runtime and PyTorch tensors use the same remapped IDs.
@@ -124,4 +127,21 @@ To skip weak relay paths, set conservative planner thresholds:
 ```python
 opts.relay_min_direct_ratio = 0.8
 opts.relay_min_effective_bw_gbps = 6.0
+```
+
+To let the planner adapt to recent per-path transfer timings, enable dynamic
+weights explicitly:
+
+```python
+opts.enable_dynamic_weights = True
+opts.dynamic_weight_alpha = 0.25
+```
+
+This is off by default, so existing transfer behavior stays unchanged.
+
+For GPU-to-CPU offload into pinned host memory:
+
+```python
+handle = rt.offload_to_cpu(gpu_tensor, cpu_tensor)
+handle.wait()
 ```

@@ -12,12 +12,15 @@ namespace turbobus {
 std::vector<Path> ChunkPlanner::BuildPaths(const ProfileResult& profile,
                                            TransferMode mode,
                                            double relay_min_effective_bw_gbps,
-                                           double relay_min_direct_ratio) const {
+                                           double relay_min_direct_ratio,
+                                           TransferDirection direction) const {
   std::vector<Path> paths;
 
   if (mode != TransferMode::RelayOnly && profile.direct_h2d_bw_gbps > 0.0) {
     Path direct;
-    direct.kind = PathKind::DirectH2D;
+    direct.kind = direction == TransferDirection::H2D ? PathKind::DirectH2D
+                                                      : PathKind::DirectD2H;
+    direct.direction = direction;
     direct.target_device = profile.target_device;
     direct.relay_device = kHostDevice;
     direct.h2d_bw_gbps = profile.direct_h2d_bw_gbps;
@@ -41,7 +44,9 @@ std::vector<Path> ChunkPlanner::BuildPaths(const ProfileResult& profile,
         continue;
       }
       Path path;
-      path.kind = PathKind::RelayH2DThenP2P;
+      path.kind = direction == TransferDirection::H2D ? PathKind::RelayH2DThenP2P
+                                                      : PathKind::RelayP2PThenD2H;
+      path.direction = direction;
       path.target_device = relay.target_device;
       path.relay_device = relay.relay_device;
       path.h2d_bw_gbps = relay.h2d_bw_gbps;
@@ -59,7 +64,8 @@ TransferPlan ChunkPlanner::Plan(std::size_t total_bytes, std::size_t chunk_bytes
                                 const ProfileResult& profile, TransferMode mode,
                                 std::size_t min_chunks_for_relay,
                                 double relay_min_effective_bw_gbps,
-                                double relay_min_direct_ratio) const {
+                                double relay_min_direct_ratio,
+                                TransferDirection direction) const {
   if (total_bytes == 0) {
     return {};
   }
@@ -73,7 +79,7 @@ TransferPlan ChunkPlanner::Plan(std::size_t total_bytes, std::size_t chunk_bytes
   }
 
   auto paths = BuildPaths(profile, mode, relay_min_effective_bw_gbps,
-                          relay_min_direct_ratio);
+                          relay_min_direct_ratio, direction);
   if (paths.empty()) {
     throw std::runtime_error("no enabled transfer path is available");
   }

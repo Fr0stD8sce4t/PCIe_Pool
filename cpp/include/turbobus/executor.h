@@ -21,6 +21,8 @@ class CudaRelayExecutor {
 
   TransferHandle Submit(const BufferView& host, const BufferView& target,
                         const TransferPlan& plan);
+  TransferHandle SubmitD2H(const BufferView& target, const BufferView& host,
+                           const TransferPlan& plan);
 
   void Wait(const TransferHandle& handle);
   TransferStats GetStats(const TransferHandle& handle) const;

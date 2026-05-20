@@ -19,6 +19,13 @@ enum class MemoryKind {
 enum class PathKind {
   DirectH2D,
   RelayH2DThenP2P,
+  DirectD2H,
+  RelayP2PThenD2H,
+};
+
+enum class TransferDirection {
+  H2D,
+  D2H,
 };
 
 enum class TransferStatus {
@@ -49,6 +56,7 @@ struct Chunk {
 
 struct Path {
   PathKind kind = PathKind::DirectH2D;
+  TransferDirection direction = TransferDirection::H2D;
   int target_device = 0;
   int relay_device = kHostDevice;
   double h2d_bw_gbps = 0.0;
@@ -94,10 +102,13 @@ struct RuntimeOptions {
   std::size_t min_chunks_for_relay = 2;
   double relay_min_effective_bw_gbps = 0.0;
   double relay_min_direct_ratio = 0.0;
+  bool enable_dynamic_weights = false;
+  double dynamic_weight_alpha = 0.25;
 };
 
 struct PathStats {
   PathKind kind = PathKind::DirectH2D;
+  TransferDirection direction = TransferDirection::H2D;
   int target_device = 0;
   int relay_device = kHostDevice;
   std::size_t bytes = 0;
