@@ -958,6 +958,46 @@ stall alone. This indicates most of the native CUDA dummy compute is hidden
 behind transfer in this simulator. Under overlap, pooled transfer reaches
 114.267 tokens/s versus 59.556 direct, a 1.919x speedup.
 
+## Request-Level Workload Simulator
+
+Scenario:
+
+This run uses `benchmarks/inference_workload_sim.py`, which adds request
+arrival, prefill, decode steps, round-robin scheduling, GPU KV capacity, and
+cache hit-rate metrics on top of the same `OffloadManager` transfer path. The
+workload uses a burst of eight requests, packed KV storage, native CUDA dummy
+decode compute, and overlap enabled.
+
+Copy summary:
+
+```text
+COPY_SUMMARY_BEGIN
+workload_config target=6 relays=[5] arrival_pattern=burst request_count=8 prompt_blocks=6..10 decode_steps=12..20 scheduler=round_robin access_pattern=sliding blocks_per_step=4 gpu_block_capacity=12 storage_layout=packed block_bytes=16777216 compute_impl=cuda overlap_compute=True mode=all dynamic_weights=True
+workload_scenario type=prefill_decode policy=lru_eviction transfer=evict_then_prefetch_on_decode prefill=produce_kv_on_gpu arrival_interval_ms=0.0 prefill_compute_ms=0.0 decode_compute_ms=0.0 cuda_compute_iterations=2048
+profile direct_h2d_bw_gbps=7.540
+profile_relay relay=5 h2d=7.608 p2p=39.707 effective=7.608 p2p_enabled=True
+workload_mode mode=direct requests_s=4.140 tokens_s=61.058 ttft_p50_ms=180.161 ttft_p95_ms=240.026 decode_p50_ms=17.029 decode_p95_ms=17.440 transfer_p50_ms=16.736 compute_p50_ms=4.328 hit_rate=0.102 prefetch_blocks=424 evict_blocks=436 direct_chunks=3440 relay_chunks=0
+workload_mode mode=relay requests_s=4.103 tokens_s=60.526 ttft_p50_ms=181.587 ttft_p95_ms=242.090 decode_p50_ms=17.170 decode_p95_ms=17.450 transfer_p50_ms=16.895 compute_p50_ms=4.292 hit_rate=0.102 prefetch_blocks=424 evict_blocks=436 direct_chunks=0 relay_chunks=3440
+workload_mode mode=pool requests_s=7.578 tokens_s=111.777 ttft_p50_ms=94.557 ttft_p95_ms=126.257 decode_p50_ms=9.038 decode_p95_ms=9.715 transfer_p50_ms=8.831 compute_p50_ms=4.279 hit_rate=0.102 prefetch_blocks=424 evict_blocks=436 direct_chunks=1720 relay_chunks=1720
+workload_speedup pool_over_direct_tokens_per_second=1.831
+workload_speedup pool_over_relay_tokens_per_second=1.847
+workload_speedup direct_over_pool_ttft_p50=1.905
+COPY_SUMMARY_END
+```
+
+Analysis:
+
+The request-level workload creates sustained KV pressure: GPU cache hit rate is
+only 0.102, with 424 prefetched blocks and 436 evicted blocks. Pool mode keeps
+the expected direct/relay split, 1720 chunks on each path, while direct-only and
+relay-only each move 3440 chunks on one path. Under this workload, pooled
+transfer improves decode throughput from 61.058 to 111.777 tokens/s, a 1.831x
+speedup over direct, and improves request throughput from 4.140 to 7.578
+requests/s. TTFT p50 drops from 180.161 ms to 94.557 ms, a 1.905x improvement.
+This is the first benchmark result that includes request arrival, prefill,
+decode scheduling, cache hit rate, native CUDA compute, and KV offload pressure
+in one self-contained run.
+
 ## Next Implementation Steps
 
 1. Replace the benchmark-only even/odd chunk split with the production

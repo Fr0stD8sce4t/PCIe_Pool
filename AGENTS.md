@@ -105,8 +105,11 @@ Next steps:
    - A request-level workload simulator is available as
      `benchmarks/inference_workload_sim.py`; it models request arrival, prefill,
      decode steps, scheduling, TTFT, request latency, and GPU KV cache hit rate.
-   - Next priority: run and record workload simulator results across direct,
-     relay, and pool modes.
+   - The initial burst workload result is recorded and shows enough KV pressure
+     to compare direct, relay, and pool modes.
+   - Next priority: add workload presets such as `light`, `pressure`, and
+     `long_context`, then add a prefill restore mode that can model prompt KV
+     blocks loaded from CPU instead of always produced on GPU.
    - Compare direct, relay, and pool modes using the same manager API that a
      future vLLM/SGLang connector would call.
 
