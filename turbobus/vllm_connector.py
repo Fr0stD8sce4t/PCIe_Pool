@@ -16,6 +16,8 @@ class VllmConnectorEvent:
     direct_chunks: int
     relay_chunks: int
     bytes: int
+    armed_blocks: int = 0
+    available_blocks: int = 0
 
 
 @dataclass
@@ -67,6 +69,19 @@ class VllmTurboBusConnector:
     ) -> None:
         if self._restore_next_blocks <= 0:
             return
+        self.events.append(
+            VllmConnectorEvent(
+                request_id=event.request_id,
+                operation="allocation",
+                block_count=0,
+                elapsed_ms=0.0,
+                direct_chunks=0,
+                relay_chunks=0,
+                bytes=0,
+                armed_blocks=self._restore_next_blocks,
+                available_blocks=len(event.block_ids),
+            )
+        )
         block_ids = event.block_ids[: self._restore_next_blocks]
         if len(block_ids) < self._restore_next_blocks:
             return

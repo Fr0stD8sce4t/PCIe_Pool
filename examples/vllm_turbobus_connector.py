@@ -89,6 +89,7 @@ def run(args) -> None:
     )
 
     first_prompt = prompt_text(args.prompt, args.prompt_repeat)
+    second_prompt = prompt_text(args.prompt + args.second_prompt_suffix, args.prompt_repeat)
     start = time.perf_counter()
     first_outputs = llm.generate([first_prompt], sampling)
     first_ms = (time.perf_counter() - start) * 1000.0
@@ -106,11 +107,15 @@ def run(args) -> None:
     connector.restore_next_allocation(args.restore_blocks)
 
     start = time.perf_counter()
-    second_outputs = llm.generate([first_prompt], sampling)
+    second_outputs = llm.generate([second_prompt], sampling)
     second_ms = (time.perf_counter() - start) * 1000.0
+    allocation_events = [event for event in connector.events if event.operation == "allocation"]
     restore_events = [event for event in connector.events if event.operation == "restore"]
     if not restore_events:
-        raise RuntimeError("TurboBus restore did not run inside vLLM allocate_slots()")
+        raise RuntimeError(
+            "TurboBus restore did not run inside vLLM allocate_slots(); "
+            f"allocation_events={len(allocation_events)}"
+        )
     restore_event = restore_events[-1]
 
     first_text = first_outputs[0].outputs[0].text if first_outputs[0].outputs else ""
@@ -128,6 +133,7 @@ def run(args) -> None:
         f"model={args.model}",
         f"prompt_repeat={args.prompt_repeat}",
         f"restore_blocks={args.restore_blocks}",
+        f"second_prompt_suffix={args.second_prompt_suffix!r}",
         f"chunk_bytes={args.chunk_bytes}",
         f"mode={args.mode}",
         f"dynamic_weights={args.dynamic_weights}",
@@ -147,7 +153,16 @@ def run(args) -> None:
         f"first_generate_ms={first_ms:.3f}",
         f"second_generate_ms={second_ms:.3f}",
         f"text_match={text_match}",
+        f"allocation_events={len(allocation_events)}",
     )
+    for index, event in enumerate(allocation_events):
+        print(
+            "vllm_connector_allocation",
+            f"index={index}",
+            f"request={event.request_id}",
+            f"armed_blocks={event.armed_blocks}",
+            f"available_blocks={event.available_blocks}",
+        )
     print(
         "vllm_connector_save",
         f"blocks={save_event.block_count}",
@@ -172,6 +187,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Run TurboBus from the real vLLM allocate_slots path")
     parser.add_argument("--model", required=True)
     parser.add_argument("--prompt", default="The capital of France is")
+    parser.add_argument("--second-prompt-suffix", default=" Italy")
     parser.add_argument("--prompt-repeat", type=int, default=64)
     parser.add_argument("--max-tokens", type=int, default=8)
     parser.add_argument("--target-gpu", type=int, required=True)
