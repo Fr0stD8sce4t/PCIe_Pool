@@ -1035,6 +1035,68 @@ p50 drops from 327.402 ms to 169.508 ms, a 1.931x improvement. This result
 covers the prefix/session restore shape that a narrow real-framework POC should
 target first.
 
+## Prefix Restore POC
+
+Scenario:
+
+This run uses `benchmarks/prefix_restore_poc.py`, the first narrow real
+inference POC boundary. It restores prefix/session KV-shaped blocks from pinned
+CPU backing memory into target-GPU slot backing memory through the same
+`OffloadManager.prefetch_many` API that a future connector would call. The run
+uses packed storage, native CUDA dummy compute, overlap enabled, and verification
+enabled.
+
+Command:
+
+```text
+python benchmarks/prefix_restore_poc.py \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --sessions 4 \
+  --blocks-per-session 8 \
+  --restore-blocks 8 \
+  --iterations 5 \
+  --storage-layout packed \
+  --block-bytes 16777216 \
+  --compute-impl cuda \
+  --cuda-compute-iterations 2048 \
+  --overlap-compute \
+  --mode all \
+  --dynamic-weights \
+  --verify
+```
+
+Copy summary:
+
+```text
+COPY_SUMMARY_BEGIN
+poc_config target=6 relays=[5] sessions=4 blocks_per_session=8 restore_blocks=8 iterations=5 storage_layout=packed block_bytes=16777216 compute_impl=cuda overlap_compute=True cuda_compute_elements=16777216 cuda_compute_iterations=2048 mode=all dynamic_weights=True
+poc_scenario type=prefix_session_restore boundary=framework_adjacent transfer=cpu_pinned_prefix_kv_to_gpu_slots policy=no_scheduler_rewrite verify=True note=first_real_inference_poc_boundary
+profile direct_h2d_bw_gbps=7.646
+profile_relay relay=5 h2d=7.651 p2p=39.492 effective=7.651 p2p_enabled=True
+poc_mode mode=direct restore_gib_s=7.105 restore_p50_ms=17.341 restore_p95_ms=18.623 step_p50_ms=17.572 step_p95_ms=19.872 compute_p50_ms=4.270 compute_p95_ms=19.461 restored_blocks=40 direct_chunks=160 relay_chunks=0 verified=True
+poc_mode mode=relay restore_gib_s=7.135 restore_p50_ms=17.483 restore_p95_ms=17.735 step_p50_ms=17.791 step_p95_ms=18.138 compute_p50_ms=4.307 compute_p95_ms=4.368 restored_blocks=40 direct_chunks=0 relay_chunks=160 verified=True
+poc_mode mode=pool restore_gib_s=13.910 restore_p50_ms=8.910 restore_p95_ms=9.372 step_p50_ms=9.093 step_p95_ms=9.867 compute_p50_ms=4.269 compute_p95_ms=4.370 restored_blocks=40 direct_chunks=80 relay_chunks=80 verified=True
+poc_speedup pool_over_direct_restore=1.958
+poc_speedup pool_over_relay_restore=1.949
+COPY_SUMMARY_END
+```
+
+Analysis:
+
+This validates the first real-inference POC boundary. The same prefix restore
+block list works in direct, relay, and pool modes, and `verified=True` confirms
+the restored GPU data matches the pinned CPU backing. Pool mode splits the work
+evenly across direct and relay paths, 80 chunks each, while direct-only and
+relay-only each use 160 chunks on one path. Restore throughput improves from
+7.105 GiB/s direct to 13.910 GiB/s pool, a 1.958x speedup. Restore p50 latency
+drops from 17.341 ms to 8.910 ms, and step p50 with CUDA dummy compute overlap
+drops from 17.572 ms to 9.093 ms.
+
+The direct-mode `compute_p95_ms=19.461` is an outlier in a five-iteration run;
+the direct compute p50 and relay/pool compute p95 values stay around 4.3 ms.
+Future comparisons should use more iterations when measuring tail latency.
+
 ## Next Implementation Steps
 
 1. Replace the benchmark-only even/odd chunk split with the production
@@ -1057,3 +1119,7 @@ target first.
 7. Add basic transfer metrics to `TransferHandle` or a returned stats object.
    `TransferStats` now records bytes, submit-to-complete time, effective GiB/s,
    and direct/relay chunk counts.
+8. Move from the prefix restore POC to a real-model sidecar restore harness.
+   Keep TurboBus outside the framework scheduler: run real model work or a
+   framework-adjacent model step while TurboBus restores prefix/session KV-shaped
+   buffers into target-GPU slots.

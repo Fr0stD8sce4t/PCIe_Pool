@@ -116,7 +116,12 @@ Next steps:
      restore from pinned CPU backing memory into target-GPU KV slots, without
      broad vLLM/SGLang scheduler rewrites.
    - `benchmarks/prefix_restore_poc.py` is the first framework-adjacent harness
-     for that boundary. Use it before attempting external framework patches.
+     for that boundary. The initial GPU6 target + GPU5 relay run passed with
+     verification enabled and showed about 1.96x pooled restore speedup.
+   - Next priority: add a real-model sidecar restore harness. Keep TurboBus
+     outside the framework scheduler, but run real model work or a
+     framework-adjacent model step while TurboBus restores prefix/session
+     KV-shaped buffers into target-GPU slots.
    - Compare direct, relay, and pool modes using the same manager API that a
      future vLLM/SGLang connector would call.
 

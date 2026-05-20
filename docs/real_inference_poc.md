@@ -66,6 +66,11 @@ through `OffloadManager`. Optional CUDA dummy compute runs beside the restore to
 check overlap. This still does not depend on vLLM/SGLang internals, so the
 result is easy to reproduce and debug.
 
+Phase 0 status: passed on the GPU6 target + GPU5 relay test pair. The packed
+prefix restore POC verified restored data, split pooled chunks evenly across
+direct and relay paths, and improved restore throughput from 7.105 GiB/s direct
+to 13.910 GiB/s pool, a 1.958x speedup.
+
 Phase 1 should replace the synthetic GPU backing with addresses that match a
 real framework KV slot layout. Keep the scheduler outside TurboBus.
 
