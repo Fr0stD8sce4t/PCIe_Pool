@@ -59,45 +59,52 @@ Important lessons from local references:
 
 ## Development Roadmap
 
-Prefer small, verifiable steps in this order.
+Prefer small, verifiable steps. The project should be connector-ready for real
+LLM inference later, but should not patch vLLM/SGLang or implement a full KV
+cache manager before the core behavior is tested.
 
-1. Improve observability.
-   - Print concise `path_stats` summaries in benchmark stdout.
-   - Keep detailed `path_stats`, `per_relay`, and `last_plan` in JSON.
-   - Make each benchmark explain which path was the bottleneck.
+Current completed baseline:
 
-2. Add dynamic multipath scheduling.
-   - Add an option such as `enable_dynamic_weights`, defaulting to false.
-   - Maintain per-path EMA bandwidth from completed `path_stats`.
-   - Let the planner use dynamic weights when enabled.
-   - Reduce or disable relay paths that repeatedly underperform.
-   - Preserve default transfer behavior when the option is off.
+- H2D and D2H direct transfers.
+- H2D and D2H relay transfers through a P2P-capable relay GPU.
+- Pooled direct + relay transfer.
+- Chunk planning, path stats, dynamic weights, and JSON/copy summaries.
+- Range batched transfer APIs.
+- A minimal named-block `OffloadStore`.
+- `bandwidth_pool.py` and `kv_offload.py` benchmarks.
 
-3. Complete the transfer engine direction set.
-   - Add D2H direct transfer.
-   - Add D2H relay transfer: `target GPU -> relay GPU -> CPU pinned`.
-   - Expose Python APIs such as `offload_to_cpu`.
-   - Keep H2D behavior unchanged.
+Next steps:
 
-4. Add batched and bucketed transfer APIs.
-   - Support submitting multiple tensor/block ranges in one call.
-   - Use bucket sizing and optional double buffering for large objects.
-   - Keep the single contiguous tensor API as the simple baseline.
+1. Make the Python offload object layer reusable by future connectors.
+   - Keep the C++/CUDA runtime as a transfer engine only.
+   - Keep request, decode-step, and KV-cache policy out of the CUDA executor.
+   - Add connector-shaped concepts at the Python layer: block id, CPU backing,
+     GPU slot, block state, async handle, and per-block stats.
+   - Keep `OffloadStore` backward compatible while it evolves toward an
+     `OffloadManager` / `KVBlockStore` style API.
 
-5. Add a minimal offload object layer.
-   - Add an `OffloadStore` or equivalent Python API for named tensors/blocks.
-   - Store data in pinned CPU backing memory.
-   - Provide async `prefetch` and `evict` handles.
-   - Track stats per tensor/block/path.
+2. Add batch block operations on top of the existing transfer APIs.
+   - Provide `prefetch_many(names)` and `evict_many(names)` as the stable
+     benchmark and future connector entry points.
+   - Start with simple per-block submissions when that is enough to verify
+     behavior.
+   - Use range batched transfer for packed backing buffers once tests show the
+     simple path is correct.
 
-6. Add LLM-oriented macro benchmarks.
-   - KV cache prefetch benchmark.
-   - KV cache evict benchmark.
-   - Model weight reload benchmark.
-   - Transfer plus dummy compute overlap benchmark.
-   - Report latency, effective bandwidth, path split, and bottlenecks.
+3. Add an inference offload simulator before patching real frameworks.
+   - Simulate request arrival, block ownership, decode steps, GPU block capacity,
+     prefetch, eviction, and transfer stall.
+   - Add dummy compute overlap after the non-overlap simulator is correct.
+   - Compare direct, relay, and pool modes using the same manager API that a
+     future vLLM/SGLang connector would call.
 
-7. Keep daemon work narrow.
+4. Only after simulator results are stable, design real connector prototypes.
+   - Start with narrow adapter designs for vLLM, SGLang, or LMCache-style
+     integration.
+   - Do not vendor or heavily patch external inference frameworks in this repo
+     unless explicitly requested.
+
+5. Keep daemon work narrow.
    - Use the daemon for relay quota, session tracking, profile cache sharing,
      and multi-process coordination.
    - Do not move GPU pointers or CUDA IPC through the daemon in this phase.
@@ -121,4 +128,3 @@ pip install -e .
 - Prefer GPU pair target `6`, relay `5` for server benchmark examples unless
   the user provides another topology.
 - Avoid GPU 0 in suggested benchmark commands.
-

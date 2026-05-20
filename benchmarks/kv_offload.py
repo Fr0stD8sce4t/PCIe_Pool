@@ -162,12 +162,10 @@ def active_indices(iteration: int, active_blocks: int, num_blocks: int) -> list[
 
 def run_warmup(store: turbobus.OffloadStore, names: list[str], warmup: int) -> None:
     for _ in range(warmup):
-        for name in names:
-            handle = store.prefetch(name)
-            handle.wait()
-        for name in names:
-            handle = store.evict(name)
-            handle.wait()
+        store.prefetch_many(names)
+        store.wait_many(names)
+        store.evict_many(names)
+        store.wait_many(names)
 
 
 def run_mode(
@@ -190,9 +188,12 @@ def run_mode(
         indices = active_indices(iteration, active_blocks, len(names))
         active_names = [names[index] for index in indices]
 
-        for name in active_names:
-            handle = store.prefetch(name)
-            handle.wait()
+        for name, handle in zip(
+            active_names,
+            store.prefetch_many(active_names),
+            strict=False,
+        ):
+            store.wait(name)
             samples["prefetch"].append(
                 {
                     "block": name,
@@ -205,9 +206,12 @@ def run_mode(
             for name in active_names:
                 store.block(name).cpu_tensor.zero_()
 
-        for name in active_names:
-            handle = store.evict(name)
-            handle.wait()
+        for name, handle in zip(
+            active_names,
+            store.evict_many(active_names),
+            strict=False,
+        ):
+            store.wait(name)
             samples["evict"].append(
                 {
                     "block": name,

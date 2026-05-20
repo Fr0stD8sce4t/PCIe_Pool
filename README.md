@@ -220,6 +220,11 @@ handle.wait()
 print(store.stats("kv-layer0-block0"))
 ```
 
+For future connector-style code, `OffloadManager` and `KVBlockStore` are aliases
+of the same store. Blocks also track `block_id`, optional CPU/GPU slots, state,
+and last transfer stats. Use `prefetch_many(names)` and `evict_many(names)` when
+benchmarking or simulating batched block movement.
+
 This is intentionally thin: it does not implement a full KV-cache state
 machine, but it gives the next benchmarks a named block API instead of raw
 tensor copies only.
