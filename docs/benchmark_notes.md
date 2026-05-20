@@ -1163,6 +1163,44 @@ restore path, but it is not yet a compute-heavy overlap study. Use larger
 `--model-iterations`, `--model-layers`, or sequence length for overlap sweeps
 before drawing conclusions about compute-bound decode.
 
+## vLLM Probe: Qwen3-0.6B
+
+Scenario:
+
+This run uses `examples/vllm_probe.py` with vLLM
+`0.17.1rc1.dev171+ga3e2e250f.d20260324` and the local
+`/home/sdu/huggingface/Qwen3-0.6B` model. The probe monkey patches vLLM only
+inside the process to print KV cache tensor shapes and allocated block ids. It
+does not modify KV bytes.
+
+Key output:
+
+```text
+probe_initialize_kv_cache num_blocks=9944 tensor_count=28 group_count=1 groups=[g0:layers=28 block_size=16 spec=FullAttentionSpec]
+probe_runner_attrs ... kv_caches=list[tensor(shape=(2, 9944, 16, 8, 128),dtype=torch.bfloat16,device=cuda:0), ...]
+probe_get_computed_blocks request_id 0-989d2f3f computed_tokens 0 blocks None
+probe_allocate_slots request_id 0-989d2f3f result ([1],)
+```
+
+Run summary:
+
+```text
+VLLM_PROBE_BEGIN
+llm_init_ms 20914.131
+generate_ms 306.343
+output request_id 0 prompt_tokens 5 generated_text ' Paris. The capital of Italy is Rome'
+VLLM_PROBE_END
+```
+
+Analysis:
+
+The vLLM worker exposes one KV cache tensor per layer in
+`GPUModelRunner.kv_caches`. For Qwen3-0.6B there are 28 layer tensors, each with
+shape `(2, 9944, 16, 8, 128)`, dtype `bfloat16`, on `cuda:0`. A single layer
+block is 65,536 bytes. The scheduler allocated block id `[1]` for the first
+short request. The next vLLM POC should treat each layer tensor as its own
+TurboBus group and restore the same vLLM block ids across all layer groups.
+
 ## Next Implementation Steps
 
 1. Replace the benchmark-only even/odd chunk split with the production
@@ -1193,3 +1231,6 @@ before drawing conclusions about compute-bound decode.
    Transformer layer.
 9. Add or run sidecar compute sweeps with heavier model settings, then design
    the first narrow connector boundary for real framework KV slot addresses.
+10. Use the vLLM probe result to wire a narrow prefix/session restore hook for
+    Qwen3-0.6B: one TurboBus group per `GPUModelRunner.kv_caches` layer tensor,
+    block byte size 65,536, and vLLM block ids from `KVCacheManager`.

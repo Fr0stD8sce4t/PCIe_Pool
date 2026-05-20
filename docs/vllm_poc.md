@@ -85,6 +85,27 @@ This monkey patches vLLM methods only inside the probe process and prints KV
 cache tensor shapes plus allocated block ids. It does not restore or modify KV
 bytes.
 
+The Qwen3-0.6B probe on the target machine showed:
+
+```text
+vllm_version=0.17.1rc1.dev171+ga3e2e250f.d20260324
+model=/home/sdu/huggingface/Qwen3-0.6B
+kv_cache_config num_blocks=9944 tensor_count=28 group_count=1
+group0 layers=28 block_size=16 spec=FullAttentionSpec
+kv_caches[0] shape=(2, 9944, 16, 8, 128) dtype=torch.bfloat16 device=cuda:0
+first_request allocated block_ids=([1],)
+```
+
+For this model, one layer KV tensor block is:
+
+```text
+2 * 16 * 8 * 128 * sizeof(bfloat16) = 65536 bytes
+```
+
+`examples/vllm_kv_slot_adapter.py` therefore supports one TurboBus group per
+vLLM layer tensor. This avoids assuming that all layers share one contiguous
+allocation.
+
 ## Success Criteria
 
 The first vLLM POC passes when:

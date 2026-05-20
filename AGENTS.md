@@ -134,9 +134,11 @@ Next steps:
      patch.
    - `examples/vllm_probe.py` is an observation-only vLLM run that prints KV
      cache tensor shapes and allocated block ids without changing vLLM behavior.
-   - Next priority: run the vLLM probe on the server, then wire only vLLM's
-     prefix/session restore hook to the adapter boundary, using vLLM-owned KV
-     cache tensors and block ids.
+   - The Qwen3-0.6B vLLM probe showed 28 layer KV tensors shaped
+     `(2, 9944, 16, 8, 128)` in bfloat16, with 65,536 bytes per layer block.
+   - Next priority: wire only vLLM's prefix/session restore hook to the adapter
+     boundary, using one TurboBus group per `GPUModelRunner.kv_caches` layer
+     tensor and vLLM-owned block ids from `KVCacheManager`.
    - Compare direct, relay, and pool modes using the same manager API that a
      future vLLM/SGLang connector would call.
 

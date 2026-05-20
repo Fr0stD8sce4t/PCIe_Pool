@@ -26,6 +26,7 @@ class VllmKVGroup:
     cpu_backing: object
     gpu_kv_backing: object
     block_bytes: int
+    layer_id: int | None = None
 
 
 class VllmKVSlotAdapter:
@@ -118,6 +119,64 @@ def make_block_refs_from_ids(
                 gpu_slot=int(block_id),
             )
         )
+    return refs
+
+
+def block_bytes_from_vllm_kv_tensor(tensor) -> int:
+    """Return bytes for one vLLM KV block in a tensor shaped like [*, blocks, ...]."""
+
+    if len(tensor.shape) < 2:
+        raise ValueError("vLLM KV tensor must have at least two dimensions")
+    return int(tensor.stride(1) * tensor.element_size())
+
+
+def make_layer_groups_from_kv_caches(
+    cpu_backings: Iterable,
+    kv_caches: Iterable,
+    *,
+    group_id_start: int = 0,
+) -> list[VllmKVGroup]:
+    """Create one TurboBus group for each vLLM layer KV cache tensor.
+
+    The probed vLLM 0.17 dev build exposes `GPUModelRunner.kv_caches` as one
+    tensor per layer with shape `(2, num_blocks, block_size, num_heads,
+    head_size)`. Treating each layer tensor as its own group keeps offsets simple
+    and avoids assuming that all layers share one contiguous backing allocation.
+    """
+
+    groups = []
+    for layer_offset, (cpu_backing, kv_cache) in enumerate(zip(cpu_backings, kv_caches)):
+        groups.append(
+            VllmKVGroup(
+                group_id=group_id_start + layer_offset,
+                layer_id=layer_offset,
+                cpu_backing=cpu_backing,
+                gpu_kv_backing=kv_cache,
+                block_bytes=block_bytes_from_vllm_kv_tensor(kv_cache),
+            )
+        )
+    return groups
+
+
+def make_layer_block_refs_from_ids(
+    request_id: str,
+    block_ids: Iterable[int],
+    layer_count: int,
+    cpu_slot_start: int = 0,
+) -> list[VllmKVBlockRef]:
+    refs = []
+    block_ids = [int(block_id) for block_id in block_ids]
+    for layer_id in range(layer_count):
+        for index, block_id in enumerate(block_ids):
+            refs.append(
+                VllmKVBlockRef(
+                    request_id=request_id,
+                    group_id=layer_id,
+                    block_id=block_id,
+                    cpu_slot=cpu_slot_start + index,
+                    gpu_slot=block_id,
+                )
+            )
     return refs
 
 
