@@ -162,6 +162,9 @@ For performance runs, avoid a one-block prompt unless you only want a
 correctness smoke test. One Qwen3-0.6B block maps to 28 layers x K/V lanes, so a
 single logical block is many small ranges. Use `--prompt-repeat` to make vLLM
 allocate more real blocks, then select several blocks with `--restore-blocks`.
+For long prompts, vLLM may call `allocate_slots()` more than once for the same
+request. TurboBus records and merges those allocation events before selecting
+the restore block list.
 
 By default, `--target-gpu` and `--relay-gpus` are physical GPU ids. The script
 sets `CUDA_VISIBLE_DEVICES=<target>,<relays>` before importing PyTorch or vLLM,

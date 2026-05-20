@@ -62,8 +62,14 @@ class FakeRunner:
 
 
 class FakeManager:
+    def __init__(self) -> None:
+        self.calls = 0
+
     def allocate_slots(self, request):
-        return FakeBlocks(([1, 3],))
+        self.calls += 1
+        if self.calls == 1:
+            return FakeBlocks(([1, 3],))
+        return FakeBlocks(([3, 5],))
 
 
 class VllmTurboBusIntegrationTest(unittest.TestCase):
@@ -81,9 +87,11 @@ class VllmTurboBusIntegrationTest(unittest.TestCase):
 
         manager = FakeManager()
         manager.allocate_slots(FakeRequest())
+        manager.allocate_slots(FakeRequest())
 
         self.assertEqual(integration.state.kv_cache_config, "config")
-        self.assertEqual(integration.block_ids_for_request("req0"), (1, 3))
+        self.assertEqual(integration.block_ids_for_request("req0"), (1, 3, 5))
+        self.assertEqual(integration.state.allocations["req0"].event_count, 2)
 
         integration.restore_request_prefix("req0")
 
@@ -94,6 +102,7 @@ class VllmTurboBusIntegrationTest(unittest.TestCase):
             [
                 {"src_offset": 0, "dst_offset": 32, "bytes": 32},
                 {"src_offset": 32, "dst_offset": 96, "bytes": 32},
+                {"src_offset": 64, "dst_offset": 160, "bytes": 32},
             ],
         )
         self.assertEqual(runtime.calls[1][3], runtime.calls[0][3])

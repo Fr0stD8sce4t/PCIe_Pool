@@ -20,6 +20,7 @@ class VllmAllocationEvent:
 
     request_id: str
     block_ids_by_group: tuple[tuple[int, ...], ...]
+    event_count: int = 1
 
     @property
     def block_ids(self) -> tuple[int, ...]:
@@ -31,6 +32,35 @@ class VllmAllocationEvent:
                     seen.add(block_id)
                     ordered.append(block_id)
         return tuple(ordered)
+
+    def merge(self, other: "VllmAllocationEvent") -> "VllmAllocationEvent":
+        if other.request_id != self.request_id:
+            raise ValueError("cannot merge allocation events for different requests")
+        group_count = max(len(self.block_ids_by_group), len(other.block_ids_by_group))
+        merged = []
+        for group_index in range(group_count):
+            left = (
+                self.block_ids_by_group[group_index]
+                if group_index < len(self.block_ids_by_group)
+                else tuple()
+            )
+            right = (
+                other.block_ids_by_group[group_index]
+                if group_index < len(other.block_ids_by_group)
+                else tuple()
+            )
+            seen = set()
+            ordered = []
+            for block_id in (*left, *right):
+                if block_id not in seen:
+                    seen.add(block_id)
+                    ordered.append(block_id)
+            merged.append(tuple(ordered))
+        return VllmAllocationEvent(
+            self.request_id,
+            tuple(merged),
+            event_count=self.event_count + other.event_count,
+        )
 
 
 @dataclass
@@ -149,6 +179,9 @@ class VllmTurboBusIntegration:
         if not block_ids_by_group:
             return None
         event = VllmAllocationEvent(request_id, block_ids_by_group)
+        previous = self.state.allocations.get(request_id)
+        if previous is not None:
+            event = previous.merge(event)
         self.state.allocations[request_id] = event
         return event
 
