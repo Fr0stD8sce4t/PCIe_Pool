@@ -42,6 +42,8 @@ The narrow real inference POC plan is recorded in
 `docs/real_inference_poc.md`.
 The real framework connector boundary is recorded in
 `docs/real_framework_connector.md`.
+The first real framework target is vLLM; its POC plan is recorded in
+`docs/vllm_poc.md`.
 
 ## Build Python Extension
 
@@ -413,3 +415,7 @@ adapter.restore_prefix(["prefix0", "prefix1"])
 
 This is the intended next boundary for vLLM/SGLang-style experiments before
 attempting scheduler or full KV-cache changes.
+
+`examples/vllm_kv_slot_adapter.py` narrows that boundary for vLLM. It does not
+import vLLM directly; a vLLM patch should extract KV cache tensors and block ids
+from the local vLLM version, then pass them into `VllmKVSlotAdapter`.

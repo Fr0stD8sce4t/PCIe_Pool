@@ -63,15 +63,21 @@ handles = manager.evict_many(block_names)
 manager.wait_many(block_names)
 ```
 
+## vLLM Target
+
+The first real framework target is vLLM. The vLLM-specific plan is recorded in
+`docs/vllm_poc.md`, and the initial adapter sketch is
+`examples/vllm_kv_slot_adapter.py`.
+
 ## First Real Framework POC Shape
 
-The first framework POC should patch only a narrow prefix/session restore hook:
+The first vLLM POC should patch only a narrow prefix/session restore hook:
 
-1. Let the framework allocate its normal GPU KV slots.
+1. Let vLLM allocate its normal GPU KV slots.
 2. Export the KV cache tensor and slot offsets to a TurboBus adapter.
 3. Register prefix/session blocks with `OffloadManager`.
 4. Call `prefetch_many()` before decode starts.
-5. Verify that the framework can continue decode after restore.
+5. Verify that vLLM can continue decode after restore.
 6. Compare direct, relay, and pool modes using TTFT and restore latency.
 
 ## Metrics

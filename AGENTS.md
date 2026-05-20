@@ -127,8 +127,10 @@ Next steps:
    - `docs/real_framework_connector.md` and
      `examples/framework_kv_slot_adapter.py` define the first narrow connector
      boundary for real framework KV slot addresses.
-   - Next priority: choose one real framework POC target and wire only its
-     prefix/session restore hook to the adapter boundary.
+   - vLLM is the first real framework POC target. `docs/vllm_poc.md` and
+     `examples/vllm_kv_slot_adapter.py` define the vLLM-shaped adapter boundary.
+   - Next priority: wire only vLLM's prefix/session restore hook to the adapter
+     boundary, using vLLM-owned KV cache tensors and block ids.
    - Compare direct, relay, and pool modes using the same manager API that a
      future vLLM/SGLang connector would call.
 

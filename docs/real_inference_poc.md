@@ -90,6 +90,10 @@ The minimal adapter sketch is `examples/framework_kv_slot_adapter.py`. It expect
 a framework to provide existing CPU/GPU KV backing tensors and per-block byte
 offsets, then calls `OffloadManager.prefetch_many()` for restore.
 
+The first real framework target is vLLM. Its narrow POC plan is
+`docs/vllm_poc.md`, and the adapter sketch is
+`examples/vllm_kv_slot_adapter.py`.
+
 Phase 2 can add a narrow vLLM/SGLang or LMCache-style connector that only handles
 prefix/session restore and save. Broader decode-time eviction can wait until the
 restore path is correct.
