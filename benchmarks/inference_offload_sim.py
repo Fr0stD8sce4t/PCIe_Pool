@@ -187,11 +187,18 @@ def transfer_batch(store: turbobus.OffloadManager, names: list[str], op: str) ->
         raise ValueError(f"unknown transfer op: {op}")
 
     samples = []
+    unique_stats = []
+    seen_handles = set()
     for name, handle in zip(names, handles, strict=False):
         store.wait(name)
-        samples.append({"block": name, **stats_to_dict(handle.stats)})
+        stats = stats_to_dict(handle.stats)
+        samples.append({"block": name, **stats})
+        handle_key = id(handle)
+        if handle_key not in seen_handles:
+            unique_stats.append(stats)
+            seen_handles.add(handle_key)
     elapsed_ms = (time.perf_counter() - start) * 1000.0
-    bytes_ = sum(sample["bytes"] for sample in samples)
+    bytes_ = sum(sample["bytes"] for sample in unique_stats)
     return {
         "op": op,
         "blocks": len(names),
@@ -200,10 +207,10 @@ def transfer_batch(store: turbobus.OffloadManager, names: list[str], op: str) ->
         "gib_per_second": (
             (bytes_ / (1024**3)) / (elapsed_ms / 1000.0) if elapsed_ms > 0.0 else 0.0
         ),
-        "direct_bytes": sum(sample["direct_bytes"] for sample in samples),
-        "relay_bytes": sum(sample["relay_bytes"] for sample in samples),
-        "direct_chunks": sum(sample["direct_chunks"] for sample in samples),
-        "relay_chunks": sum(sample["relay_chunks"] for sample in samples),
+        "direct_bytes": sum(sample["direct_bytes"] for sample in unique_stats),
+        "relay_bytes": sum(sample["relay_bytes"] for sample in unique_stats),
+        "direct_chunks": sum(sample["direct_chunks"] for sample in unique_stats),
+        "relay_chunks": sum(sample["relay_chunks"] for sample in unique_stats),
         "samples": samples,
     }
 
