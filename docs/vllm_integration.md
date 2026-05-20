@@ -141,7 +141,8 @@ python examples/vllm_turbobus_restore.py \
   --chunk-bytes 4194304 \
   --profile-bytes 16777216 \
   --mode all \
-  --enforce-eager
+  --enforce-eager \
+  --log-output benchmarks/results/vllm_qwen3_restore.log
 ```
 
 The script starts vLLM once and reuses the same captured KV block ids for
@@ -154,6 +155,14 @@ For vLLM tensors shaped like `(2, num_blocks, ...)`, K and V live in separate
 lanes. The script maps one logical KV block into separate K/V byte ranges, so
 the correctness check covers both lanes instead of assuming the block is one
 contiguous byte range.
+
+By default, `--target-gpu` and `--relay-gpus` are physical GPU ids. The script
+sets `CUDA_VISIBLE_DEVICES=<target>,<relays>` before importing PyTorch or vLLM,
+then uses logical CUDA ids internally. This prevents vLLM from allocating
+`kv_caches` on logical `cuda:0` while TurboBus expects physical `cuda:6`. Pass
+`--no-map-physical-gpus` only when the visible-device mapping is already
+configured outside the script. All vLLM logs, TurboBus mode lines, summary
+blocks, and tracebacks are written to `--log-output`.
 
 ## Success Criteria
 

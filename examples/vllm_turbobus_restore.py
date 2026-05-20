@@ -1,28 +1,48 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+from datetime import datetime
 import math
 import os
 from pathlib import Path
 import statistics
 import sys
 import time
+import traceback
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import turbobus
-from turbobus.vllm import block_bytes_from_vllm_kv_tensor, make_vllm_layer_range_refs_from_ids
-from turbobus.vllm_integration import VllmTurboBusIntegration
-
-try:
-    import torch
-except ImportError:  # pragma: no cover - local docs/help convenience only
-    torch = None
+torch = None
+turbobus = None
+block_bytes_from_vllm_kv_tensor = None
+make_vllm_layer_range_refs_from_ids = None
+VllmTurboBusIntegration = None
 
 
-def require_torch() -> None:
-    if torch is None:
-        raise RuntimeError("PyTorch is required to run the real vLLM restore check")
+def load_runtime_modules() -> None:
+    global torch
+    global turbobus
+    global block_bytes_from_vllm_kv_tensor
+    global make_vllm_layer_range_refs_from_ids
+    global VllmTurboBusIntegration
+
+    if torch is not None:
+        return
+
+    import torch as torch_module
+    import turbobus as turbobus_module
+    from turbobus.vllm import (
+        block_bytes_from_vllm_kv_tensor as block_bytes_fn,
+        make_vllm_layer_range_refs_from_ids as make_refs_fn,
+    )
+    from turbobus.vllm_integration import VllmTurboBusIntegration as integration_cls
+
+    torch = torch_module
+    turbobus = turbobus_module
+    block_bytes_from_vllm_kv_tensor = block_bytes_fn
+    make_vllm_layer_range_refs_from_ids = make_refs_fn
+    VllmTurboBusIntegration = integration_cls
 
 
 def parse_relay_gpus(value: str) -> list[int]:
@@ -105,7 +125,7 @@ def refs_by_layer(refs) -> dict[int, list]:
     return by_layer
 
 
-def wait_for_allocation(integration: VllmTurboBusIntegration, timeout_s: float) -> str:
+def wait_for_allocation(integration, timeout_s: float) -> str:
     deadline = time.perf_counter() + timeout_s
     while time.perf_counter() < deadline:
         if integration.state.allocations:
@@ -125,13 +145,13 @@ def make_runtime(target_gpu: int, relay_gpus: list[int], args, mode: str) -> tur
 
 
 def initialize_vllm(args, first_mode: str):
-    require_torch()
-    torch.cuda.set_device(args.target_gpu)
-    relay_gpus = parse_relay_gpus(args.relay_gpus)
+    load_runtime_modules()
+    torch.cuda.set_device(args.runtime_target_gpu)
+    relay_gpus = args.runtime_relay_gpus
     if args.disable_multiproc_executor:
         os.environ.setdefault("VLLM_ENABLE_V1_MULTIPROCESSING", "0")
 
-    runtime = make_runtime(args.target_gpu, relay_gpus, args, first_mode)
+    runtime = make_runtime(args.runtime_target_gpu, relay_gpus, args, first_mode)
     integration = VllmTurboBusIntegration(runtime)
     integration.install()
 
@@ -158,6 +178,7 @@ def initialize_vllm(args, first_mode: str):
             "TurboBus did not observe vLLM kv_caches. "
             "Run with --disable-multiproc-executor or a vLLM build that keeps the engine in-process."
         )
+    validate_kv_cache_devices(args, integration.state.kv_caches)
 
     block_ids = integration.block_ids_for_request(request_id)
     selected_block_ids = block_ids[: args.restore_blocks]
@@ -178,8 +199,7 @@ def initialize_vllm(args, first_mode: str):
 
 
 def run_mode(args, captured: dict, mode: str) -> dict:
-    relay_gpus = parse_relay_gpus(args.relay_gpus)
-    runtime = make_runtime(args.target_gpu, relay_gpus, args, mode)
+    runtime = make_runtime(args.runtime_target_gpu, args.runtime_relay_gpus, args, mode)
     integration = VllmTurboBusIntegration(runtime)
     integration.bind_kv_caches(captured["kv_caches"], captured["kv_cache_config"])
     integration.state.allocations[captured["request_id"]] = captured["allocation"]
@@ -288,6 +308,9 @@ def print_summary(args, results: list[dict]) -> None:
         "vllm_restore_config",
         f"target={args.target_gpu}",
         f"relays={parse_relay_gpus(args.relay_gpus)}",
+        f"runtime_target={args.runtime_target_gpu}",
+        f"runtime_relays={args.runtime_relay_gpus}",
+        f"cuda_visible_devices={os.environ.get('CUDA_VISIBLE_DEVICES', '')}",
         f"model={args.model}",
         f"restore_blocks={args.restore_blocks}",
         f"iterations={args.iterations}",
@@ -332,7 +355,47 @@ def print_summary(args, results: list[dict]) -> None:
     print("COPY_SUMMARY_END")
 
 
-def main() -> None:
+def default_log_path() -> str:
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return str(Path("benchmarks") / "results" / f"vllm_turbobus_restore_{stamp}.log")
+
+
+def configure_cuda_devices(args) -> None:
+    physical_relays = parse_relay_gpus(args.relay_gpus)
+    visible = [args.target_gpu, *physical_relays]
+    if args.map_physical_gpus:
+        if os.environ.get("CUDA_VISIBLE_DEVICES"):
+            print(
+                "warning existing CUDA_VISIBLE_DEVICES preserved",
+                os.environ["CUDA_VISIBLE_DEVICES"],
+            )
+            args.runtime_target_gpu = args.target_gpu
+            args.runtime_relay_gpus = physical_relays
+            return
+        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(gpu) for gpu in visible)
+        args.runtime_target_gpu = 0
+        args.runtime_relay_gpus = list(range(1, len(visible)))
+        return
+    args.runtime_target_gpu = args.target_gpu
+    args.runtime_relay_gpus = physical_relays
+
+
+def validate_kv_cache_devices(args, kv_caches) -> None:
+    bad = []
+    for index, kv_cache in enumerate(kv_caches):
+        device = getattr(kv_cache, "device", None)
+        if getattr(device, "type", None) != "cuda" or getattr(device, "index", None) != args.runtime_target_gpu:
+            bad.append((index, str(device)))
+    if bad:
+        raise RuntimeError(
+            "vLLM KV cache tensors are not on the TurboBus runtime target GPU: "
+            f"runtime_target={args.runtime_target_gpu} mismatches={bad[:8]}. "
+            "Use the default physical GPU mapping or set CUDA_VISIBLE_DEVICES so "
+            "vLLM cuda:0 maps to the requested target GPU."
+        )
+
+
+def parse_args():
     parser = argparse.ArgumentParser(description="Save/restore real vLLM KV slots with TurboBus")
     parser.add_argument("--model", required=True)
     parser.add_argument("--prompt", default="The capital of France is")
@@ -356,10 +419,43 @@ def main() -> None:
     parser.add_argument("--mode", choices=["direct", "relay", "pool", "all"], default="all")
     parser.add_argument("--dynamic-weights", action="store_true")
     parser.add_argument("--allocation-timeout-s", type=float, default=5.0)
+    parser.add_argument(
+        "--log-output",
+        default=None,
+        help="Write vLLM logs, TurboBus summary, and errors to this file.",
+    )
+    parser.add_argument(
+        "--no-map-physical-gpus",
+        dest="map_physical_gpus",
+        action="store_false",
+        help="Treat --target-gpu/--relay-gpus as already-visible logical CUDA ids.",
+    )
+    parser.set_defaults(map_physical_gpus=True)
     args = parser.parse_args()
+    if args.log_output is None:
+        args.log_output = default_log_path()
+    return args
 
+
+def run(args) -> None:
+    configure_cuda_devices(args)
+    print(
+        "vllm_restore_start",
+        f"target={args.target_gpu}",
+        f"relays={parse_relay_gpus(args.relay_gpus)}",
+        f"runtime_target={args.runtime_target_gpu}",
+        f"runtime_relays={args.runtime_relay_gpus}",
+        f"cuda_visible_devices={os.environ.get('CUDA_VISIBLE_DEVICES', '')}",
+    )
     modes = ["direct", "relay", "pool"] if args.mode == "all" else [args.mode]
     captured = initialize_vllm(args, modes[0])
+    print(
+        "vllm_restore_capture",
+        f"request_id={captured['request_id']}",
+        f"layers={len(captured['kv_caches'])}",
+        f"kv_device={captured['kv_caches'][0].device if captured['kv_caches'] else 'none'}",
+        f"generated_text={captured['generated_text']!r}",
+    )
     results = []
     for mode in modes:
         result = run_mode(args, captured, mode)
@@ -379,6 +475,29 @@ def main() -> None:
             result["verified"],
         )
     print_summary(args, results)
+
+
+def main() -> None:
+    args = parse_args()
+    log_path = Path(args.log_output)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    ok = False
+    with log_path.open("w", encoding="utf-8") as log_file:
+        with contextlib.redirect_stdout(log_file), contextlib.redirect_stderr(log_file):
+            try:
+                run(args)
+            except Exception:
+                print("VLLM_RESTORE_ERROR_BEGIN")
+                traceback.print_exc()
+                print("VLLM_RESTORE_ERROR_END")
+            else:
+                ok = True
+    print("vllm_turbobus_restore log", log_path)
+    if ok:
+        print("vllm_turbobus_restore status ok")
+    else:
+        print("vllm_turbobus_restore status failed")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -236,7 +236,8 @@ python examples/vllm_turbobus_restore.py \
   --chunk-bytes 4194304 \
   --profile-bytes 16777216 \
   --mode all \
-  --enforce-eager
+  --enforce-eager \
+  --log-output benchmarks/results/vllm_qwen3_restore.log
 ```
 
 The script starts vLLM once, captures real `GPUModelRunner.kv_caches` tensors
@@ -246,6 +247,11 @@ must run in-process so the hook can see the real Python tensor objects; the
 script disables vLLM V1 multiprocessing by default.
 For tensors shaped like `(2, num_blocks, ...)`, it transfers K and V lanes as
 separate byte ranges for each logical KV block.
+By default, the script treats `--target-gpu` and `--relay-gpus` as physical GPU
+ids and sets `CUDA_VISIBLE_DEVICES` before importing PyTorch/vLLM, so vLLM's
+`cuda:0` maps to the requested target GPU. Use `--no-map-physical-gpus` only
+when the CUDA visible-device mapping is already set outside the script. vLLM
+logs and the `COPY_SUMMARY` block are written to `--log-output`.
 
 ```python
 opts = turbobus.RuntimeOptions.from_tuning_json(
