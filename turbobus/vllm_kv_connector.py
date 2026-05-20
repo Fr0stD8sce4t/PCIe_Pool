@@ -70,6 +70,7 @@ class TurboBusConnectorMetadata(KVConnectorMetadata):
 class TurboBusKVConnectorState:
     kv_caches: dict[str, Any] = field(default_factory=dict)
     pending_loads: dict[str, TurboBusRequestMetadata] = field(default_factory=dict)
+    finished_recving: set[str] = field(default_factory=set)
     events: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -294,6 +295,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             return
         if not self.restore_enabled:
             for request in metadata.requests:
+                self.state.finished_recving.add(request.request_id)
                 self.state.events.append(
                     {
                         "event": "load_ready",
@@ -311,6 +313,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             return
         for request in metadata.requests:
             self._restore_request(request)
+            self.state.finished_recving.add(request.request_id)
 
     def wait_for_layer_load(self, layer_name: str) -> None:
         return None
@@ -322,7 +325,9 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         return None
 
     def get_finished(self, finished_req_ids: set[str]):
-        return None, None
+        finished_recving = self.state.finished_recving
+        self.state.finished_recving = set()
+        return None, finished_recving or None
 
     def request_finished(self, request, block_ids: list[int]):
         return False, None

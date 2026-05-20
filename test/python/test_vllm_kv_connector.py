@@ -132,6 +132,27 @@ class TurboBusConnectorTest(unittest.TestCase):
 
         self.assertEqual(connector.state.events[-1]["event"], "load_ready")
         self.assertFalse(connector.state.events[-1]["restore_enabled"])
+        self.assertEqual(connector.get_finished(set()), (None, {"req0"}))
+        self.assertEqual(connector.get_finished(set()), (None, None))
+
+    def test_start_load_kv_reports_finished_after_restore(self) -> None:
+        register_saved_prefix("default", [object()], block_count=4, matched_tokens=64)
+        connector = self.make_connector(
+            {
+                "turbobus.restore_block_limit": 4,
+                "turbobus.restore_enabled": True,
+            }
+        )
+        request = FakeRequest({"turbobus.do_restore": True, "turbobus.matched_tokens": 64})
+        connector.update_state_after_alloc(request, FakeBlocks(([1, 2, 3, 4],)), 64)
+        connector._connector_metadata = connector.build_connector_meta(object())
+
+        with mock.patch.object(connector, "_restore_request") as restore:
+            connector.start_load_kv(forward_context=object())
+
+        restore.assert_called_once()
+        self.assertEqual(connector.get_finished(set()), (None, {"req0"}))
+        self.assertEqual(connector.get_finished(set()), (None, None))
 
     def test_request_finished_all_groups_flattens_groups(self) -> None:
         connector = self.make_connector()
