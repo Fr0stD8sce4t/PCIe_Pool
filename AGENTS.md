@@ -109,9 +109,10 @@ Next steps:
      to compare direct, relay, and pool modes.
    - Workload presets `light`, `pressure`, and `long_context` are available.
    - Prefill supports both `produce_kv_on_gpu` and `restore_from_cpu`.
-   - Next priority: run and record preset workload results, especially
-     `pressure` with `restore_from_cpu`, then decide whether the simulator is
-     ready for a narrow real-framework POC.
+   - The `pressure` + `restore_from_cpu` workload result is recorded and shows
+     strong pooled-transfer gains for TTFT and tokens/s.
+   - Next priority: design a narrow real-framework POC around prefix/session KV
+     restore, without broad vLLM/SGLang scheduler rewrites.
    - Compare direct, relay, and pool modes using the same manager API that a
      future vLLM/SGLang connector would call.
 

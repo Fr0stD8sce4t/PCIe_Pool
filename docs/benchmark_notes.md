@@ -998,6 +998,43 @@ This is the first benchmark result that includes request arrival, prefill,
 decode scheduling, cache hit rate, native CUDA compute, and KV offload pressure
 in one self-contained run.
 
+### Pressure Preset With Prefill Restore
+
+Scenario:
+
+This run uses the same `pressure` preset, but changes prefill to
+`restore_from_cpu`. It models prompt or prefix KV blocks being loaded from
+pinned CPU backing memory before decode, rather than assuming prompt KV is
+always produced on the GPU.
+
+Copy summary:
+
+```text
+COPY_SUMMARY_BEGIN
+workload_config target=6 relays=[5] preset=pressure arrival_pattern=burst request_count=8 prompt_blocks=6..10 decode_steps=12..20 scheduler=round_robin access_pattern=sliding blocks_per_step=4 gpu_block_capacity=12 storage_layout=packed block_bytes=16777216 compute_impl=cuda overlap_compute=True prefill_mode=restore_from_cpu mode=all dynamic_weights=True
+workload_scenario type=prefill_decode policy=lru_eviction transfer=evict_then_prefetch_on_decode prefill=restore_from_cpu arrival_interval_ms=0.0 prefill_compute_ms=0.0 decode_compute_ms=0.0 cuda_compute_iterations=2048
+profile direct_h2d_bw_gbps=7.551
+profile_relay relay=5 h2d=7.577 p2p=39.604 effective=7.577 p2p_enabled=True
+workload_mode mode=direct requests_s=3.852 tokens_s=56.824 ttft_p50_ms=327.402 ttft_p95_ms=386.633 decode_p50_ms=17.040 decode_p95_ms=17.209 transfer_p50_ms=16.736 compute_p50_ms=4.318 hit_rate=0.102 prefetch_blocks=424 evict_blocks=436 prefill_restore_blocks=68 prefill_evict_blocks=47 direct_chunks=3900 relay_chunks=0
+workload_mode mode=relay requests_s=3.816 tokens_s=56.291 ttft_p50_ms=328.646 ttft_p95_ms=388.385 decode_p50_ms=17.169 decode_p95_ms=17.396 transfer_p50_ms=16.913 compute_p50_ms=4.296 hit_rate=0.102 prefetch_blocks=424 evict_blocks=436 prefill_restore_blocks=68 prefill_evict_blocks=47 direct_chunks=0 relay_chunks=3900
+workload_mode mode=pool requests_s=7.149 tokens_s=105.448 ttft_p50_ms=169.508 ttft_p95_ms=201.062 decode_p50_ms=8.951 decode_p95_ms=9.238 transfer_p50_ms=8.760 compute_p50_ms=4.355 hit_rate=0.102 prefetch_blocks=424 evict_blocks=436 prefill_restore_blocks=68 prefill_evict_blocks=47 direct_chunks=1950 relay_chunks=1950
+workload_speedup pool_over_direct_tokens_per_second=1.856
+workload_speedup pool_over_relay_tokens_per_second=1.873
+workload_speedup direct_over_pool_ttft_p50=1.931
+COPY_SUMMARY_END
+```
+
+Analysis:
+
+The restore workload adds prefill H2D pressure: each mode restores 68 prompt KV
+blocks and evicts 47 blocks during prefill. Pool mode splits the total work
+evenly, 1950 direct chunks and 1950 relay chunks, while direct-only and
+relay-only each move 3900 chunks on one path. Pooled transfer improves
+throughput from 56.824 to 105.448 tokens/s, a 1.856x speedup over direct. TTFT
+p50 drops from 327.402 ms to 169.508 ms, a 1.931x improvement. This result
+covers the prefix/session restore shape that a narrow real-framework POC should
+target first.
+
 ## Next Implementation Steps
 
 1. Replace the benchmark-only even/odd chunk split with the production
