@@ -89,7 +89,8 @@ python benchmarks/bandwidth_pool.py \
   --iterations 5 \
   --mode all \
   --verify \
-  --json-output benchmarks/results/gpu6_relay5.json
+  --json-output benchmarks/results/gpu6_relay5.json \
+  --summary-output benchmarks/results/gpu6_relay5_summary.txt
 ```
 
 JSON output is compact by default: it records per-sample stats and a
@@ -98,6 +99,7 @@ when debugging exact chunk placement.
 
 At the end of each run, the benchmark prints a `COPY_SUMMARY_BEGIN` /
 `COPY_SUMMARY_END` block. Copy only that block when sharing results in chat.
+Use `--summary-output` to save the same block to a standalone text file.
 For an existing JSON file:
 
 ```bash
@@ -146,7 +148,8 @@ python benchmarks/kv_offload.py \
   --mode all \
   --verify \
   --dynamic-weights \
-  --json-output benchmarks/results/kv_gpu6_relay5.json
+  --json-output benchmarks/results/kv_gpu6_relay5.json \
+  --summary-output benchmarks/results/kv_gpu6_relay5_summary.txt
 ```
 
 Copy only the final `COPY_SUMMARY_BEGIN` / `COPY_SUMMARY_END` block when

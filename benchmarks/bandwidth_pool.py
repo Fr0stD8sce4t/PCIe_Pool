@@ -221,6 +221,12 @@ def write_json(path: str, result: dict) -> None:
     output_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
 
 
+def write_text(path: str, text: str) -> None:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(text + "\n", encoding="utf-8")
+
+
 def compact_summary(result: dict) -> str:
     config = result["config"]
     lines = [
@@ -292,6 +298,10 @@ def main() -> None:
         "--no-copy-summary",
         action="store_true",
         help="do not print the compact COPY_SUMMARY block at the end",
+    )
+    parser.add_argument(
+        "--summary-output",
+        help="write the compact COPY_SUMMARY block to this text file",
     )
     args = parser.parse_args()
 
@@ -383,8 +393,12 @@ def main() -> None:
     if args.json_output:
         write_json(args.json_output, result)
         print("json_output", args.json_output)
+    summary = compact_summary(result)
+    if args.summary_output:
+        write_text(args.summary_output, summary)
+        print("summary_output", args.summary_output)
     if not args.no_copy_summary:
-        print(compact_summary(result))
+        print(summary)
 
 
 if __name__ == "__main__":
