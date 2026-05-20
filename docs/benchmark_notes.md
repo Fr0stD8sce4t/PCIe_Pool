@@ -626,6 +626,72 @@ relay, and pooled verification checks passed. The lower `block_gib_s` values
 are retained as a per-block submit-to-complete view and include queueing time
 when several blocks are submitted together.
 
+## Inference Offload Simulator Capacity Pressure
+
+Command shape:
+
+```text
+python benchmarks/inference_offload_sim.py \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --requests 4 \
+  --blocks-per-request 8 \
+  --blocks-per-step 4 \
+  --gpu-block-capacity 4 \
+  --access-pattern round_robin \
+  --working-set-blocks 8 \
+  --seed 1 \
+  --block-bytes 16777216 \
+  --decode-steps 32 \
+  --chunk-bytes 4194304 \
+  --profile-bytes 16777216 \
+  --mode all \
+  --dynamic-weights \
+  --json-output benchmarks/results/infer_sim_gpu6_relay5_pressure.json \
+  --summary-output benchmarks/results/infer_sim_gpu6_relay5_pressure_summary.txt
+```
+
+Round-robin copy summary:
+
+```text
+COPY_SUMMARY_BEGIN
+sim_config target=6 relays=[5] requests=4 blocks_per_request=8 blocks_per_step=4 gpu_block_capacity=4 access_pattern=round_robin working_set_blocks=8 seed=1 block_bytes=16777216 decode_steps=32 compute_ms=0.0 mode=all dynamic_weights=True
+profile direct_h2d_bw_gbps=7.547
+profile_relay relay=5 h2d=7.524 p2p=38.789 effective=7.524 p2p_enabled=True
+sim_mode mode=direct tokens_s=61.926 step_p50_ms=16.507 step_p95_ms=16.795 transfer_p50_ms=16.491 transfer_p95_ms=16.772 prefetch_gib_s=7.239 evict_gib_s=7.883 prefetch_blocks=128 evict_blocks=121 direct_chunks=996 relay_chunks=0
+sim_mode mode=relay tokens_s=61.365 step_p50_ms=16.672 step_p95_ms=16.886 transfer_p50_ms=16.660 transfer_p95_ms=16.871 prefetch_gib_s=7.166 evict_gib_s=7.816 prefetch_blocks=128 evict_blocks=121 direct_chunks=0 relay_chunks=996
+sim_mode mode=pool tokens_s=118.870 step_p50_ms=8.587 step_p95_ms=8.737 transfer_p50_ms=8.573 transfer_p95_ms=8.717 prefetch_gib_s=13.925 evict_gib_s=15.115 prefetch_blocks=128 evict_blocks=121 direct_chunks=498 relay_chunks=498
+sim_speedup pool_over_direct_tokens_per_second=1.920
+sim_speedup pool_over_relay_tokens_per_second=1.937
+COPY_SUMMARY_END
+```
+
+Random copy summary:
+
+```text
+COPY_SUMMARY_BEGIN
+sim_config target=6 relays=[5] requests=4 blocks_per_request=8 blocks_per_step=4 gpu_block_capacity=4 access_pattern=random working_set_blocks=8 seed=1 block_bytes=16777216 decode_steps=32 compute_ms=0.0 mode=all dynamic_weights=True
+profile direct_h2d_bw_gbps=7.561
+profile_relay relay=5 h2d=7.662 p2p=39.406 effective=7.662 p2p_enabled=True
+sim_mode mode=direct tokens_s=61.945 step_p50_ms=16.546 step_p95_ms=16.664 transfer_p50_ms=16.529 transfer_p95_ms=16.636 prefetch_gib_s=7.230 evict_gib_s=7.900 prefetch_blocks=128 evict_blocks=121 direct_chunks=996 relay_chunks=0
+sim_mode mode=relay tokens_s=61.351 step_p50_ms=16.700 step_p95_ms=16.808 transfer_p50_ms=16.685 transfer_p95_ms=16.783 prefetch_gib_s=7.158 evict_gib_s=7.826 prefetch_blocks=128 evict_blocks=121 direct_chunks=0 relay_chunks=996
+sim_mode mode=pool tokens_s=118.746 step_p50_ms=8.608 step_p95_ms=8.813 transfer_p50_ms=8.594 transfer_p95_ms=8.786 prefetch_gib_s=13.883 evict_gib_s=15.146 prefetch_blocks=128 evict_blocks=121 direct_chunks=498 relay_chunks=498
+sim_speedup pool_over_direct_tokens_per_second=1.917
+sim_speedup pool_over_relay_tokens_per_second=1.936
+COPY_SUMMARY_END
+```
+
+Analysis:
+
+The simulator now exercises sustained prefetch and eviction under GPU block
+capacity pressure: both access patterns transfer 128 prefetched blocks and 121
+evicted blocks. In the round-robin run, pooled transfer improves simulated
+decode throughput from 61.926 to 118.870 tokens/s and cuts median transfer
+stall from 16.491 ms to 8.573 ms. The random run shows nearly identical
+behavior, improving from 61.945 to 118.746 tokens/s. This indicates the
+capacity-pressure simulator path is stable and that PCIe bandwidth pooling
+reduces transfer stall in an inference-shaped workload.
+
 ## Next Implementation Steps
 
 1. Replace the benchmark-only even/odd chunk split with the production

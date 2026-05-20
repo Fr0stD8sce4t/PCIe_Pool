@@ -7,6 +7,7 @@ import math
 from pathlib import Path
 import random
 import statistics
+import threading
 import time
 
 import torch
@@ -154,6 +155,44 @@ def transfer_batch(store: turbobus.OffloadManager, names: list[str], op: str) ->
     }
 
 
+def run_transfers(
+    store: turbobus.OffloadManager,
+    victims: list[str],
+    missing: list[str],
+) -> tuple[dict, dict]:
+    evict = transfer_batch(store, victims, "evict")
+    prefetch = transfer_batch(store, missing, "prefetch")
+    return evict, prefetch
+
+
+def run_step_work(
+    store: turbobus.OffloadManager,
+    victims: list[str],
+    missing: list[str],
+    compute_ms: float,
+    overlap_compute: bool,
+) -> tuple[dict, dict, float, float]:
+    transfer_start = time.perf_counter()
+    if overlap_compute and compute_ms > 0.0:
+        result: dict[str, tuple[dict, dict]] = {}
+        worker = threading.Thread(
+            target=lambda: result.update(
+                {"transfers": run_transfers(store, victims, missing)}
+            )
+        )
+        worker.start()
+        time.sleep(compute_ms / 1000.0)
+        worker.join()
+        evict, prefetch = result["transfers"]
+    else:
+        evict, prefetch = run_transfers(store, victims, missing)
+        if compute_ms > 0.0:
+            time.sleep(compute_ms / 1000.0)
+    elapsed_ms = (time.perf_counter() - transfer_start) * 1000.0
+    transfer_ms = evict["elapsed_ms"] + prefetch["elapsed_ms"]
+    return evict, prefetch, transfer_ms, elapsed_ms
+
+
 def empty_transfer_batch(op: str) -> dict:
     return {
         "op": op,
@@ -226,6 +265,7 @@ def run_mode(
     seed: int,
     decode_steps: int,
     compute_ms: float,
+    overlap_compute: bool,
 ) -> dict:
     runtime.set_transfer_mode(mode)
     resident = ResidentSet(gpu_block_capacity)
@@ -246,11 +286,14 @@ def run_mode(
         victims = resident.victims_for(missing)
 
         step_start = time.perf_counter()
-        evict = transfer_batch(store, victims, "evict")
-        prefetch = transfer_batch(store, missing, "prefetch")
+        evict, prefetch, transfer_ms, overlapped_ms = run_step_work(
+            store,
+            victims,
+            missing,
+            compute_ms,
+            overlap_compute,
+        )
         resident.add_many(needed)
-        if compute_ms > 0.0:
-            time.sleep(compute_ms / 1000.0)
         step_ms = (time.perf_counter() - step_start) * 1000.0
 
         steps.append(
@@ -262,8 +305,9 @@ def run_mode(
                 "victims": victims,
                 "evict": evict,
                 "prefetch": prefetch,
-                "transfer_ms": evict["elapsed_ms"] + prefetch["elapsed_ms"],
+                "transfer_ms": transfer_ms,
                 "compute_ms": compute_ms,
+                "overlapped_ms": overlapped_ms,
                 "step_ms": step_ms,
             }
         )
@@ -298,7 +342,8 @@ def compact_summary(result: dict) -> str:
             f"access_pattern={config['access_pattern']} working_set_blocks={config['working_set_blocks']} "
             f"seed={config['seed']} "
             f"block_bytes={config['block_bytes']} decode_steps={config['decode_steps']} "
-            f"compute_ms={config['compute_ms']} mode={config['mode']} "
+            f"compute_ms={config['compute_ms']} overlap_compute={config['overlap_compute']} "
+            f"mode={config['mode']} "
             f"dynamic_weights={config['dynamic_weights']}"
         ),
         f"profile direct_h2d_bw_gbps={result['profile']['direct_h2d_bw_gbps']:.3f}",
@@ -363,6 +408,11 @@ def main() -> None:
     parser.add_argument("--block-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--decode-steps", type=int, default=32)
     parser.add_argument("--compute-ms", type=float, default=0.0)
+    parser.add_argument(
+        "--overlap-compute",
+        action="store_true",
+        help="run dummy compute concurrently with prefetch/evict in each step",
+    )
     parser.add_argument("--chunk-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument("--profile-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--mode", choices=["pool", "direct", "relay", "all"], default="pool")
@@ -425,6 +475,7 @@ def main() -> None:
             "block_bytes": args.block_bytes,
             "decode_steps": args.decode_steps,
             "compute_ms": args.compute_ms,
+            "overlap_compute": args.overlap_compute,
             "chunk_bytes": args.chunk_bytes,
             "profile_bytes": args.profile_bytes,
             "mode": args.mode,
@@ -450,6 +501,7 @@ def main() -> None:
             args.seed,
             args.decode_steps,
             args.compute_ms,
+            args.overlap_compute,
         )
 
     if args.mode == "all":
