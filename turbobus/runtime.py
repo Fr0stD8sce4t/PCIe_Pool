@@ -314,6 +314,7 @@ class Runtime:
         self.relay_gpus = [int(gpu) for gpu in (relay_gpus or [])]
         self.options = options or RuntimeOptions()
         self._last_resolved_transfer_mode = TransferMode.POOL
+        self._last_auto_decision: AutoTransferDecision | None = None
         if TransferMode(self.options.transfer_mode) is TransferMode.AUTO:
             self._last_resolved_transfer_mode = TransferMode.AUTO
         self._runtime = _turbobus.Runtime(self.options.to_native())
@@ -372,6 +373,7 @@ class Runtime:
                 reason="explicit transfer mode",
             )
             self._last_resolved_transfer_mode = requested_mode
+            self._last_auto_decision = None
             self._runtime.set_transfer_mode(_runtime_transfer_mode_value(requested_mode))
             return decision
 
@@ -403,11 +405,28 @@ class Runtime:
             direction=direction,
         )
         self._last_resolved_transfer_mode = decision.resolved_mode
+        self._last_auto_decision = decision
         self._runtime.set_transfer_mode(_runtime_transfer_mode_value(decision.resolved_mode))
         return decision
 
     def last_transfer_mode(self) -> TransferMode:
         return self._last_resolved_transfer_mode
+
+    def last_auto_decision_dict(self) -> dict[str, object]:
+        decision = self._last_auto_decision
+        if decision is None:
+            return {}
+        return {
+            "auto_resolved_mode": decision.resolved_mode.value,
+            "auto_reason": decision.reason.replace(" ", "_"),
+            "auto_request_bytes": decision.request_bytes,
+            "auto_request_chunks": decision.request_chunks,
+            "auto_direct_bw_gbps": f"{decision.direct_h2d_bw_gbps:.3f}",
+            "auto_relay_bw_gbps": f"{decision.relay_effective_bw_gbps:.3f}",
+            "auto_eligible_relays": ",".join(
+                str(device) for device in decision.eligible_relay_devices
+            ),
+        }
 
     def fetch_to_gpu(self, cpu_tensor, gpu_tensor):
         _require_torch()

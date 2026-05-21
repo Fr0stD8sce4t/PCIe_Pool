@@ -758,6 +758,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         transfer_ms = (time.perf_counter() - transfer_start) * 1000.0
         total_ms = (time.perf_counter() - total_start) * 1000.0
         stats = _adapter_transfer_stats(adapter, refs, handles).as_dict()
+        auto_decision = self.runtime.last_auto_decision_dict() if self.runtime else {}
         self.state.events.append(
             {
                 "event": "restore",
@@ -773,6 +774,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                 "layers": len(kv_caches),
                 "ranges": len(refs),
                 **stats,
+                **auto_decision,
             }
         )
         _emit_event(
@@ -789,6 +791,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             layers=len(kv_caches),
             ranges=len(refs),
             **stats,
+            **auto_decision,
         )
 
     def _start_layer_save_context(

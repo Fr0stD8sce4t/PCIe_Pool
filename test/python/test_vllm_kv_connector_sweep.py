@@ -73,7 +73,7 @@ class VllmKVConnectorSweepTest(unittest.TestCase):
             pool_log.write_text(
                 "\n".join(
                     [
-                        "turbobus_kv_connector_event event=restore elapsed_ms=20 prepare_ms=1 transfer_ms=20 total_ms=21 layers=28 ranges=224 bytes=1073741824 direct_chunks=1 relay_chunks=1",
+                        "turbobus_kv_connector_event event=restore elapsed_ms=20 prepare_ms=1 transfer_ms=20 total_ms=21 layers=28 ranges=224 bytes=1073741824 direct_chunks=1 relay_chunks=1 auto_resolved_mode=pool auto_reason=pool_speedup_1.500 auto_direct_bw_gbps=7.500 auto_relay_bw_gbps=7.600",
                         "turbobus_kv_connector_event event=start_load_done requests=1 restore_enabled=True elapsed_ms=22",
                     ]
                 ),
@@ -131,6 +131,10 @@ class VllmKVConnectorSweepTest(unittest.TestCase):
         self.assertTrue(any("mode=pool" in line and "start_load_ms=22" in line for line in lines))
         self.assertTrue(any("mode=pool" in line and "layers=28" in line for line in lines))
         self.assertTrue(any("mode=pool" in line and "ranges=224" in line for line in lines))
+        self.assertTrue(any("mode=pool" in line and "auto_resolved_mode=pool" in line for line in lines))
+        self.assertTrue(any("mode=pool" in line and "auto_reason=pool_speedup_1.500" in line for line in lines))
+        self.assertTrue(any("mode=pool" in line and "auto_direct_bw_gbps=7.500" in line for line in lines))
+        self.assertTrue(any("mode=pool" in line and "auto_relay_bw_gbps=7.600" in line for line in lines))
         self.assertTrue(any("mode=pool" in line and "save_layer_count=28" in line for line in lines))
         self.assertTrue(any("mode=pool" in line and "save_layer_ranges=56" in line for line in lines))
         self.assertTrue(any("direct_over_pool_restore=2.000" in line for line in lines))

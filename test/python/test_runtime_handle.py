@@ -244,6 +244,8 @@ class RuntimeOptionsTest(unittest.TestCase):
         self.assertTrue(runtime._runtime.profile_force)
         self.assertEqual(decision.resolved_mode, TransferMode.POOL)
         self.assertEqual(runtime.last_transfer_mode(), TransferMode.POOL)
+        self.assertEqual(runtime.last_auto_decision_dict()["auto_resolved_mode"], "pool")
+        self.assertEqual(runtime.last_auto_decision_dict()["auto_eligible_relays"], "1")
 
     def test_from_tuning_json_reads_best_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
