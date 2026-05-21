@@ -300,7 +300,7 @@ def parse_args():
     parser.add_argument("--prefix-key", default="qwen3-prefix")
     parser.add_argument("--restore-blocks-list", default="8")
     parser.add_argument("--tokens-per-block", type=int, default=16)
-    parser.add_argument("--modes", default="direct,relay,pool")
+    parser.add_argument("--modes", default="auto,direct,relay,pool")
     parser.add_argument("--chunk-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument("--profile-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--enforce-eager", action="store_true")

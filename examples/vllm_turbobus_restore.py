@@ -449,7 +449,7 @@ def parse_args():
     parser.add_argument("--iterations", type=int, default=3)
     parser.add_argument("--chunk-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument("--profile-bytes", type=int, default=16 * 1024 * 1024)
-    parser.add_argument("--mode", choices=["direct", "relay", "pool", "all"], default="all")
+    parser.add_argument("--mode", choices=["auto", "direct", "relay", "pool", "all"], default="all")
     parser.add_argument("--dynamic-weights", action="store_true")
     parser.add_argument("--allocation-timeout-s", type=float, default=5.0)
     parser.add_argument(

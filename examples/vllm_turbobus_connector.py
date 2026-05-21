@@ -236,7 +236,7 @@ def parse_args():
     parser.add_argument("--restore-blocks", type=int, default=8)
     parser.add_argument("--chunk-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument("--profile-bytes", type=int, default=16 * 1024 * 1024)
-    parser.add_argument("--mode", choices=["direct", "relay", "pool"], default="pool")
+    parser.add_argument("--mode", choices=["auto", "direct", "relay", "pool"], default="pool")
     parser.add_argument("--dynamic-weights", action="store_true")
     parser.add_argument("--log-output", default=None)
     parser.add_argument(

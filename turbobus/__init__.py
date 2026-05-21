@@ -15,7 +15,13 @@ from .inference import (
     InferenceKVSlotAdapter,
     make_contiguous_kv_slots,
 )
-from .runtime import Runtime, RuntimeOptions, TransferMode
+from .runtime import (
+    AutoTransferDecision,
+    AutoTransferSelector,
+    Runtime,
+    RuntimeOptions,
+    TransferMode,
+)
 from .vllm import (
     VllmKVBlockRef,
     VllmKVGroup,
@@ -51,6 +57,8 @@ __all__ = [
     "OffloadBlockInfo",
     "OffloadManager",
     "OffloadStore",
+    "AutoTransferDecision",
+    "AutoTransferSelector",
     "Runtime",
     "RuntimeOptions",
     "TransferMode",

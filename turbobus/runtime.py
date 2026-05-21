@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 import json
@@ -21,9 +22,181 @@ else:
 
 
 class TransferMode(str, Enum):
+    AUTO = "auto"
     POOL = "pool"
     DIRECT = "direct"
     RELAY = "relay"
+
+
+@dataclass(frozen=True)
+class AutoTransferDecision:
+    requested_mode: TransferMode
+    resolved_mode: TransferMode
+    request_bytes: int
+    request_chunks: int
+    direct_h2d_bw_gbps: float
+    relay_effective_bw_gbps: float
+    eligible_relay_devices: tuple[int, ...]
+    reason: str
+
+
+@dataclass(frozen=True)
+class AutoTransferSelector:
+    min_chunks_for_relay: int = 2
+    relay_min_effective_bw_gbps: float = 0.0
+    relay_min_direct_ratio: float = 0.0
+    min_pool_speedup: float = 1.15
+    min_relay_speedup: float = 1.05
+
+    def choose(
+        self,
+        profile,
+        request_bytes: int,
+        chunk_bytes: int,
+        request_chunks: int | None = None,
+        direction: str = "h2d",
+    ) -> AutoTransferDecision:
+        request_bytes = max(0, int(request_bytes))
+        chunk_bytes = max(1, int(chunk_bytes))
+        if request_chunks is None:
+            request_chunks = max(1, math.ceil(request_bytes / chunk_bytes)) if request_bytes else 0
+        else:
+            request_chunks = max(0, int(request_chunks))
+        direct_bw = max(0.0, float(getattr(profile, "direct_h2d_bw_gbps", 0.0) or 0.0))
+        eligible_relays = self._eligible_relays(profile, direct_bw)
+        relay_bw = sum(float(getattr(relay, "effective_bw_gbps", 0.0) or 0.0) for relay in eligible_relays)
+
+        if request_bytes == 0:
+            return self._decision(
+                TransferMode.AUTO,
+                TransferMode.DIRECT,
+                request_bytes,
+                request_chunks,
+                direct_bw,
+                relay_bw,
+                eligible_relays,
+                f"{direction} request has no bytes",
+            )
+        if request_chunks < self.min_chunks_for_relay:
+            return self._decision(
+                TransferMode.AUTO,
+                TransferMode.DIRECT,
+                request_bytes,
+                request_chunks,
+                direct_bw,
+                relay_bw,
+                eligible_relays,
+                f"{direction} request has only {request_chunks} chunk(s)",
+            )
+        if direct_bw <= 0.0 and relay_bw > 0.0:
+            return self._decision(
+                TransferMode.AUTO,
+                TransferMode.RELAY,
+                request_bytes,
+                request_chunks,
+                direct_bw,
+                relay_bw,
+                eligible_relays,
+                f"{direction} direct bandwidth is unavailable",
+            )
+        if relay_bw <= 0.0:
+            return self._decision(
+                TransferMode.AUTO,
+                TransferMode.DIRECT,
+                request_bytes,
+                request_chunks,
+                direct_bw,
+                relay_bw,
+                eligible_relays,
+                f"{direction} has no eligible relay paths",
+            )
+
+        direct_ms = self._transfer_ms(request_bytes, direct_bw)
+        relay_ms = self._transfer_ms(request_bytes, relay_bw)
+        pool_ms = self._transfer_ms(request_bytes, direct_bw + relay_bw)
+        best_single_ms = min(direct_ms, relay_ms)
+        pool_speedup = best_single_ms / pool_ms if pool_ms > 0.0 else 0.0
+        relay_speedup = direct_ms / relay_ms if direct_ms > 0.0 and relay_ms > 0.0 else 0.0
+
+        if pool_speedup >= self.min_pool_speedup:
+            return self._decision(
+                TransferMode.AUTO,
+                TransferMode.POOL,
+                request_bytes,
+                request_chunks,
+                direct_bw,
+                relay_bw,
+                eligible_relays,
+                f"pool speedup {pool_speedup:.3f} >= {self.min_pool_speedup:.3f}",
+            )
+        if relay_speedup >= self.min_relay_speedup and relay_ms < direct_ms:
+            return self._decision(
+                TransferMode.AUTO,
+                TransferMode.RELAY,
+                request_bytes,
+                request_chunks,
+                direct_bw,
+                relay_bw,
+                eligible_relays,
+                f"relay speedup {relay_speedup:.3f} >= {self.min_relay_speedup:.3f}",
+            )
+        return self._decision(
+            TransferMode.AUTO,
+            TransferMode.DIRECT,
+            request_bytes,
+            request_chunks,
+            direct_bw,
+            relay_bw,
+            eligible_relays,
+            "direct is the best single path",
+        )
+
+    @staticmethod
+    def _transfer_ms(bytes_: int, bandwidth_gbps: float) -> float:
+        if bytes_ <= 0 or bandwidth_gbps <= 0.0:
+            return 0.0
+        return (float(bytes_) / (bandwidth_gbps * 1e9)) * 1000.0
+
+    def _eligible_relays(self, profile, direct_bw: float):
+        relays = []
+        for relay in getattr(profile, "relays", []) or []:
+            effective_bw = max(0.0, float(getattr(relay, "effective_bw_gbps", 0.0) or 0.0))
+            if not getattr(relay, "p2p_enabled", False) or effective_bw <= 0.0:
+                continue
+            if effective_bw < self.relay_min_effective_bw_gbps:
+                continue
+            if (
+                direct_bw > 0.0
+                and self.relay_min_direct_ratio > 0.0
+                and effective_bw < direct_bw * self.relay_min_direct_ratio
+            ):
+                continue
+            relays.append(relay)
+        return relays
+
+    @staticmethod
+    def _decision(
+        requested_mode: TransferMode,
+        resolved_mode: TransferMode,
+        request_bytes: int,
+        request_chunks: int,
+        direct_bw: float,
+        relay_bw: float,
+        eligible_relays,
+        reason: str,
+    ) -> AutoTransferDecision:
+        return AutoTransferDecision(
+            requested_mode=requested_mode,
+            resolved_mode=resolved_mode,
+            request_bytes=int(request_bytes),
+            request_chunks=int(request_chunks),
+            direct_h2d_bw_gbps=float(direct_bw),
+            relay_effective_bw_gbps=float(relay_bw),
+            eligible_relay_devices=tuple(
+                int(getattr(relay, "relay_device", -1)) for relay in eligible_relays
+            ),
+            reason=str(reason),
+        )
 
 
 def _native_transfer_mode(mode: TransferMode | str):
@@ -37,6 +210,12 @@ def _native_transfer_mode(mode: TransferMode | str):
     if mode is TransferMode.RELAY:
         return _turbobus.TransferMode.RelayOnly
     raise ValueError(f"unsupported transfer mode: {mode}")
+
+
+def _runtime_transfer_mode_value(mode: TransferMode | str):
+    if _turbobus is None:
+        return TransferMode(mode)
+    return _native_transfer_mode(mode)
 
 
 @dataclass
@@ -86,7 +265,12 @@ class RuntimeOptions:
         options.profile_bytes = self.profile_bytes
         options.profile_on_first_transfer = self.profile_on_first_transfer
         options.profile_cache_enabled = self.profile_cache_enabled
-        options.transfer_mode = _native_transfer_mode(self.transfer_mode)
+        mode = TransferMode(self.transfer_mode)
+        options.transfer_mode = (
+            _turbobus.TransferMode.Pool
+            if mode is TransferMode.AUTO
+            else _native_transfer_mode(mode)
+        )
         options.min_chunks_for_relay = self.min_chunks_for_relay
         options.relay_min_effective_bw_gbps = self.relay_min_effective_bw_gbps
         options.relay_min_direct_ratio = self.relay_min_direct_ratio
@@ -127,6 +311,9 @@ class Runtime:
         self.target_gpu = int(target_gpu)
         self.relay_gpus = [int(gpu) for gpu in (relay_gpus or [])]
         self.options = options or RuntimeOptions()
+        self._last_resolved_transfer_mode = TransferMode.POOL
+        if TransferMode(self.options.transfer_mode) is TransferMode.AUTO:
+            self._last_resolved_transfer_mode = TransferMode.AUTO
         self._runtime = _turbobus.Runtime(self.options.to_native())
         self._runtime.init(self.target_gpu, self.relay_gpus)
 
@@ -143,11 +330,79 @@ class Runtime:
         return self._runtime.last_plan()
 
     def last_plan_dict(self) -> dict:
-        return transfer_plan_to_dict(self.last_plan())
+        plan = transfer_plan_to_dict(self.last_plan())
+        requested_mode = TransferMode(self.options.transfer_mode)
+        plan["requested_transfer_mode"] = requested_mode.value
+        plan["resolved_transfer_mode"] = self._last_resolved_transfer_mode.value
+        return plan
 
     def set_transfer_mode(self, mode: TransferMode | str) -> None:
         self.options.transfer_mode = TransferMode(mode)
-        self._runtime.set_transfer_mode(_native_transfer_mode(self.options.transfer_mode))
+        if self.options.transfer_mode is TransferMode.AUTO:
+            self._last_resolved_transfer_mode = TransferMode.AUTO
+            self._runtime.set_transfer_mode(_runtime_transfer_mode_value(TransferMode.POOL))
+            return
+        self._last_resolved_transfer_mode = self.options.transfer_mode
+        self._runtime.set_transfer_mode(_runtime_transfer_mode_value(self.options.transfer_mode))
+
+    def resolve_transfer_mode(
+        self,
+        bytes: int,
+        direction: str = "h2d",
+        range_count: int | None = None,
+    ) -> AutoTransferDecision:
+        requested_mode = TransferMode(self.options.transfer_mode)
+        if requested_mode is not TransferMode.AUTO:
+            request_chunks = max(
+                1,
+                int(range_count)
+                if range_count is not None
+                else math.ceil(max(0, int(bytes)) / max(1, int(self.options.chunk_bytes))),
+            )
+            decision = AutoTransferDecision(
+                requested_mode=requested_mode,
+                resolved_mode=requested_mode,
+                request_bytes=max(0, int(bytes)),
+                request_chunks=request_chunks,
+                direct_h2d_bw_gbps=0.0,
+                relay_effective_bw_gbps=0.0,
+                eligible_relay_devices=tuple(self.relay_gpus),
+                reason="explicit transfer mode",
+            )
+            self._last_resolved_transfer_mode = requested_mode
+            self._runtime.set_transfer_mode(_runtime_transfer_mode_value(requested_mode))
+            return decision
+
+        plan_profile = (
+            self.planner_profile()
+            if self.options.enable_dynamic_weights
+            else self.cached_profile()
+        )
+        if plan_profile.direct_h2d_bw_gbps <= 0.0 and not plan_profile.relays:
+            self.profile(self.options.profile_bytes, force=False)
+        selector = AutoTransferSelector(
+            min_chunks_for_relay=self.options.min_chunks_for_relay,
+            relay_min_effective_bw_gbps=self.options.relay_min_effective_bw_gbps,
+            relay_min_direct_ratio=self.options.relay_min_direct_ratio,
+        )
+        plan_profile = (
+            self.planner_profile()
+            if self.options.enable_dynamic_weights
+            else self.cached_profile()
+        )
+        decision = selector.choose(
+            plan_profile,
+            request_bytes=bytes,
+            chunk_bytes=self.options.chunk_bytes,
+            request_chunks=range_count,
+            direction=direction,
+        )
+        self._last_resolved_transfer_mode = decision.resolved_mode
+        self._runtime.set_transfer_mode(_runtime_transfer_mode_value(decision.resolved_mode))
+        return decision
+
+    def last_transfer_mode(self) -> TransferMode:
+        return self._last_resolved_transfer_mode
 
     def fetch_to_gpu(self, cpu_tensor, gpu_tensor):
         _require_torch()
@@ -157,6 +412,7 @@ class Runtime:
             target_gpu=self.target_gpu,
             direction="h2d",
         )
+        self.resolve_transfer_mode(bytes_to_copy, direction="h2d")
 
         handle = self._runtime.fetch_to_gpu(
             int(cpu_tensor.data_ptr()),
@@ -173,6 +429,7 @@ class Runtime:
             target_gpu=self.target_gpu,
             direction="d2h",
         )
+        self.resolve_transfer_mode(bytes_to_copy, direction="d2h")
 
         handle = self._runtime.offload_to_cpu(
             int(gpu_tensor.data_ptr()),
@@ -189,7 +446,15 @@ class Runtime:
             target_gpu=self.target_gpu,
             direction="h2d",
         )
-        native_ranges = _native_ranges(ranges, source_bytes, destination_bytes)
+        range_items = list(ranges)
+        native_ranges = _native_ranges(range_items, source_bytes, destination_bytes)
+        range_fields = [_range_fields(item) for item in range_items]
+        transfer_bytes = sum(int(bytes_) for _, _, bytes_ in range_fields)
+        range_count = sum(
+            max(1, math.ceil(int(bytes_) / max(1, int(self.options.chunk_bytes))))
+            for _, _, bytes_ in range_fields
+        )
+        self.resolve_transfer_mode(transfer_bytes, direction="h2d", range_count=range_count)
         handle = self._runtime.fetch_ranges_to_gpu(
             int(cpu_tensor.data_ptr()),
             int(source_bytes),
@@ -207,7 +472,15 @@ class Runtime:
             target_gpu=self.target_gpu,
             direction="d2h",
         )
-        native_ranges = _native_ranges(ranges, source_bytes, destination_bytes)
+        range_items = list(ranges)
+        native_ranges = _native_ranges(range_items, source_bytes, destination_bytes)
+        range_fields = [_range_fields(item) for item in range_items]
+        transfer_bytes = sum(int(bytes_) for _, _, bytes_ in range_fields)
+        range_count = sum(
+            max(1, math.ceil(int(bytes_) / max(1, int(self.options.chunk_bytes))))
+            for _, _, bytes_ in range_fields
+        )
+        self.resolve_transfer_mode(transfer_bytes, direction="d2h", range_count=range_count)
         handle = self._runtime.offload_ranges_to_cpu(
             int(gpu_tensor.data_ptr()),
             int(source_bytes),

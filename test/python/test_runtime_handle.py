@@ -5,7 +5,12 @@ from pathlib import Path
 import tempfile
 
 from turbobus import runtime as runtime_module
-from turbobus.runtime import RuntimeOptions, TransferHandle, TransferMode
+from turbobus.runtime import (
+    AutoTransferSelector,
+    RuntimeOptions,
+    TransferHandle,
+    TransferMode,
+)
 
 try:
     import torch
@@ -76,6 +81,76 @@ class RuntimeOptionsTest(unittest.TestCase):
         self.assertEqual(options.relay_min_direct_ratio, 0.8)
         self.assertTrue(options.enable_dynamic_weights)
         self.assertEqual(options.dynamic_weight_alpha, 0.4)
+
+    def test_auto_transfer_selector_prefers_pool_for_large_requests(self) -> None:
+        class Relay:
+            def __init__(self, relay_device: int, effective_bw_gbps: float) -> None:
+                self.relay_device = relay_device
+                self.effective_bw_gbps = effective_bw_gbps
+                self.p2p_enabled = True
+
+        class Profile:
+            direct_h2d_bw_gbps = 7.5
+            relays = [Relay(5, 7.6)]
+
+        selector = AutoTransferSelector(
+            min_chunks_for_relay=2,
+            relay_min_effective_bw_gbps=6.0,
+            relay_min_direct_ratio=0.8,
+        )
+        decision = selector.choose(Profile(), request_bytes=256 * 1024 * 1024, chunk_bytes=4 * 1024 * 1024)
+
+        self.assertEqual(decision.requested_mode, TransferMode.AUTO)
+        self.assertEqual(decision.resolved_mode, TransferMode.POOL)
+        self.assertIn(5, decision.eligible_relay_devices)
+        self.assertGreaterEqual(decision.request_chunks, 2)
+
+    def test_auto_transfer_selector_falls_back_for_small_requests(self) -> None:
+        class Profile:
+            direct_h2d_bw_gbps = 7.5
+            relays = []
+
+        selector = AutoTransferSelector(min_chunks_for_relay=4)
+        decision = selector.choose(Profile(), request_bytes=8 * 1024 * 1024, chunk_bytes=8 * 1024 * 1024)
+
+        self.assertEqual(decision.resolved_mode, TransferMode.DIRECT)
+        self.assertEqual(decision.reason, "h2d request has only 1 chunk(s)")
+
+    def test_auto_transfer_mode_uses_explicit_profile_fallback(self) -> None:
+        class FakeProfile:
+            direct_h2d_bw_gbps = 0.0
+            relays = []
+
+        class FakeRuntime:
+            def __init__(self) -> None:
+                self.mode = None
+                self.profile_calls = 0
+
+            def profile(self, bytes: int, force: bool = False):
+                self.profile_calls += 1
+                return FakeProfile()
+
+            def cached_profile(self):
+                return FakeProfile()
+
+            def planner_profile(self):
+                return FakeProfile()
+
+            def set_transfer_mode(self, mode):
+                self.mode = mode
+
+        runtime = object.__new__(runtime_module.Runtime)
+        runtime.target_gpu = 0
+        runtime.relay_gpus = [1]
+        runtime.options = RuntimeOptions(transfer_mode="auto")
+        runtime._runtime = FakeRuntime()
+        runtime._last_resolved_transfer_mode = TransferMode.AUTO
+
+        decision = runtime.resolve_transfer_mode(32 * 1024 * 1024, direction="h2d")
+
+        self.assertEqual(runtime._runtime.profile_calls, 1)
+        self.assertEqual(decision.resolved_mode, TransferMode.DIRECT)
+        self.assertEqual(runtime.last_transfer_mode(), TransferMode.DIRECT)
 
     def test_from_tuning_json_reads_best_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

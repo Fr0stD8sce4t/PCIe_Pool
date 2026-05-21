@@ -284,7 +284,7 @@ def main() -> None:
     parser.add_argument("--profile-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--iterations", type=int, default=5)
-    parser.add_argument("--mode", choices=["pool", "direct", "relay", "all"], default="pool")
+    parser.add_argument("--mode", choices=["auto", "pool", "direct", "relay", "all"], default="pool")
     parser.add_argument("--json-output")
     parser.add_argument(
         "--include-plan",
