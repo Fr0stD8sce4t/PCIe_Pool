@@ -69,6 +69,7 @@ def run(args) -> None:
             "turbobus.mode": args.mode,
             "turbobus.restore_block_limit": args.restore_blocks,
             "turbobus.restore_enabled": args.restore_enabled,
+            "turbobus.max_saved_prefixes": args.max_saved_prefixes,
         },
     )
     llm_kwargs = {
@@ -97,13 +98,37 @@ def run(args) -> None:
     )
     first_outputs = llm.generate([first_prompt], base_sampling)
 
-    saved = get_saved_prefix(args.prefix_key)
+    first_saved = get_saved_prefix(args.prefix_key)
+    restore_prefix_key = args.prefix_key
+    restore_base_prompt = first_prompt
+    saved = first_saved
+    second_saved = None
+    if args.second_save_prefix_key:
+        second_save_prompt = prompt_text(args.second_save_prompt, args.prompt_repeat)
+        second_save_sampling = SamplingParams(
+            temperature=0.0,
+            max_tokens=args.max_tokens,
+            extra_args={
+                "kv_transfer_params": {
+                    "turbobus.do_save": args.restore_enabled,
+                    "turbobus.prefix_key": args.second_save_prefix_key,
+                    "turbobus.save_blocks": args.restore_blocks,
+                    "turbobus.matched_tokens": args.matched_tokens,
+                }
+            },
+        )
+        llm.generate([second_save_prompt], second_save_sampling)
+        second_saved = get_saved_prefix(args.second_save_prefix_key)
+        restore_prefix_key = args.second_save_prefix_key
+        restore_base_prompt = second_save_prompt
+        saved = second_saved
+
     source_request_id = saved.source_request_id if saved is not None else "unknown"
     source_blocks = saved.block_count if saved is not None else 0
     if args.restore_enabled:
         if saved is None:
             raise RuntimeError(
-                f"connector did not save prefix {args.prefix_key!r}; "
+                f"connector did not save prefix {restore_prefix_key!r}; "
                 "check turbobus.do_save and vLLM wait_for_save"
             )
         if saved.block_count < args.restore_blocks:
@@ -113,13 +138,14 @@ def run(args) -> None:
             )
 
     matched_tokens = max(0, args.matched_tokens) if args.restore_enabled else 0
+    second_prompt = second_prompt_text(args, restore_base_prompt)
     sampling = SamplingParams(
         temperature=0.0,
         max_tokens=args.max_tokens,
         extra_args={
             "kv_transfer_params": {
                 "turbobus.do_restore": True,
-                "turbobus.prefix_key": args.prefix_key,
+                "turbobus.prefix_key": restore_prefix_key,
                 "turbobus.matched_tokens": matched_tokens,
             }
         },
@@ -138,11 +164,14 @@ def run(args) -> None:
         f"model={args.model}",
         f"prompt_repeat={args.prompt_repeat}",
         f"prefix_key={args.prefix_key}",
+        f"second_save_prefix_key={args.second_save_prefix_key}",
+        f"restore_prefix_key={restore_prefix_key}",
         f"second_prompt_suffix={args.second_prompt_suffix!r}",
         f"requested_matched_tokens={args.matched_tokens}",
         f"matched_tokens={matched_tokens}",
         f"restore_blocks={args.restore_blocks}",
         f"restore_enabled={args.restore_enabled}",
+        f"max_saved_prefixes={args.max_saved_prefixes}",
         f"chunk_bytes={args.chunk_bytes}",
         f"mode={args.mode}",
     )
@@ -173,6 +202,22 @@ def run(args) -> None:
             f"direct_chunks={saved.direct_chunks}",
             f"relay_chunks={saved.relay_chunks}",
         )
+    if first_saved is not None and first_saved is not saved:
+        print(
+            "vllm_kv_connector_first_save",
+            f"source_request={first_saved.source_request_id}",
+            f"blocks={first_saved.block_count}",
+            f"bytes={first_saved.bytes}",
+            f"elapsed_ms={first_saved.elapsed_ms:.3f}",
+        )
+    if second_saved is not None and second_saved is not saved:
+        print(
+            "vllm_kv_connector_second_save",
+            f"source_request={second_saved.source_request_id}",
+            f"blocks={second_saved.block_count}",
+            f"bytes={second_saved.bytes}",
+            f"elapsed_ms={second_saved.elapsed_ms:.3f}",
+        )
     print(
         "vllm_kv_connector_result",
         f"source_request={source_request_id}",
@@ -191,6 +236,8 @@ def parse_args():
     parser.add_argument("--prompt-repeat", type=int, default=64)
     parser.add_argument("--second-prompt-suffix", default=" Italy")
     parser.add_argument("--prefix-key", default="qwen3-prefix")
+    parser.add_argument("--second-save-prefix-key", default=None)
+    parser.add_argument("--second-save-prompt", default="The capital of Germany is")
     parser.add_argument("--matched-tokens", type=int, default=128)
     parser.add_argument("--max-tokens", type=int, default=8)
     parser.add_argument("--target-gpu", type=int, required=True)
@@ -205,6 +252,7 @@ def parse_args():
     )
     parser.set_defaults(disable_multiproc_executor=True)
     parser.add_argument("--restore-blocks", type=int, default=8)
+    parser.add_argument("--max-saved-prefixes", type=int, default=0)
     parser.add_argument(
         "--restore-enabled",
         action="store_true",

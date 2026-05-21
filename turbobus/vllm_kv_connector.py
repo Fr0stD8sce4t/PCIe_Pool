@@ -77,21 +77,35 @@ class _ScheduledRequestView:
 
 
 class TurboBusPrefixStore:
-    def __init__(self) -> None:
+    def __init__(self, max_prefixes: int = 0) -> None:
         self._prefixes: dict[str, TurboBusSavedPrefix] = {}
+        self.max_prefixes = max(0, int(max_prefixes))
 
-    def put(self, prefix: TurboBusSavedPrefix) -> TurboBusSavedPrefix | None:
+    def put(self, prefix: TurboBusSavedPrefix) -> list[TurboBusSavedPrefix]:
         if not prefix.key:
             raise ValueError("prefix key must not be empty")
-        previous = self._prefixes.get(str(prefix.key))
+        evicted = []
+        previous = self._prefixes.pop(str(prefix.key), None)
+        if previous is not None:
+            evicted.append(previous)
         self._prefixes[str(prefix.key)] = prefix
-        return previous
+        while self.max_prefixes > 0 and len(self._prefixes) > self.max_prefixes:
+            oldest_key = next(iter(self._prefixes))
+            removed = self._prefixes.pop(oldest_key)
+            evicted.append(removed)
+        return evicted
 
     def get(self, key: str) -> TurboBusSavedPrefix | None:
         return self._prefixes.get(str(key))
 
+    def remove(self, key: str) -> TurboBusSavedPrefix | None:
+        return self._prefixes.pop(str(key), None)
+
     def clear(self) -> None:
         self._prefixes.clear()
+
+    def __len__(self) -> int:
+        return len(self._prefixes)
 
 
 class TurboBusCPUBackingPool:
@@ -228,8 +242,12 @@ def get_saved_prefix(key: str) -> TurboBusSavedPrefix | None:
     return _PREFIX_STORE.get(str(key))
 
 
-def _store_saved_prefix(prefix: TurboBusSavedPrefix) -> TurboBusSavedPrefix | None:
+def _store_saved_prefix(prefix: TurboBusSavedPrefix) -> list[TurboBusSavedPrefix]:
     return _PREFIX_STORE.put(prefix)
+
+
+def _remove_saved_prefix(key: str) -> TurboBusSavedPrefix | None:
+    return _PREFIX_STORE.remove(key)
 
 
 class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
@@ -270,14 +288,21 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             "turbobus.restore_enabled",
             os.environ.get("TURBOBUS_RESTORE_ENABLED", "0") == "1",
         )
+        self.max_saved_prefixes = _extra_config_int(
+            vllm_config,
+            "turbobus.max_saved_prefixes",
+            int(os.environ.get("TURBOBUS_MAX_SAVED_PREFIXES", "0") or 0),
+        )
         self.runtime = None
         self._adapters_by_prefix: dict[str, Any] = {}
         self._backing_pool = TurboBusCPUBackingPool()
+        self._prefix_store = TurboBusPrefixStore(max_prefixes=self.max_saved_prefixes)
         _emit_event(
             "init",
             role=str(role),
             restore_enabled=self.restore_enabled,
             restore_block_limit=self.restore_block_limit,
+            max_saved_prefixes=self.max_saved_prefixes,
         )
 
     def register_kv_caches(self, kv_caches: dict[str, Any]) -> None:
@@ -722,30 +747,30 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         transfer_ms = (time.perf_counter() - transfer_start) * 1000.0
         stats = _summarize_handles(handles)
         register_start = time.perf_counter()
-        previous = _store_saved_prefix(
-            TurboBusSavedPrefix(
-                key=request.prefix_key,
-                cpu_backings=cpu_backings,
-                block_count=request.block_count,
-                matched_tokens=request.matched_tokens,
-                source_request_id=request.request_id,
-                elapsed_ms=transfer_ms,
-                runtime_init_ms=runtime_init_ms,
-                prepare_ms=prepare_ms,
-                cpu_alloc_ms=cpu_alloc_ms,
-                reused_backing=reused_backing,
-                group_ms=group_ms,
-                adapter_ms=adapter_ms,
-                refs_ms=refs_ms,
-                transfer_ms=transfer_ms,
-                bytes=stats["bytes"],
-                direct_chunks=stats["direct_chunks"],
-                relay_chunks=stats["relay_chunks"],
-            )
+        prefix = TurboBusSavedPrefix(
+            key=request.prefix_key,
+            cpu_backings=cpu_backings,
+            block_count=request.block_count,
+            matched_tokens=request.matched_tokens,
+            source_request_id=request.request_id,
+            elapsed_ms=transfer_ms,
+            runtime_init_ms=runtime_init_ms,
+            prepare_ms=prepare_ms,
+            cpu_alloc_ms=cpu_alloc_ms,
+            reused_backing=reused_backing,
+            group_ms=group_ms,
+            adapter_ms=adapter_ms,
+            refs_ms=refs_ms,
+            transfer_ms=transfer_ms,
+            bytes=stats["bytes"],
+            direct_chunks=stats["direct_chunks"],
+            relay_chunks=stats["relay_chunks"],
         )
-        if previous is not None:
-            self._backing_pool.release_prefix(previous, kv_caches)
-            self._adapters_by_prefix.pop(previous.key, None)
+        evicted = self._store_prefix(prefix)
+        _store_saved_prefix(prefix)
+        for removed in evicted:
+            if removed.key != prefix.key:
+                _remove_saved_prefix(removed.key)
         _emit_event(
             "register_saved_prefix",
             prefix_key=request.prefix_key,
@@ -809,6 +834,28 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
 
     def _allocate_cpu_backings(self, block_count: int, kv_caches: list[Any]) -> list[Any]:
         return TurboBusCPUBackingPool._allocate(block_count, kv_caches)
+
+    def _store_prefix(self, prefix: TurboBusSavedPrefix) -> list[TurboBusSavedPrefix]:
+        evicted = self._prefix_store.put(prefix)
+        kv_caches = list(self.state.kv_caches.values())
+        for removed in evicted:
+            self._backing_pool.release_prefix(removed, kv_caches)
+            self._adapters_by_prefix.pop(removed.key, None)
+            self.state.events.append(
+                {
+                    "event": "evict_prefix",
+                    "prefix_key": removed.key,
+                    "block_count": removed.block_count,
+                    "source_request_id": removed.source_request_id,
+                }
+            )
+            _emit_event(
+                "evict_prefix",
+                prefix_key=removed.key,
+                block_count=removed.block_count,
+                source_request_id=removed.source_request_id,
+            )
+        return evicted
 
 
 def _request_params(request) -> dict[str, Any]:
