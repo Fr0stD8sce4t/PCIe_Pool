@@ -43,6 +43,7 @@ class AutoTransferDecision:
 @dataclass(frozen=True)
 class AutoTransferSelector:
     min_chunks_for_relay: int = 2
+    min_pool_bytes: int = 16 * 1024 * 1024
     relay_min_effective_bw_gbps: float = 0.0
     relay_min_direct_ratio: float = 0.0
     min_pool_speedup: float = 1.15
@@ -118,7 +119,7 @@ class AutoTransferSelector:
         pool_speedup = best_single_ms / pool_ms if pool_ms > 0.0 else 0.0
         relay_speedup = direct_ms / relay_ms if direct_ms > 0.0 and relay_ms > 0.0 else 0.0
 
-        if pool_speedup >= self.min_pool_speedup:
+        if request_bytes >= self.min_pool_bytes and pool_speedup >= self.min_pool_speedup:
             return self._decision(
                 TransferMode.AUTO,
                 TransferMode.POOL,
@@ -228,6 +229,7 @@ class RuntimeOptions:
     profile_cache_enabled: bool = True
     transfer_mode: TransferMode | str = TransferMode.POOL
     min_chunks_for_relay: int = 2
+    min_pool_bytes: int = 16 * 1024 * 1024
     relay_min_effective_bw_gbps: float = 0.0
     relay_min_direct_ratio: float = 0.0
     enable_dynamic_weights: bool = False
@@ -382,6 +384,7 @@ class Runtime:
             self.profile(self.options.profile_bytes, force=False)
         selector = AutoTransferSelector(
             min_chunks_for_relay=self.options.min_chunks_for_relay,
+            min_pool_bytes=self.options.min_pool_bytes,
             relay_min_effective_bw_gbps=self.options.relay_min_effective_bw_gbps,
             relay_min_direct_ratio=self.options.relay_min_direct_ratio,
         )

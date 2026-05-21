@@ -67,6 +67,7 @@ def run(args) -> None:
             "turbobus.chunk_bytes": args.chunk_bytes,
             "turbobus.profile_bytes": args.profile_bytes,
             "turbobus.mode": args.mode,
+            "turbobus.min_pool_bytes": args.min_pool_bytes,
             "turbobus.restore_block_limit": args.restore_blocks,
             "turbobus.restore_enabled": args.restore_enabled,
             "turbobus.max_saved_prefixes": args.max_saved_prefixes,
@@ -175,6 +176,7 @@ def run(args) -> None:
         f"restore_enabled={args.restore_enabled}",
         f"max_saved_prefixes={args.max_saved_prefixes}",
         f"chunk_bytes={args.chunk_bytes}",
+        f"min_pool_bytes={args.min_pool_bytes}",
         f"mode={args.mode}",
     )
     print(
@@ -265,6 +267,7 @@ def parse_args():
     )
     parser.add_argument("--chunk-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument("--profile-bytes", type=int, default=16 * 1024 * 1024)
+    parser.add_argument("--min-pool-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--mode", choices=["auto", "direct", "relay", "pool"], default="pool")
     parser.add_argument("--log-output", default=None)
     parser.add_argument(

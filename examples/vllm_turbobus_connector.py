@@ -52,6 +52,7 @@ def make_runtime(args, mode: str):
         chunk_bytes=args.chunk_bytes,
         profile_bytes=args.profile_bytes,
         transfer_mode=mode,
+        min_pool_bytes=args.min_pool_bytes,
         enable_dynamic_weights=args.dynamic_weights,
     )
     return turbobus.Runtime(
@@ -152,6 +153,7 @@ def run(args) -> None:
         f"second_prompt_mode={args.second_prompt_mode}",
         f"prefix_caching_disabled={args.disable_prefix_caching}",
         f"chunk_bytes={args.chunk_bytes}",
+        f"min_pool_bytes={args.min_pool_bytes}",
         f"mode={args.mode}",
         f"dynamic_weights={args.dynamic_weights}",
     )
@@ -236,6 +238,7 @@ def parse_args():
     parser.add_argument("--restore-blocks", type=int, default=8)
     parser.add_argument("--chunk-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument("--profile-bytes", type=int, default=16 * 1024 * 1024)
+    parser.add_argument("--min-pool-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--mode", choices=["auto", "direct", "relay", "pool"], default="pool")
     parser.add_argument("--dynamic-weights", action="store_true")
     parser.add_argument("--log-output", default=None)

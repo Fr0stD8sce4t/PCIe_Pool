@@ -1335,6 +1335,7 @@ def _make_runtime_from_config(vllm_config) -> Runtime:
         chunk_bytes=int(get("turbobus.chunk_bytes", os.environ.get("TURBOBUS_CHUNK_BYTES", 4 * 1024 * 1024))),
         profile_bytes=int(get("turbobus.profile_bytes", os.environ.get("TURBOBUS_PROFILE_BYTES", 16 * 1024 * 1024))),
         transfer_mode=str(get("turbobus.mode", os.environ.get("TURBOBUS_MODE", "pool"))),
+        min_pool_bytes=int(get("turbobus.min_pool_bytes", os.environ.get("TURBOBUS_MIN_POOL_BYTES", 16 * 1024 * 1024))),
     )
     return Runtime(target_gpu=target_gpu, relay_gpus=relay_gpus, options=options)
 

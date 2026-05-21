@@ -282,6 +282,7 @@ def main() -> None:
     parser.add_argument("--bytes", type=int, default=256 * 1024 * 1024)
     parser.add_argument("--chunk-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--profile-bytes", type=int, default=16 * 1024 * 1024)
+    parser.add_argument("--min-pool-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--iterations", type=int, default=5)
     parser.add_argument("--mode", choices=["auto", "pool", "direct", "relay", "all"], default="pool")
@@ -313,6 +314,7 @@ def main() -> None:
 
     options = turbobus.RuntimeOptions(
         chunk_bytes=args.chunk_bytes,
+        min_pool_bytes=args.min_pool_bytes,
         enable_dynamic_weights=args.dynamic_weights,
         dynamic_weight_alpha=args.dynamic_weight_alpha,
     )
@@ -324,6 +326,7 @@ def main() -> None:
             "relay_gpus": relays,
             "bytes": args.bytes,
             "chunk_bytes": args.chunk_bytes,
+            "min_pool_bytes": args.min_pool_bytes,
             "profile_bytes": args.profile_bytes,
             "warmup": args.warmup,
             "iterations": args.iterations,
@@ -341,6 +344,7 @@ def main() -> None:
     print("relay_gpus", ",".join(str(relay) for relay in relays))
     print("bytes", args.bytes)
     print("chunk_bytes", args.chunk_bytes)
+    print("min_pool_bytes", args.min_pool_bytes)
     print("warmup", args.warmup)
     print("iterations", args.iterations)
     print("mode", args.mode)

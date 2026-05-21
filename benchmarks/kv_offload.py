@@ -405,6 +405,7 @@ def main() -> None:
     parser.add_argument("--block-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--chunk-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument("--profile-bytes", type=int, default=16 * 1024 * 1024)
+    parser.add_argument("--min-pool-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--iterations", type=int, default=5)
     parser.add_argument("--mode", choices=["auto", "pool", "direct", "relay", "all"], default="pool")
@@ -424,6 +425,7 @@ def main() -> None:
     torch.cuda.set_device(args.target_gpu)
     options = turbobus.RuntimeOptions(
         chunk_bytes=args.chunk_bytes,
+        min_pool_bytes=args.min_pool_bytes,
         enable_dynamic_weights=args.dynamic_weights,
         dynamic_weight_alpha=args.dynamic_weight_alpha,
     )
@@ -474,6 +476,7 @@ def main() -> None:
             "storage_layout": args.storage_layout,
             "block_bytes": args.block_bytes,
             "chunk_bytes": args.chunk_bytes,
+            "min_pool_bytes": args.min_pool_bytes,
             "profile_bytes": args.profile_bytes,
             "warmup": args.warmup,
             "iterations": args.iterations,
