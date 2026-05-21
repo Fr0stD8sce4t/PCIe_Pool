@@ -5,6 +5,7 @@ import os
 import time
 from typing import Any
 
+from .offload_store import summarize_transfer_handles
 from .runtime import Runtime, RuntimeOptions
 from .vllm import make_vllm_layer_range_refs_from_ids
 from .vllm_integration import extract_vllm_block_ids
@@ -704,7 +705,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         handles = adapter.restore_prefix(refs)
         transfer_ms = (time.perf_counter() - transfer_start) * 1000.0
         total_ms = (time.perf_counter() - total_start) * 1000.0
-        stats = _summarize_handles(handles)
+        stats = summarize_transfer_handles(handles).as_dict()
         self.state.events.append(
             {
                 "event": "restore",
@@ -775,7 +776,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         transfer_start = time.perf_counter()
         handles = adapter.save_prefix(refs)
         transfer_ms = (time.perf_counter() - transfer_start) * 1000.0
-        stats = _summarize_handles(handles)
+        stats = summarize_transfer_handles(handles).as_dict()
         register_start = time.perf_counter()
         prefix = TurboBusSavedPrefix(
             key=request.prefix_key,
@@ -1082,21 +1083,6 @@ def _backing_signature(block_count: int, kv_caches: list[Any]) -> tuple[tuple[in
         (slots_per_layer, block_bytes_from_vllm_kv_tensor(kv_cache))
         for kv_cache in kv_caches
     )
-
-
-def _summarize_handles(handles: list) -> dict[str, int]:
-    unique = []
-    seen = set()
-    for handle in handles:
-        if id(handle) in seen or getattr(handle, "stats", None) is None:
-            continue
-        seen.add(id(handle))
-        unique.append(handle.stats)
-    return {
-        "bytes": sum(stats.bytes for stats in unique),
-        "direct_chunks": sum(stats.direct_chunks for stats in unique),
-        "relay_chunks": sum(stats.relay_chunks for stats in unique),
-    }
 
 
 def _emit_event(event: str, **fields) -> None:

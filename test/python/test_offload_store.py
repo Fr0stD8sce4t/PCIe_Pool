@@ -2,7 +2,16 @@ from __future__ import annotations
 
 import unittest
 
-from turbobus import BlockState, KVBlockStore, OffloadManager, OffloadStore
+from types import SimpleNamespace
+
+from turbobus import (
+    BlockState,
+    KVBlockStore,
+    OffloadManager,
+    OffloadStore,
+    TransferStats,
+    summarize_transfer_handles,
+)
 
 
 class FakeTensor:
@@ -17,10 +26,10 @@ class FakeTensor:
 
 
 class FakeHandle:
-    def __init__(self, label: str) -> None:
+    def __init__(self, label: str, stats=None) -> None:
         self.label = label
         self.wait_calls = 0
-        self.stats = {"label": label}
+        self.stats = {"label": label} if stats is None else stats
 
     def wait(self) -> None:
         self.wait_calls += 1
@@ -221,6 +230,31 @@ class OffloadStoreTest(unittest.TestCase):
         store.add("kv0", FakeTensor(1), object())
 
         store.wait("kv0")
+
+    def test_summarize_transfer_handles_deduplicates_handles(self) -> None:
+        handle = FakeHandle(
+            "transfer",
+            SimpleNamespace(bytes=128, direct_chunks=2, relay_chunks=1),
+        )
+
+        stats = summarize_transfer_handles([handle, handle])
+
+        self.assertEqual(stats, TransferStats(bytes=128, direct_chunks=2, relay_chunks=1))
+        self.assertEqual(
+            stats.as_dict(),
+            {"bytes": 128, "direct_chunks": 2, "relay_chunks": 1},
+        )
+
+    def test_summarize_transfer_handles_accepts_dict_stats(self) -> None:
+        handles = [
+            FakeHandle("direct", {"bytes": 64, "direct_chunks": 1}),
+            FakeHandle("relay", {"bytes": 32, "relay_chunks": 1}),
+            FakeHandle("missing", None),
+        ]
+
+        stats = summarize_transfer_handles(handles)
+
+        self.assertEqual(stats, TransferStats(bytes=96, direct_chunks=1, relay_chunks=1))
 
 
 if __name__ == "__main__":

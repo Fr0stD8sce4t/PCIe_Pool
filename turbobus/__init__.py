@@ -4,6 +4,8 @@ from .offload_store import (
     OffloadBlock,
     OffloadManager,
     OffloadStore,
+    TransferStats,
+    summarize_transfer_handles,
 )
 from .inference import (
     FrameworkKVSlot,
@@ -50,6 +52,7 @@ __all__ = [
     "Runtime",
     "RuntimeOptions",
     "TransferMode",
+    "TransferStats",
     "VllmKVBlockRef",
     "VllmKVGroup",
     "VllmKVSlotAdapter",
@@ -68,5 +71,6 @@ __all__ = [
     "make_vllm_layer_block_refs_from_ids",
     "make_vllm_layer_groups_from_kv_caches",
     "make_vllm_layer_range_refs_from_ids",
+    "summarize_transfer_handles",
     "vllm_block_name",
 ]

@@ -18,6 +18,20 @@ class BlockState(str, Enum):
     UNKNOWN = "unknown"
 
 
+@dataclass(frozen=True)
+class TransferStats:
+    bytes: int = 0
+    direct_chunks: int = 0
+    relay_chunks: int = 0
+
+    def as_dict(self) -> dict[str, int]:
+        return {
+            "bytes": self.bytes,
+            "direct_chunks": self.direct_chunks,
+            "relay_chunks": self.relay_chunks,
+        }
+
+
 @dataclass
 class OffloadBlock:
     name: str
@@ -50,6 +64,30 @@ class OffloadBlock:
         if self.last_handle is None:
             return None
         return self.last_handle.stats
+
+
+def summarize_transfer_handles(handles: Iterable) -> TransferStats:
+    unique = []
+    seen = set()
+    for handle in handles:
+        if id(handle) in seen:
+            continue
+        stats = getattr(handle, "stats", None)
+        if stats is None:
+            continue
+        seen.add(id(handle))
+        unique.append(stats)
+    return TransferStats(
+        bytes=sum(_stat_value(stats, "bytes") for stats in unique),
+        direct_chunks=sum(_stat_value(stats, "direct_chunks") for stats in unique),
+        relay_chunks=sum(_stat_value(stats, "relay_chunks") for stats in unique),
+    )
+
+
+def _stat_value(stats, name: str) -> int:
+    if isinstance(stats, dict):
+        return int(stats.get(name, 0) or 0)
+    return int(getattr(stats, name, 0) or 0)
 
 
 class OffloadStore:

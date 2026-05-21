@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import time
 
+from .offload_store import summarize_transfer_handles
 from .vllm import make_vllm_layer_range_refs_from_ids
 from .vllm_integration import VllmAllocationEvent, VllmTurboBusIntegration
 
@@ -127,19 +128,13 @@ class VllmTurboBusConnector:
         elapsed_ms: float,
         handles: list,
     ) -> VllmConnectorEvent:
-        unique = []
-        seen = set()
-        for handle in handles:
-            if id(handle) in seen or handle.stats is None:
-                continue
-            seen.add(id(handle))
-            unique.append(handle.stats)
+        stats = summarize_transfer_handles(handles)
         return VllmConnectorEvent(
             request_id=request_id,
             operation=operation,
             block_count=block_count,
             elapsed_ms=elapsed_ms,
-            direct_chunks=sum(stats.direct_chunks for stats in unique),
-            relay_chunks=sum(stats.relay_chunks for stats in unique),
-            bytes=sum(stats.bytes for stats in unique),
+            direct_chunks=stats.direct_chunks,
+            relay_chunks=stats.relay_chunks,
+            bytes=stats.bytes,
         )
