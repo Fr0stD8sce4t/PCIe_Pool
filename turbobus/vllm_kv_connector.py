@@ -55,6 +55,15 @@ class TurboBusSavedPrefix:
     source_request_id: str = ""
     bytes: int = 0
     elapsed_ms: float = 0.0
+    runtime_init_ms: float = 0.0
+    prepare_ms: float = 0.0
+    cpu_alloc_ms: float = 0.0
+    group_ms: float = 0.0
+    adapter_ms: float = 0.0
+    refs_ms: float = 0.0
+    transfer_ms: float = 0.0
+    register_ms: float = 0.0
+    total_ms: float = 0.0
     direct_chunks: int = 0
     relay_chunks: int = 0
 
@@ -106,6 +115,15 @@ def register_saved_prefix(
     source_request_id: str = "",
     bytes: int = 0,
     elapsed_ms: float = 0.0,
+    runtime_init_ms: float = 0.0,
+    prepare_ms: float = 0.0,
+    cpu_alloc_ms: float = 0.0,
+    group_ms: float = 0.0,
+    adapter_ms: float = 0.0,
+    refs_ms: float = 0.0,
+    transfer_ms: float = 0.0,
+    register_ms: float = 0.0,
+    total_ms: float = 0.0,
     direct_chunks: int = 0,
     relay_chunks: int = 0,
 ) -> None:
@@ -119,6 +137,15 @@ def register_saved_prefix(
         source_request_id=str(source_request_id),
         bytes=int(bytes),
         elapsed_ms=float(elapsed_ms),
+        runtime_init_ms=float(runtime_init_ms),
+        prepare_ms=float(prepare_ms),
+        cpu_alloc_ms=float(cpu_alloc_ms),
+        group_ms=float(group_ms),
+        adapter_ms=float(adapter_ms),
+        refs_ms=float(refs_ms),
+        transfer_ms=float(transfer_ms),
+        register_ms=float(register_ms),
+        total_ms=float(total_ms),
         direct_chunks=int(direct_chunks),
         relay_chunks=int(relay_chunks),
     )
@@ -592,8 +619,10 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
 
     def _save_request(self, request: TurboBusRequestMetadata) -> None:
         total_start = time.perf_counter()
+        runtime_start = time.perf_counter()
         if self.runtime is None:
             self.runtime = _make_runtime_from_config(self._vllm_config)
+        runtime_init_ms = (time.perf_counter() - runtime_start) * 1000.0
         if not self.state.kv_caches:
             raise RuntimeError("vLLM did not register KV caches for TurboBus")
         from .vllm import VllmKVSlotAdapter
@@ -601,21 +630,29 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
 
         prepare_start = time.perf_counter()
         kv_caches = list(self.state.kv_caches.values())
+        alloc_start = time.perf_counter()
         cpu_backings = self._allocate_cpu_backings(request.block_count, kv_caches)
+        cpu_alloc_ms = (time.perf_counter() - alloc_start) * 1000.0
+        group_start = time.perf_counter()
         groups = make_vllm_layer_groups_from_kv_caches(cpu_backings, kv_caches)
+        group_ms = (time.perf_counter() - group_start) * 1000.0
+        adapter_start = time.perf_counter()
         adapter = VllmKVSlotAdapter(self.runtime, groups)
+        adapter_ms = (time.perf_counter() - adapter_start) * 1000.0
+        refs_start = time.perf_counter()
         refs = make_vllm_layer_range_refs_from_ids(
             request.request_id,
             request.block_ids,
             kv_caches,
             cpu_slot_start=request.cpu_slot_start,
         )
+        refs_ms = (time.perf_counter() - refs_start) * 1000.0
         prepare_ms = (time.perf_counter() - prepare_start) * 1000.0
         transfer_start = time.perf_counter()
         handles = adapter.save_prefix(refs)
         transfer_ms = (time.perf_counter() - transfer_start) * 1000.0
-        total_ms = (time.perf_counter() - total_start) * 1000.0
         stats = _summarize_handles(handles)
+        register_start = time.perf_counter()
         register_saved_prefix(
             request.prefix_key,
             cpu_backings,
@@ -623,10 +660,23 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             matched_tokens=request.matched_tokens,
             source_request_id=request.request_id,
             elapsed_ms=transfer_ms,
+            runtime_init_ms=runtime_init_ms,
+            prepare_ms=prepare_ms,
+            cpu_alloc_ms=cpu_alloc_ms,
+            group_ms=group_ms,
+            adapter_ms=adapter_ms,
+            refs_ms=refs_ms,
+            transfer_ms=transfer_ms,
             **stats,
         )
         self._adapters_by_prefix[request.prefix_key] = adapter
         self.state.saved_request_ids.add(request.request_id)
+        register_ms = (time.perf_counter() - register_start) * 1000.0
+        total_ms = (time.perf_counter() - total_start) * 1000.0
+        saved = get_saved_prefix(request.prefix_key)
+        if saved is not None:
+            saved.register_ms = register_ms
+            saved.total_ms = total_ms
         self.state.events.append(
             {
                 "event": "save",
@@ -635,8 +685,14 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                 "block_count": len(request.block_ids),
                 "matched_tokens": request.matched_tokens,
                 "elapsed_ms": transfer_ms,
+                "runtime_init_ms": runtime_init_ms,
                 "prepare_ms": prepare_ms,
+                "cpu_alloc_ms": cpu_alloc_ms,
+                "group_ms": group_ms,
+                "adapter_ms": adapter_ms,
+                "refs_ms": refs_ms,
                 "transfer_ms": transfer_ms,
+                "register_ms": register_ms,
                 "total_ms": total_ms,
                 "layers": len(kv_caches),
                 "ranges": len(refs),
@@ -650,8 +706,14 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             block_count=len(request.block_ids),
             matched_tokens=request.matched_tokens,
             elapsed_ms=f"{transfer_ms:.3f}",
+            runtime_init_ms=f"{runtime_init_ms:.3f}",
             prepare_ms=f"{prepare_ms:.3f}",
+            cpu_alloc_ms=f"{cpu_alloc_ms:.3f}",
+            group_ms=f"{group_ms:.3f}",
+            adapter_ms=f"{adapter_ms:.3f}",
+            refs_ms=f"{refs_ms:.3f}",
             transfer_ms=f"{transfer_ms:.3f}",
+            register_ms=f"{register_ms:.3f}",
             total_ms=f"{total_ms:.3f}",
             layers=len(kv_caches),
             ranges=len(refs),

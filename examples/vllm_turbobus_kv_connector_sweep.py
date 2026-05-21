@@ -158,6 +158,7 @@ def build_sweep_summary_lines(args, results) -> list[str]:
         summary = result["summary"]
         config = summary.get("vllm_kv_connector_config", {})
         save = summary.get("vllm_kv_connector_save", {})
+        save_event = _event_from_log(Path(result["log_path"]), "save")
         restore = _restore_from_log(Path(result["log_path"]))
         start_load = _event_from_log(Path(result["log_path"]), "start_load_done")
         output = summary.get("vllm_kv_connector_result", {})
@@ -167,6 +168,14 @@ def build_sweep_summary_lines(args, results) -> list[str]:
             "matched_tokens": result["matched_tokens"],
             "returncode": result["returncode"],
             "save_ms": save.get("elapsed_ms", "NA"),
+            "save_runtime_init_ms": save_event.get("runtime_init_ms", "NA"),
+            "save_prepare_ms": save_event.get("prepare_ms", "NA") if save_event else "NA",
+            "save_cpu_alloc_ms": save_event.get("cpu_alloc_ms", "NA") if save_event else "NA",
+            "save_adapter_ms": save_event.get("adapter_ms", "NA") if save_event else "NA",
+            "save_refs_ms": save_event.get("refs_ms", "NA") if save_event else "NA",
+            "save_transfer_ms": save_event.get("transfer_ms", save.get("elapsed_ms", "NA")) if save_event else save.get("elapsed_ms", "NA"),
+            "save_register_ms": save_event.get("register_ms", "NA") if save_event else "NA",
+            "save_total_ms": save_event.get("total_ms", "NA") if save_event else "NA",
             "restore_ms": restore.get("elapsed_ms", "NA"),
             "restore_prepare_ms": restore.get("prepare_ms", "NA"),
             "restore_transfer_ms": restore.get("transfer_ms", restore.get("elapsed_ms", "NA")),
@@ -193,6 +202,14 @@ def build_sweep_summary_lines(args, results) -> list[str]:
                     f"matched_tokens={row['matched_tokens']}",
                     f"returncode={row['returncode']}",
                     f"save_ms={row['save_ms']}",
+                    f"save_runtime_init_ms={row['save_runtime_init_ms']}",
+                    f"save_prepare_ms={row['save_prepare_ms']}",
+                    f"save_cpu_alloc_ms={row['save_cpu_alloc_ms']}",
+                    f"save_adapter_ms={row['save_adapter_ms']}",
+                    f"save_refs_ms={row['save_refs_ms']}",
+                    f"save_transfer_ms={row['save_transfer_ms']}",
+                    f"save_register_ms={row['save_register_ms']}",
+                    f"save_total_ms={row['save_total_ms']}",
                     f"restore_ms={row['restore_ms']}",
                     f"restore_gib_s={row['restore_gib_s']}",
                     f"restore_prepare_ms={row['restore_prepare_ms']}",
