@@ -203,6 +203,8 @@ def run(args) -> None:
             f"total_ms={saved.total_ms:.3f}",
             f"direct_chunks={saved.direct_chunks}",
             f"relay_chunks={saved.relay_chunks}",
+            f"save_layer_count={saved.save_layer_count}",
+            f"save_layer_ranges={saved.save_layer_ranges}",
         )
     if first_saved is not None and first_saved is not saved:
         print(

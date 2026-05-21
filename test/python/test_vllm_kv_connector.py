@@ -410,6 +410,8 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertEqual(saved.bytes, 128)
         self.assertEqual(saved.direct_chunks, 2)
         self.assertEqual(saved.relay_chunks, 0)
+        self.assertEqual(saved.save_layer_count, 2)
+        self.assertEqual(saved.save_layer_ranges, 2)
         self.assertEqual(connector.state.events[-1]["event"], "save")
         self.assertEqual(connector.state.events[-1]["layers"], 2)
         self.assertEqual(connector.state.events[-1]["ranges"], 2)

@@ -97,7 +97,12 @@ class VllmKVConnectorSweepTest(unittest.TestCase):
                     "returncode": 0,
                     "log_path": str(direct_log),
                     "summary": {
-                        "vllm_kv_connector_save": {"elapsed_ms": "41", "bytes": "1073741824"},
+                        "vllm_kv_connector_save": {
+                            "elapsed_ms": "41",
+                            "bytes": "1073741824",
+                            "save_layer_count": "28",
+                            "save_layer_ranges": "56",
+                        },
                         "vllm_kv_connector_result": {"prompt_tokens": "321", "shared_prefix": "True"},
                     },
                 },
@@ -108,7 +113,12 @@ class VllmKVConnectorSweepTest(unittest.TestCase):
                     "returncode": 0,
                     "log_path": str(pool_log),
                     "summary": {
-                        "vllm_kv_connector_save": {"elapsed_ms": "21", "bytes": "1073741824"},
+                        "vllm_kv_connector_save": {
+                            "elapsed_ms": "21",
+                            "bytes": "1073741824",
+                            "save_layer_count": "28",
+                            "save_layer_ranges": "56",
+                        },
                         "vllm_kv_connector_result": {"prompt_tokens": "321", "shared_prefix": "True"},
                     },
                 },
@@ -121,6 +131,8 @@ class VllmKVConnectorSweepTest(unittest.TestCase):
         self.assertTrue(any("mode=pool" in line and "start_load_ms=22" in line for line in lines))
         self.assertTrue(any("mode=pool" in line and "layers=28" in line for line in lines))
         self.assertTrue(any("mode=pool" in line and "ranges=224" in line for line in lines))
+        self.assertTrue(any("mode=pool" in line and "save_layer_count=28" in line for line in lines))
+        self.assertTrue(any("mode=pool" in line and "save_layer_ranges=56" in line for line in lines))
         self.assertTrue(any("direct_over_pool_restore=2.000" in line for line in lines))
 
     def test_print_sweep_summary_writes_output_file(self) -> None:

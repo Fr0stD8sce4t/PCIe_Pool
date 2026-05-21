@@ -69,6 +69,8 @@ class TurboBusSavedPrefix:
     total_ms: float = 0.0
     direct_chunks: int = 0
     relay_chunks: int = 0
+    save_layer_count: int = 0
+    save_layer_ranges: int = 0
 
 
 @dataclass
@@ -235,6 +237,8 @@ def register_saved_prefix(
     total_ms: float = 0.0,
     direct_chunks: int = 0,
     relay_chunks: int = 0,
+    save_layer_count: int = 0,
+    save_layer_ranges: int = 0,
 ) -> None:
     prefix = TurboBusSavedPrefix(
         key=str(key),
@@ -257,6 +261,8 @@ def register_saved_prefix(
         total_ms=float(total_ms),
         direct_chunks=int(direct_chunks),
         relay_chunks=int(relay_chunks),
+        save_layer_count=int(save_layer_count),
+        save_layer_ranges=int(save_layer_ranges),
     )
     _store_saved_prefix(prefix)
     _emit_event(
@@ -909,6 +915,8 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             bytes=context.bytes,
             direct_chunks=context.direct_chunks,
             relay_chunks=context.relay_chunks,
+            save_layer_count=len(context.saved_layers),
+            save_layer_ranges=context.ranges,
         )
         evicted = self._store_prefix(prefix)
         _store_saved_prefix(prefix)
