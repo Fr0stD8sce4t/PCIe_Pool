@@ -52,24 +52,43 @@ class TurboBusSavedPrefix:
     cpu_backings: list[Any]
     block_count: int
     matched_tokens: int
+    source_request_id: str = ""
+    bytes: int = 0
+    elapsed_ms: float = 0.0
+    direct_chunks: int = 0
+    relay_chunks: int = 0
+
+
+@dataclass
+class _ScheduledRequestView:
+    req_id: str
+    new_block_ids: Any
+    kv_transfer_params: dict[str, Any]
 
 
 class TurboBusConnectorMetadata(KVConnectorMetadata):
     def __init__(self) -> None:
         super().__init__()
         self.requests: list[TurboBusRequestMetadata] = []
+        self.save_requests: list[TurboBusRequestMetadata] = []
 
     def add_request(self, request: TurboBusRequestMetadata) -> None:
         self.requests.append(request)
 
+    def add_save_request(self, request: TurboBusRequestMetadata) -> None:
+        self.save_requests.append(request)
+
     def __len__(self) -> int:
-        return len(self.requests)
+        return len(self.requests) + len(self.save_requests)
 
 
 @dataclass
 class TurboBusKVConnectorState:
     kv_caches: dict[str, Any] = field(default_factory=dict)
     pending_loads: dict[str, TurboBusRequestMetadata] = field(default_factory=dict)
+    pending_saves: dict[str, TurboBusRequestMetadata] = field(default_factory=dict)
+    save_request_ids: set[str] = field(default_factory=set)
+    finished_sending: set[str] = field(default_factory=set)
     finished_recving: set[str] = field(default_factory=set)
     events: list[dict[str, Any]] = field(default_factory=list)
 
@@ -83,6 +102,11 @@ def register_saved_prefix(
     *,
     block_count: int,
     matched_tokens: int,
+    source_request_id: str = "",
+    bytes: int = 0,
+    elapsed_ms: float = 0.0,
+    direct_chunks: int = 0,
+    relay_chunks: int = 0,
 ) -> None:
     if not key:
         raise ValueError("prefix key must not be empty")
@@ -91,12 +115,18 @@ def register_saved_prefix(
         cpu_backings=list(cpu_backings),
         block_count=int(block_count),
         matched_tokens=int(matched_tokens),
+        source_request_id=str(source_request_id),
+        bytes=int(bytes),
+        elapsed_ms=float(elapsed_ms),
+        direct_chunks=int(direct_chunks),
+        relay_chunks=int(relay_chunks),
     )
     _emit_event(
         "register_saved_prefix",
         prefix_key=str(key),
         block_count=int(block_count),
         matched_tokens=int(matched_tokens),
+        source_request_id=str(source_request_id),
         layers=len(cpu_backings),
     )
 
@@ -234,9 +264,11 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         return max(0, available), available > 0
 
     def update_state_after_alloc(self, request, blocks, num_external_tokens: int) -> None:
+        params = _request_params(request)
+        if params.get("turbobus.do_save"):
+            self._update_save_state_after_alloc(request, blocks, params)
         if num_external_tokens <= 0:
             return
-        params = _request_params(request)
         prefix_key = _request_prefix_key(params)
         saved = get_saved_prefix(prefix_key)
         if saved is None:
@@ -281,17 +313,26 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         )
 
     def build_connector_meta(self, scheduler_output) -> TurboBusConnectorMetadata:
+        self._collect_save_requests_from_scheduler_output(scheduler_output)
         metadata = TurboBusConnectorMetadata()
         for request_id in sorted(self.state.pending_loads):
             metadata.add_request(self.state.pending_loads[request_id])
+        for request_id in sorted(self.state.pending_saves):
+            metadata.add_save_request(self.state.pending_saves[request_id])
         if len(metadata) > 0:
-            _emit_event("build_connector_meta", requests=len(metadata))
+            _emit_event(
+                "build_connector_meta",
+                requests=len(metadata),
+                loads=len(metadata.requests),
+                saves=len(metadata.save_requests),
+            )
         self.state.pending_loads.clear()
+        self.state.pending_saves.clear()
         return metadata
 
     def start_load_kv(self, forward_context, **kwargs) -> None:
         metadata = self._get_connector_metadata()
-        if not isinstance(metadata, TurboBusConnectorMetadata) or len(metadata) == 0:
+        if not isinstance(metadata, TurboBusConnectorMetadata) or not metadata.requests:
             return
         start = time.perf_counter()
         if not self.restore_enabled:
@@ -330,15 +371,34 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         return None
 
     def wait_for_save(self) -> None:
+        metadata = self._get_connector_metadata()
+        if not isinstance(metadata, TurboBusConnectorMetadata) or not metadata.save_requests:
+            return None
+        for request in metadata.save_requests:
+            self._save_request(request)
+            self.state.finished_sending.add(request.request_id)
         return None
 
     def get_finished(self, finished_req_ids: set[str]):
+        finished_sending = self.state.finished_sending
+        self.state.finished_sending = set()
         finished_recving = self.state.finished_recving
         self.state.finished_recving = set()
-        return None, finished_recving or None
+        return finished_sending or None, finished_recving or None
 
     def request_finished(self, request, block_ids: list[int]):
-        return False, None
+        params = _request_params(request)
+        if not params.get("turbobus.do_save"):
+            return False, None
+        request_id = str(getattr(request, "request_id", "unknown"))
+        if request_id not in self.state.save_request_ids:
+            return False, None
+        prefix_key = _request_prefix_key(params)
+        matched_tokens = _matched_tokens_for_save(params, self.vllm_block_size)
+        return True, {
+            "turbobus.prefix_key": prefix_key,
+            "turbobus.matched_tokens": matched_tokens,
+        }
 
     def request_finished_all_groups(self, request, block_ids):
         flat_block_ids = [
@@ -350,6 +410,107 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
 
     def _get_connector_metadata(self):
         return getattr(self, "_connector_metadata", None)
+
+    def _update_save_state_after_alloc(
+        self,
+        request,
+        blocks,
+        params: dict[str, Any],
+    ) -> None:
+        request_id = str(getattr(request, "request_id", "unknown"))
+        if request_id in self.state.save_request_ids:
+            return
+        block_ids = _flatten_block_ids(extract_vllm_block_ids(blocks))
+        if not block_ids:
+            return
+        requested_blocks = _save_block_count(params, self.vllm_block_size)
+        if requested_blocks <= 0:
+            requested_blocks = len(block_ids)
+        if len(block_ids) < requested_blocks:
+            self.state.events.append(
+                {
+                    "event": "save_waiting",
+                    "request_id": request_id,
+                    "available_blocks": len(block_ids),
+                    "requested_blocks": requested_blocks,
+                }
+            )
+            _emit_event(
+                "save_waiting",
+                request_id=request_id,
+                available_blocks=len(block_ids),
+                requested_blocks=requested_blocks,
+            )
+            return
+        block_ids = block_ids[:requested_blocks]
+        meta = TurboBusRequestMetadata(
+            request_id=request_id,
+            prefix_key=_request_prefix_key(params),
+            block_ids=tuple(block_ids),
+            matched_tokens=_matched_tokens_for_save(params, self.vllm_block_size),
+            block_count=len(block_ids),
+        )
+        self.state.pending_saves[request_id] = meta
+        self.state.save_request_ids.add(request_id)
+        self.state.events.append(
+            {
+                "event": "save_alloc",
+                "request_id": request_id,
+                "prefix_key": meta.prefix_key,
+                "matched_tokens": meta.matched_tokens,
+                "block_count": meta.block_count,
+            }
+        )
+        _emit_event(
+            "save_alloc",
+            request_id=request_id,
+            prefix_key=meta.prefix_key,
+            matched_tokens=meta.matched_tokens,
+            block_count=meta.block_count,
+        )
+
+    def _collect_save_requests_from_scheduler_output(self, scheduler_output) -> None:
+        for request in _iter_scheduled_requests(scheduler_output):
+            params = _request_params(request)
+            if not params.get("turbobus.do_save"):
+                continue
+            request_id = _scheduled_request_id(request)
+            if request_id in self.state.save_request_ids:
+                continue
+            block_ids = _scheduled_request_block_ids(request)
+            if not block_ids:
+                continue
+            requested_blocks = _save_block_count(params, self.vllm_block_size)
+            if requested_blocks <= 0:
+                requested_blocks = len(block_ids)
+            if len(block_ids) < requested_blocks:
+                continue
+            block_ids = block_ids[:requested_blocks]
+            meta = TurboBusRequestMetadata(
+                request_id=request_id,
+                prefix_key=_request_prefix_key(params),
+                block_ids=tuple(block_ids),
+                matched_tokens=_matched_tokens_for_save(params, self.vllm_block_size),
+                block_count=len(block_ids),
+            )
+            self.state.pending_saves[request_id] = meta
+            self.state.save_request_ids.add(request_id)
+            self.state.events.append(
+                {
+                    "event": "save_schedule",
+                    "request_id": request_id,
+                    "prefix_key": meta.prefix_key,
+                    "matched_tokens": meta.matched_tokens,
+                    "block_count": meta.block_count,
+                }
+            )
+            _emit_event(
+                "save_schedule",
+                request_id=request_id,
+                prefix_key=meta.prefix_key,
+                matched_tokens=meta.matched_tokens,
+                block_count=meta.block_count,
+            )
 
     def _adapter_for_saved_prefix(self, saved: TurboBusSavedPrefix):
         adapter = self._adapters_by_prefix.get(saved.key)
@@ -424,6 +585,94 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             **stats,
         )
 
+    def _save_request(self, request: TurboBusRequestMetadata) -> None:
+        total_start = time.perf_counter()
+        if self.runtime is None:
+            self.runtime = _make_runtime_from_config(self._vllm_config)
+        if not self.state.kv_caches:
+            raise RuntimeError("vLLM did not register KV caches for TurboBus")
+        from .vllm import VllmKVSlotAdapter
+        from .vllm import make_vllm_layer_groups_from_kv_caches
+
+        prepare_start = time.perf_counter()
+        kv_caches = list(self.state.kv_caches.values())
+        cpu_backings = self._allocate_cpu_backings(request.block_count, kv_caches)
+        groups = make_vllm_layer_groups_from_kv_caches(cpu_backings, kv_caches)
+        adapter = VllmKVSlotAdapter(self.runtime, groups)
+        refs = make_vllm_layer_range_refs_from_ids(
+            request.request_id,
+            request.block_ids,
+            kv_caches,
+            cpu_slot_start=request.cpu_slot_start,
+        )
+        prepare_ms = (time.perf_counter() - prepare_start) * 1000.0
+        transfer_start = time.perf_counter()
+        handles = adapter.save_prefix(refs)
+        transfer_ms = (time.perf_counter() - transfer_start) * 1000.0
+        total_ms = (time.perf_counter() - total_start) * 1000.0
+        stats = _summarize_handles(handles)
+        register_saved_prefix(
+            request.prefix_key,
+            cpu_backings,
+            block_count=request.block_count,
+            matched_tokens=request.matched_tokens,
+            source_request_id=request.request_id,
+            elapsed_ms=transfer_ms,
+            **stats,
+        )
+        self._adapters_by_prefix[request.prefix_key] = adapter
+        self.state.events.append(
+            {
+                "event": "save",
+                "request_id": request.request_id,
+                "prefix_key": request.prefix_key,
+                "block_count": len(request.block_ids),
+                "matched_tokens": request.matched_tokens,
+                "elapsed_ms": transfer_ms,
+                "prepare_ms": prepare_ms,
+                "transfer_ms": transfer_ms,
+                "total_ms": total_ms,
+                "layers": len(kv_caches),
+                "ranges": len(refs),
+                **stats,
+            }
+        )
+        _emit_event(
+            "save",
+            request_id=request.request_id,
+            prefix_key=request.prefix_key,
+            block_count=len(request.block_ids),
+            matched_tokens=request.matched_tokens,
+            elapsed_ms=f"{transfer_ms:.3f}",
+            prepare_ms=f"{prepare_ms:.3f}",
+            transfer_ms=f"{transfer_ms:.3f}",
+            total_ms=f"{total_ms:.3f}",
+            layers=len(kv_caches),
+            ranges=len(refs),
+            **stats,
+        )
+
+    def _allocate_cpu_backings(self, block_count: int, kv_caches: list[Any]) -> list[Any]:
+        try:
+            import torch
+        except ImportError as exc:  # pragma: no cover - import-time convenience only
+            raise RuntimeError("PyTorch is required to allocate vLLM CPU backings") from exc
+
+        slots_per_layer = max(1, int(block_count) * _max_lanes_per_layer(kv_caches))
+        backings = []
+        for kv_cache in kv_caches:
+            from .vllm import block_bytes_from_vllm_kv_tensor
+
+            block_bytes = block_bytes_from_vllm_kv_tensor(kv_cache)
+            backings.append(
+                torch.empty(
+                    slots_per_layer * block_bytes,
+                    dtype=torch.uint8,
+                    pin_memory=True,
+                )
+            )
+        return backings
+
 
 def _request_params(request) -> dict[str, Any]:
     params = getattr(request, "kv_transfer_params", None)
@@ -453,10 +702,90 @@ def _flatten_block_ids(groups: tuple[tuple[int, ...], ...]) -> tuple[int, ...]:
     return tuple(ordered)
 
 
+def _iter_scheduled_requests(scheduler_output) -> list[Any]:
+    requests = []
+    for request in getattr(scheduler_output, "scheduled_new_reqs", []) or []:
+        requests.append(request)
+    cached = getattr(scheduler_output, "scheduled_cached_reqs", None)
+    if isinstance(cached, list):
+        requests.extend(cached)
+    elif cached is not None:
+        req_ids = list(getattr(cached, "req_ids", []) or [])
+        new_block_ids = list(getattr(cached, "new_block_ids", []) or [])
+        for index, req_id in enumerate(req_ids):
+            request = getattr(cached, "requests", {}).get(req_id, None)
+            params = _request_params(request) if request is not None else {}
+            requests.append(
+                _ScheduledRequestView(
+                    req_id=str(req_id),
+                    new_block_ids=new_block_ids[index] if index < len(new_block_ids) else [],
+                    kv_transfer_params=params,
+                )
+            )
+    return requests
+
+
+def _scheduled_request_id(request) -> str:
+    return str(
+        getattr(
+            request,
+            "request_id",
+            getattr(request, "req_id", "unknown"),
+        )
+    )
+
+
+def _scheduled_request_block_ids(request) -> tuple[int, ...]:
+    raw = getattr(request, "new_block_ids", None)
+    if raw is None:
+        raw = getattr(request, "block_ids", None)
+    return _flatten_block_ids(_normalize_block_id_groups(raw))
+
+
+def _normalize_block_id_groups(raw) -> tuple[tuple[int, ...], ...]:
+    if raw is None:
+        return tuple()
+    if hasattr(raw, "get_block_ids"):
+        return extract_vllm_block_ids(raw)
+    if isinstance(raw, tuple):
+        return tuple(tuple(int(block_id) for block_id in group) for group in raw)
+    if isinstance(raw, list):
+        if not raw:
+            return tuple()
+        if all(isinstance(item, int) for item in raw):
+            return (tuple(int(item) for item in raw),)
+        groups = []
+        for group in raw:
+            if group is None:
+                groups.append(tuple())
+            elif isinstance(group, int):
+                groups.append((int(group),))
+            else:
+                groups.append(tuple(int(block_id) for block_id in group))
+        return tuple(groups)
+    return tuple()
+
+
 def _block_count_for_tokens(token_count: int, block_size: int) -> int:
     if token_count <= 0:
         return 0
     return (int(token_count) + int(block_size) - 1) // int(block_size)
+
+
+def _save_block_count(params: dict[str, Any], block_size: int) -> int:
+    if "turbobus.save_blocks" in params:
+        return int(params.get("turbobus.save_blocks", 0) or 0)
+    return _block_count_for_tokens(
+        int(params.get("turbobus.matched_tokens", 0) or 0),
+        block_size,
+    )
+
+
+def _matched_tokens_for_save(params: dict[str, Any], block_size: int) -> int:
+    matched_tokens = int(params.get("turbobus.matched_tokens", 0) or 0)
+    if matched_tokens > 0:
+        return matched_tokens
+    return _save_block_count(params, block_size) * int(block_size)
 
 
 def _extra_config_int(vllm_config, key: str, default: int) -> int:

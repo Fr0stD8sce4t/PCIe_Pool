@@ -116,6 +116,38 @@ Next steps:
    - Compare direct, relay, and pool modes using the same manager API that a
      future vLLM/SGLang connector would call.
 
+### Immediate vLLM Connector Goal
+
+The next connector milestone is a real vLLM `KVConnectorBase_V1` save/restore
+loop. Restore already runs through the official connector path. Save must also
+move into the connector lifecycle instead of being driven by example-side
+allocation hooks.
+
+Required shape:
+
+1. First request passes `kv_transfer_params` such as `turbobus.do_save`,
+   `turbobus.prefix_key`, `turbobus.save_blocks`, and
+   `turbobus.matched_tokens`.
+2. `TurboBusConnector.update_state_after_alloc()` or
+   `build_connector_meta(scheduler_output)` records the vLLM block ids that
+   should be saved.
+3. `TurboBusConnector.build_connector_meta()` sends save and restore metadata
+   through vLLM's connector metadata path.
+4. Worker-side connector code saves from vLLM-owned KV cache tensors into
+   connector-managed pinned CPU backing.
+5. The connector registers the saved prefix internally after save completes.
+6. `TurboBusConnector.request_finished()` delays block release only for save
+   requests that were actually queued, and `get_finished()` reports completed
+   saves.
+7. A later request passes `turbobus.do_restore` and restores that saved prefix
+   through `get_num_new_matched_tokens()`, `update_state_after_alloc()`,
+   `build_connector_meta()`, and `start_load_kv()`.
+
+The example should not call `register_saved_prefix()` or use the old
+`VllmTurboBusConnector` save path once this loop is in place. It should only
+create vLLM requests with connector `kv_transfer_params` and report the
+connector's emitted save/restore events.
+
 4. Add production-shaped offload clients for the three paper workloads.
    - On-demand model loading: restore model-weight buckets into GPU memory.
    - KV cache offloading: vLLM prefix/session save and restore.

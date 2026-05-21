@@ -51,25 +51,10 @@ def run(args) -> None:
     from vllm import LLM, SamplingParams
     from vllm.config import KVTransferConfig
 
-    import turbobus
-    from turbobus.vllm_connector import VllmTurboBusConnector
-    from turbobus.vllm_integration import VllmTurboBusIntegration
-    from turbobus.vllm_kv_connector import clear_saved_prefixes, register_saved_prefix
+    from turbobus.vllm_kv_connector import clear_saved_prefixes, get_saved_prefix
 
     torch.cuda.set_device(args.runtime_target_gpu)
     clear_saved_prefixes()
-    runtime = turbobus.Runtime(
-        target_gpu=args.runtime_target_gpu,
-        relay_gpus=args.runtime_relay_gpus,
-        options=turbobus.RuntimeOptions(
-            chunk_bytes=args.chunk_bytes,
-            profile_bytes=args.profile_bytes,
-            transfer_mode=args.mode,
-        ),
-    )
-    integration = VllmTurboBusIntegration(runtime)
-    integration.install()
-    allocation_connector = VllmTurboBusConnector(integration)
 
     relay_gpus = ",".join(str(gpu) for gpu in args.runtime_relay_gpus)
     ktc = KVTransferConfig(
@@ -98,27 +83,34 @@ def run(args) -> None:
 
     first_prompt = prompt_text(args.prompt, args.prompt_repeat)
     second_prompt = second_prompt_text(args, first_prompt)
-    base_sampling = SamplingParams(temperature=0.0, max_tokens=args.max_tokens)
+    base_sampling = SamplingParams(
+        temperature=0.0,
+        max_tokens=args.max_tokens,
+        extra_args={
+            "kv_transfer_params": {
+                "turbobus.do_save": args.restore_enabled,
+                "turbobus.prefix_key": args.prefix_key,
+                "turbobus.save_blocks": args.restore_blocks,
+                "turbobus.matched_tokens": args.matched_tokens,
+            }
+        },
+    )
     first_outputs = llm.generate([first_prompt], base_sampling)
 
-    source_request_id = _first_request_id(integration)
-    source_blocks = len(integration.block_ids_for_request(source_request_id))
+    saved = get_saved_prefix(args.prefix_key)
+    source_request_id = saved.source_request_id if saved is not None else "unknown"
+    source_blocks = saved.block_count if saved is not None else 0
     if args.restore_enabled:
-        if source_blocks < args.restore_blocks:
+        if saved is None:
+            raise RuntimeError(
+                f"connector did not save prefix {args.prefix_key!r}; "
+                "check turbobus.do_save and vLLM wait_for_save"
+            )
+        if saved.block_count < args.restore_blocks:
             raise RuntimeError(
                 f"source request has {source_blocks} blocks, need {args.restore_blocks}; "
                 "increase --prompt-repeat or lower --restore-blocks"
             )
-        cpu_backings = allocation_connector.allocate_cpu_backings_for_blocks(args.restore_blocks)
-        save_event = allocation_connector.save_request(source_request_id, args.restore_blocks)
-        register_saved_prefix(
-            args.prefix_key,
-            cpu_backings,
-            block_count=args.restore_blocks,
-            matched_tokens=args.matched_tokens,
-        )
-    else:
-        save_event = None
 
     matched_tokens = max(0, args.matched_tokens) if args.restore_enabled else 0
     sampling = SamplingParams(
@@ -132,7 +124,6 @@ def run(args) -> None:
             }
         },
     )
-    integration.state.allocations.clear()
     outputs = llm.generate([second_prompt], sampling)
     generated_text = outputs[0].outputs[0].text if outputs and outputs[0].outputs else ""
 
@@ -162,16 +153,16 @@ def run(args) -> None:
         "entry=start_load_kv",
         "note=official_vllm_external_kv_path",
     )
-    if save_event is not None:
+    if saved is not None:
         print(
             "vllm_kv_connector_save",
             f"source_request={source_request_id}",
             f"source_blocks={source_blocks}",
-            f"blocks={save_event.block_count}",
-            f"bytes={save_event.bytes}",
-            f"elapsed_ms={save_event.elapsed_ms:.3f}",
-            f"direct_chunks={save_event.direct_chunks}",
-            f"relay_chunks={save_event.relay_chunks}",
+            f"blocks={saved.block_count}",
+            f"bytes={saved.bytes}",
+            f"elapsed_ms={saved.elapsed_ms:.3f}",
+            f"direct_chunks={saved.direct_chunks}",
+            f"relay_chunks={saved.relay_chunks}",
         )
     print(
         "vllm_kv_connector_result",
@@ -224,14 +215,6 @@ def parse_args():
     if args.log_output is None:
         args.log_output = default_log_path()
     return args
-
-
-def _first_request_id(integration) -> str:
-    if not integration.state.allocations:
-        raise RuntimeError("vLLM did not allocate any KV blocks")
-    return next(iter(integration.state.allocations))
-
-
 def main() -> None:
     args = parse_args()
     log_path = Path(args.log_output)
