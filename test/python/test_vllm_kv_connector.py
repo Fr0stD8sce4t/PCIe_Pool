@@ -45,6 +45,21 @@ class FakeBlocks:
         return self.ids
 
 
+class FakeStats:
+    bytes = 64
+    direct_chunks = 1
+    relay_chunks = 0
+
+
+class FakeHandle:
+    stats = FakeStats()
+
+
+class FakeAdapter:
+    def restore_prefix(self, refs):
+        return [FakeHandle()]
+
+
 class TurboBusConnectorTest(unittest.TestCase):
     def setUp(self) -> None:
         clear_saved_prefixes()
@@ -161,6 +176,38 @@ class TurboBusConnectorTest(unittest.TestCase):
             connector.request_finished_all_groups(FakeRequest(), ([1, 2], [3])),
             (False, None),
         )
+
+    def test_restore_event_reports_timing_and_shape(self) -> None:
+        connector = self.make_connector({"turbobus.restore_enabled": True})
+        connector.state.kv_caches = {
+            "0": mock.Mock(),
+            "1": mock.Mock(),
+        }
+        request = mock.Mock(
+            request_id="req0",
+            prefix_key="default",
+            block_ids=(1, 2),
+            matched_tokens=32,
+            cpu_slot_start=0,
+        )
+        register_saved_prefix("default", [object(), object()], block_count=2, matched_tokens=32)
+
+        with (
+            mock.patch.object(connector, "_adapter_for_saved_prefix", return_value=FakeAdapter()),
+            mock.patch(
+                "turbobus.vllm_kv_connector.make_vllm_layer_range_refs_from_ids",
+                return_value=[object(), object(), object(), object()],
+            ),
+        ):
+            connector._restore_request(request)
+
+        event = connector.state.events[-1]
+        self.assertEqual(event["event"], "restore")
+        self.assertEqual(event["layers"], 2)
+        self.assertEqual(event["ranges"], 4)
+        self.assertIn("prepare_ms", event)
+        self.assertIn("transfer_ms", event)
+        self.assertIn("total_ms", event)
 
 
 if __name__ == "__main__":

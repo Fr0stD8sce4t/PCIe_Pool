@@ -159,6 +159,7 @@ def build_sweep_summary_lines(args, results) -> list[str]:
         config = summary.get("vllm_kv_connector_config", {})
         save = summary.get("vllm_kv_connector_save", {})
         restore = _restore_from_log(Path(result["log_path"]))
+        start_load = _event_from_log(Path(result["log_path"]), "start_load_done")
         output = summary.get("vllm_kv_connector_result", {})
         row = {
             "mode": result["mode"],
@@ -167,9 +168,15 @@ def build_sweep_summary_lines(args, results) -> list[str]:
             "returncode": result["returncode"],
             "save_ms": save.get("elapsed_ms", "NA"),
             "restore_ms": restore.get("elapsed_ms", "NA"),
+            "restore_prepare_ms": restore.get("prepare_ms", "NA"),
+            "restore_transfer_ms": restore.get("transfer_ms", restore.get("elapsed_ms", "NA")),
+            "restore_total_ms": restore.get("total_ms", "NA"),
+            "start_load_ms": start_load.get("elapsed_ms", "NA"),
             "bytes": restore.get("bytes", save.get("bytes", "NA")),
             "direct_chunks": restore.get("direct_chunks", "NA"),
             "relay_chunks": restore.get("relay_chunks", "NA"),
+            "layers": restore.get("layers", "NA"),
+            "ranges": restore.get("ranges", "NA"),
             "prompt_tokens": output.get("prompt_tokens", "NA"),
             "shared_prefix": output.get("shared_prefix", "NA"),
             "child_mode": config.get("mode", result["mode"]),
@@ -188,9 +195,15 @@ def build_sweep_summary_lines(args, results) -> list[str]:
                     f"save_ms={row['save_ms']}",
                     f"restore_ms={row['restore_ms']}",
                     f"restore_gib_s={row['restore_gib_s']}",
+                    f"restore_prepare_ms={row['restore_prepare_ms']}",
+                    f"restore_transfer_ms={row['restore_transfer_ms']}",
+                    f"restore_total_ms={row['restore_total_ms']}",
+                    f"start_load_ms={row['start_load_ms']}",
                     f"bytes={row['bytes']}",
                     f"direct_chunks={row['direct_chunks']}",
                     f"relay_chunks={row['relay_chunks']}",
+                    f"layers={row['layers']}",
+                    f"ranges={row['ranges']}",
                     f"prompt_tokens={row['prompt_tokens']}",
                     f"shared_prefix={row['shared_prefix']}",
                     f"child_mode={row['child_mode']}",
@@ -239,10 +252,15 @@ def _speedup_lines(case_rows) -> list[str]:
 
 
 def _restore_from_log(log_path: Path) -> dict[str, str]:
+    return _event_from_log(log_path, "restore")
+
+
+def _event_from_log(log_path: Path, event: str) -> dict[str, str]:
     if not log_path.exists():
         return {}
+    prefix = f"turbobus_kv_connector_event event={event} "
     for line in log_path.read_text(encoding="utf-8").splitlines():
-        if "turbobus_kv_connector_event event=restore " not in line:
+        if prefix not in line:
             continue
         _, values = parse_summary_line(line.replace("turbobus_kv_connector_event ", ""))
         return values

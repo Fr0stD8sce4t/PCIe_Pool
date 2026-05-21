@@ -293,6 +293,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         metadata = self._get_connector_metadata()
         if not isinstance(metadata, TurboBusConnectorMetadata) or len(metadata) == 0:
             return
+        start = time.perf_counter()
         if not self.restore_enabled:
             for request in metadata.requests:
                 self.state.finished_recving.add(request.request_id)
@@ -310,10 +311,17 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                     block_count=len(request.block_ids),
                     restore_enabled=False,
                 )
-            return
-        for request in metadata.requests:
-            self._restore_request(request)
-            self.state.finished_recving.add(request.request_id)
+        else:
+            for request in metadata.requests:
+                self._restore_request(request)
+                self.state.finished_recving.add(request.request_id)
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        _emit_event(
+            "start_load_done",
+            requests=len(metadata.requests),
+            restore_enabled=self.restore_enabled,
+            elapsed_ms=f"{elapsed_ms:.3f}",
+        )
 
     def wait_for_layer_load(self, layer_name: str) -> None:
         return None
@@ -366,9 +374,11 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         return adapter
 
     def _restore_request(self, request: TurboBusRequestMetadata) -> None:
+        total_start = time.perf_counter()
         saved = get_saved_prefix(request.prefix_key)
         if saved is None:
             raise RuntimeError(f"saved prefix {request.prefix_key!r} is not registered")
+        prepare_start = time.perf_counter()
         adapter = self._adapter_for_saved_prefix(saved)
         kv_caches = list(self.state.kv_caches.values())
         refs = make_vllm_layer_range_refs_from_ids(
@@ -377,9 +387,11 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             kv_caches,
             cpu_slot_start=request.cpu_slot_start,
         )
-        start = time.perf_counter()
+        prepare_ms = (time.perf_counter() - prepare_start) * 1000.0
+        transfer_start = time.perf_counter()
         handles = adapter.restore_prefix(refs)
-        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        transfer_ms = (time.perf_counter() - transfer_start) * 1000.0
+        total_ms = (time.perf_counter() - total_start) * 1000.0
         stats = _summarize_handles(handles)
         self.state.events.append(
             {
@@ -388,7 +400,12 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                 "prefix_key": request.prefix_key,
                 "block_count": len(request.block_ids),
                 "matched_tokens": request.matched_tokens,
-                "elapsed_ms": elapsed_ms,
+                "elapsed_ms": transfer_ms,
+                "prepare_ms": prepare_ms,
+                "transfer_ms": transfer_ms,
+                "total_ms": total_ms,
+                "layers": len(kv_caches),
+                "ranges": len(refs),
                 **stats,
             }
         )
@@ -398,7 +415,12 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             prefix_key=request.prefix_key,
             block_count=len(request.block_ids),
             matched_tokens=request.matched_tokens,
-            elapsed_ms=f"{elapsed_ms:.3f}",
+            elapsed_ms=f"{transfer_ms:.3f}",
+            prepare_ms=f"{prepare_ms:.3f}",
+            transfer_ms=f"{transfer_ms:.3f}",
+            total_ms=f"{total_ms:.3f}",
+            layers=len(kv_caches),
+            ranges=len(refs),
             **stats,
         )
 
