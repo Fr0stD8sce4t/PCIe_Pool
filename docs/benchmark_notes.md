@@ -1207,6 +1207,61 @@ block is 65,536 bytes. The scheduler allocated block id `[1]` for the first
 short request. The vLLM integration should treat each layer tensor as its own
 TurboBus group and restore the same vLLM block ids across all layer groups.
 
+## vLLM KV Connector Auto Mode Sweep
+
+Scenario:
+
+This run uses `examples/vllm_turbobus_kv_connector_sweep.py` with vLLM
+`0.17.1rc1.dev171+ga3e2e250f.d20260324`, Qwen3-0.6B, target GPU 6, and relay
+GPU 5. It exercises the production vLLM `KVConnectorBase_V1` path through
+`turbobus.vllm_kv_connector`, saving and restoring real vLLM KV blocks through
+the TurboBus runtime. The sweep compares `auto`, `direct`, `relay`, and `pool`
+for restore block counts around the auto threshold.
+
+Command:
+
+```bash
+python examples/vllm_turbobus_kv_connector_sweep.py \
+  --model /home/sdu/huggingface/Qwen3-0.6B \
+  --target-gpu 6 \
+  --relay-gpus 5 \
+  --prompt-repeat 256 \
+  --restore-blocks-list 4,6,8,10,12,16,32 \
+  --modes auto,direct,relay,pool \
+  --chunk-bytes 4194304 \
+  --profile-bytes 16777216 \
+  --enforce-eager
+```
+
+Key output:
+
+```text
+vllm_kv_connector_sweep_config target=6 relays=[5] model=/home/sdu/huggingface/Qwen3-0.6B prompt_repeat=256 modes=auto,direct,relay,pool restore_blocks_list=4,6,8,10,12,16,32 chunk_bytes=4194304 profile_bytes=16777216 min_pool_bytes=12582912
+auto blocks=4 restore_ms=1.935 bytes=7340032 resolved=direct direct_chunks=56 relay_chunks=0
+auto blocks=6 restore_ms=2.340 bytes=11010048 resolved=direct direct_chunks=56 relay_chunks=0
+auto blocks=8 restore_ms=2.537 bytes=14680064 resolved=pool direct_chunks=28 relay_chunks=28
+auto blocks=10 restore_ms=2.487 bytes=18350080 resolved=pool direct_chunks=28 relay_chunks=28
+auto blocks=12 restore_ms=2.540 bytes=22020096 resolved=pool direct_chunks=28 relay_chunks=28
+auto blocks=16 restore_ms=3.141 bytes=29360128 resolved=pool direct_chunks=28 relay_chunks=28
+auto blocks=32 restore_ms=5.280 bytes=58720256 resolved=pool direct_chunks=28 relay_chunks=28
+```
+
+Analysis:
+
+`auto` now makes the vLLM decision from the whole restore batch across all 28
+layer tensors instead of from a single-layer transfer. Before this change, the
+selector saw only 0.5-2 MiB per layer and stayed on `direct`, even when the full
+restore was large enough for pooled transfer to win. With the batched decision,
+the diagnostic fields report the correct total request bytes and the resolved
+mode matches the measured crossover.
+
+The default `min_pool_bytes` is 12 MiB. It keeps 4-block and 6-block restores on
+`direct`, where pooled transfer is slower or roughly tied, and switches 8 blocks
+and larger restores to `pool`. In this run, 8 blocks crossed the threshold at
+14,680,064 bytes and improved from direct's 2.744 ms to auto's 2.537 ms; larger
+restores keep the expected pooled split and stay near the explicit `pool`
+latency.
+
 ## Next Implementation Steps
 
 1. Replace the benchmark-only even/odd chunk split with the production
