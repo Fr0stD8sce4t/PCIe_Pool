@@ -288,7 +288,8 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertEqual(saved.source_request_id, "req0")
         self.assertEqual(saved.block_count, 2)
         self.assertEqual(saved.matched_tokens, 32)
-        self.assertEqual(connector.get_finished(set()), ({"req0"}, None))
+        self.assertEqual(connector.get_finished(set()), (None, None))
+        self.assertEqual(connector.get_finished({"req0"}), ({"req0"}, None))
         self.assertEqual(connector.get_finished(set()), (None, None))
 
     def test_restore_event_reports_timing_and_shape(self) -> None:

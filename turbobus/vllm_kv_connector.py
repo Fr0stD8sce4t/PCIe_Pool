@@ -88,6 +88,7 @@ class TurboBusKVConnectorState:
     pending_loads: dict[str, TurboBusRequestMetadata] = field(default_factory=dict)
     pending_saves: dict[str, TurboBusRequestMetadata] = field(default_factory=dict)
     save_request_ids: set[str] = field(default_factory=set)
+    saved_request_ids: set[str] = field(default_factory=set)
     finished_sending: set[str] = field(default_factory=set)
     finished_recving: set[str] = field(default_factory=set)
     events: list[dict[str, Any]] = field(default_factory=list)
@@ -376,12 +377,16 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             return None
         for request in metadata.save_requests:
             self._save_request(request)
-            self.state.finished_sending.add(request.request_id)
         return None
 
     def get_finished(self, finished_req_ids: set[str]):
         finished_sending = self.state.finished_sending
-        self.state.finished_sending = set()
+        if finished_req_ids:
+            finished_sending = finished_sending | (
+                self.state.saved_request_ids & set(finished_req_ids)
+            )
+            self.state.saved_request_ids -= finished_sending
+        self.state.finished_sending -= finished_sending
         finished_recving = self.state.finished_recving
         self.state.finished_recving = set()
         return finished_sending or None, finished_recving or None
@@ -621,6 +626,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             **stats,
         )
         self._adapters_by_prefix[request.prefix_key] = adapter
+        self.state.saved_request_ids.add(request.request_id)
         self.state.events.append(
             {
                 "event": "save",
