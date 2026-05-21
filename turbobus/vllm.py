@@ -19,6 +19,7 @@ class VllmKVBlockRef:
     lane_id: int | None = None
     cpu_offset: int | None = None
     gpu_offset: int | None = None
+    byte_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -77,7 +78,11 @@ class VllmKVSlotAdapter:
                         if ref.gpu_offset is not None
                         else ref.gpu_slot * group.block_bytes
                     ),
-                    byte_count=group.block_bytes,
+                    byte_count=(
+                        ref.byte_count
+                        if ref.byte_count is not None
+                        else group.block_bytes
+                    ),
                 )
             )
 
@@ -115,7 +120,8 @@ class VllmKVSlotAdapter:
 
 def vllm_block_name(ref: VllmKVBlockRef) -> str:
     lane = "" if ref.lane_id is None else f":l{ref.lane_id}"
-    return f"{ref.request_id}:g{ref.group_id}:b{ref.block_id}{lane}"
+    byte_count = "" if ref.byte_count is None else f":bytes{ref.byte_count}"
+    return f"{ref.request_id}:g{ref.group_id}:b{ref.block_id}{lane}{byte_count}"
 
 
 def make_vllm_block_refs_from_ids(
@@ -203,14 +209,17 @@ def make_vllm_layer_range_refs_from_ids(
     logical KV block can become more than one TurboBus byte range.
     """
 
-    refs = []
     block_ids = [int(block_id) for block_id in block_ids]
+    refs = []
     for layer_id, kv_cache in enumerate(kv_caches):
         lane_count = int(kv_cache.shape[0]) if len(kv_cache.shape) >= 3 else 1
         block_bytes = block_bytes_from_vllm_kv_tensor(kv_cache)
-        for index, block_id in enumerate(block_ids):
-            for lane_id in range(lane_count):
-                cpu_slot = cpu_slot_start + index * lane_count + lane_id
+        for lane_id in range(lane_count):
+            for start_index, run in _contiguous_runs(block_ids):
+                block_id = run[0]
+                run_blocks = len(run)
+                cpu_slot = cpu_slot_start + lane_id * len(block_ids) + start_index
+                cpu_offset = cpu_slot * block_bytes
                 if lane_count == 1:
                     gpu_offset = block_id * block_bytes
                     lane = None
@@ -228,10 +237,29 @@ def make_vllm_layer_range_refs_from_ids(
                         cpu_slot=cpu_slot,
                         gpu_slot=block_id,
                         lane_id=lane,
+                        cpu_offset=cpu_offset,
                         gpu_offset=gpu_offset,
+                        byte_count=run_blocks * block_bytes,
                     )
                 )
     return refs
+
+
+def _contiguous_runs(block_ids: list[int]) -> list[tuple[int, list[int]]]:
+    if not block_ids:
+        return []
+    runs = []
+    start_index = 0
+    current = [block_ids[0]]
+    for index, block_id in enumerate(block_ids[1:], start=1):
+        if block_id == current[-1] + 1:
+            current.append(block_id)
+            continue
+        runs.append((start_index, current))
+        start_index = index
+        current = [block_id]
+    runs.append((start_index, current))
+    return runs
 
 
 block_name = vllm_block_name

@@ -128,6 +128,42 @@ class VllmKVSlotAdapterTest(unittest.TestCase):
         self.assertEqual(refs[1].cpu_slot, 1)
         self.assertEqual(refs[1].gpu_offset, 72)
 
+    def test_layer_range_refs_merge_contiguous_blocks_by_lane(self) -> None:
+        tensor = FakeTensor(
+            shape=(2, 8, 4),
+            stride=(32, 4, 1),
+            element_size=2,
+        )
+
+        refs = make_vllm_layer_range_refs_from_ids("req0", [1, 2, 3], [tensor])
+
+        self.assertEqual(len(refs), 2)
+        self.assertEqual(refs[0].lane_id, 0)
+        self.assertEqual(refs[0].cpu_slot, 0)
+        self.assertEqual(refs[0].cpu_offset, 0)
+        self.assertEqual(refs[0].gpu_offset, 8)
+        self.assertEqual(refs[0].byte_count, 24)
+        self.assertEqual(refs[1].lane_id, 1)
+        self.assertEqual(refs[1].cpu_slot, 3)
+        self.assertEqual(refs[1].cpu_offset, 24)
+        self.assertEqual(refs[1].gpu_offset, 72)
+        self.assertEqual(refs[1].byte_count, 24)
+
+    def test_layer_range_refs_keep_noncontiguous_runs_separate(self) -> None:
+        tensor = FakeTensor(
+            shape=(1, 8, 4),
+            stride=(32, 4, 1),
+            element_size=2,
+        )
+
+        refs = make_vllm_layer_range_refs_from_ids("req0", [1, 3], [tensor])
+
+        self.assertEqual(len(refs), 2)
+        self.assertEqual(refs[0].block_id, 1)
+        self.assertEqual(refs[0].byte_count, 8)
+        self.assertEqual(refs[1].block_id, 3)
+        self.assertEqual(refs[1].byte_count, 8)
+
     def test_restore_groups_refs_by_layer(self) -> None:
         runtime = FakeRuntime()
         group0 = VllmKVGroup(0, FakeTensor(128), object(), block_bytes=32)
