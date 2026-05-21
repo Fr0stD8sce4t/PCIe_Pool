@@ -5,8 +5,11 @@ import unittest
 from unittest import mock
 
 from turbobus.vllm_kv_connector import (
+    TurboBusCPUBackingPool,
     TurboBusConnector,
     TurboBusConnectorMetadata,
+    TurboBusPrefixStore,
+    TurboBusSavedPrefix,
     clear_saved_prefixes,
     get_saved_prefix,
     register_saved_prefix,
@@ -72,6 +75,35 @@ class TurboBusConnectorTest(unittest.TestCase):
     def make_connector(self, extra=None):
         with mock.patch("turbobus.vllm_kv_connector._make_runtime_from_config", return_value=object()):
             return TurboBusConnector(FakeVllmConfig(extra), role="scheduler")
+
+    def test_prefix_store_replaces_saved_prefix_by_key(self) -> None:
+        store = TurboBusPrefixStore()
+        store.put(TurboBusSavedPrefix("key", [object()], block_count=1, matched_tokens=16))
+        store.put(TurboBusSavedPrefix("key", [object()], block_count=2, matched_tokens=32))
+
+        self.assertEqual(store.get("key").block_count, 2)
+
+    def test_cpu_backing_pool_reuses_released_backings(self) -> None:
+        pool = TurboBusCPUBackingPool()
+        first = [object(), object()]
+        kv_caches = [mock.Mock(), mock.Mock()]
+
+        with (
+            mock.patch(
+                "turbobus.vllm_kv_connector._backing_signature",
+                return_value=((2, 64), (2, 64)),
+            ),
+            mock.patch.object(TurboBusCPUBackingPool, "_allocate", return_value=first) as allocate,
+        ):
+            acquired, reused = pool.acquire(2, kv_caches)
+            pool.release(2, kv_caches, acquired)
+            second, second_reused = pool.acquire(2, kv_caches)
+
+        allocate.assert_called_once()
+        self.assertEqual(second, first)
+        self.assertIs(second[0], first[0])
+        self.assertFalse(reused)
+        self.assertTrue(second_reused)
 
     def test_reports_explicit_external_match(self) -> None:
         register_saved_prefix("default", [object()], block_count=8, matched_tokens=96)
@@ -276,7 +308,7 @@ class TurboBusConnectorTest(unittest.TestCase):
 
         with (
             mock.patch("turbobus.vllm_kv_connector._make_runtime_from_config", return_value=object()),
-            mock.patch.object(connector, "_allocate_cpu_backings", return_value=[object(), object()]),
+            mock.patch.object(connector._backing_pool, "acquire", return_value=([object(), object()], False)),
             mock.patch("turbobus.vllm_kv_connector.make_vllm_layer_range_refs_from_ids", return_value=[object()]),
             mock.patch("turbobus.vllm.make_vllm_layer_groups_from_kv_caches", return_value=[object()]),
         ):
@@ -288,6 +320,7 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertEqual(saved.source_request_id, "req0")
         self.assertEqual(saved.block_count, 2)
         self.assertEqual(saved.matched_tokens, 32)
+        self.assertFalse(saved.reused_backing)
         self.assertEqual(connector.get_finished(set()), (None, None))
         self.assertEqual(connector.get_finished({"req0"}), ({"req0"}, None))
         self.assertEqual(connector.get_finished(set()), (None, None))

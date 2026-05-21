@@ -58,6 +58,7 @@ class TurboBusSavedPrefix:
     runtime_init_ms: float = 0.0
     prepare_ms: float = 0.0
     cpu_alloc_ms: float = 0.0
+    reused_backing: bool = False
     group_ms: float = 0.0
     adapter_ms: float = 0.0
     refs_ms: float = 0.0
@@ -73,6 +74,60 @@ class _ScheduledRequestView:
     req_id: str
     new_block_ids: Any
     kv_transfer_params: dict[str, Any]
+
+
+class TurboBusPrefixStore:
+    def __init__(self) -> None:
+        self._prefixes: dict[str, TurboBusSavedPrefix] = {}
+
+    def put(self, prefix: TurboBusSavedPrefix) -> None:
+        if not prefix.key:
+            raise ValueError("prefix key must not be empty")
+        self._prefixes[str(prefix.key)] = prefix
+
+    def get(self, key: str) -> TurboBusSavedPrefix | None:
+        return self._prefixes.get(str(key))
+
+    def clear(self) -> None:
+        self._prefixes.clear()
+
+
+class TurboBusCPUBackingPool:
+    def __init__(self) -> None:
+        self._free_by_shape: dict[tuple[tuple[int, int], ...], list[list[Any]]] = {}
+
+    def acquire(self, block_count: int, kv_caches: list[Any]) -> tuple[list[Any], bool]:
+        signature = _backing_signature(block_count, kv_caches)
+        available = self._free_by_shape.get(signature)
+        if available:
+            return available.pop(), True
+        return self._allocate(block_count, kv_caches), False
+
+    def release(self, block_count: int, kv_caches: list[Any], cpu_backings: list[Any]) -> None:
+        signature = _backing_signature(block_count, kv_caches)
+        self._free_by_shape.setdefault(signature, []).append(list(cpu_backings))
+
+    @staticmethod
+    def _allocate(block_count: int, kv_caches: list[Any]) -> list[Any]:
+        try:
+            import torch
+        except ImportError as exc:  # pragma: no cover - import-time convenience only
+            raise RuntimeError("PyTorch is required to allocate vLLM CPU backings") from exc
+
+        slots_per_layer = max(1, int(block_count) * _max_lanes_per_layer(kv_caches))
+        backings = []
+        for kv_cache in kv_caches:
+            from .vllm import block_bytes_from_vllm_kv_tensor
+
+            block_bytes = block_bytes_from_vllm_kv_tensor(kv_cache)
+            backings.append(
+                torch.empty(
+                    slots_per_layer * block_bytes,
+                    dtype=torch.uint8,
+                    pin_memory=True,
+                )
+            )
+        return backings
 
 
 class TurboBusConnectorMetadata(KVConnectorMetadata):
@@ -103,7 +158,7 @@ class TurboBusKVConnectorState:
     events: list[dict[str, Any]] = field(default_factory=list)
 
 
-_SAVED_PREFIXES: dict[str, TurboBusSavedPrefix] = {}
+_PREFIX_STORE = TurboBusPrefixStore()
 
 
 def register_saved_prefix(
@@ -118,6 +173,7 @@ def register_saved_prefix(
     runtime_init_ms: float = 0.0,
     prepare_ms: float = 0.0,
     cpu_alloc_ms: float = 0.0,
+    reused_backing: bool = False,
     group_ms: float = 0.0,
     adapter_ms: float = 0.0,
     refs_ms: float = 0.0,
@@ -129,7 +185,7 @@ def register_saved_prefix(
 ) -> None:
     if not key:
         raise ValueError("prefix key must not be empty")
-    _SAVED_PREFIXES[str(key)] = TurboBusSavedPrefix(
+    prefix = TurboBusSavedPrefix(
         key=str(key),
         cpu_backings=list(cpu_backings),
         block_count=int(block_count),
@@ -140,6 +196,7 @@ def register_saved_prefix(
         runtime_init_ms=float(runtime_init_ms),
         prepare_ms=float(prepare_ms),
         cpu_alloc_ms=float(cpu_alloc_ms),
+        reused_backing=bool(reused_backing),
         group_ms=float(group_ms),
         adapter_ms=float(adapter_ms),
         refs_ms=float(refs_ms),
@@ -149,6 +206,7 @@ def register_saved_prefix(
         direct_chunks=int(direct_chunks),
         relay_chunks=int(relay_chunks),
     )
+    _PREFIX_STORE.put(prefix)
     _emit_event(
         "register_saved_prefix",
         prefix_key=str(key),
@@ -160,11 +218,11 @@ def register_saved_prefix(
 
 
 def clear_saved_prefixes() -> None:
-    _SAVED_PREFIXES.clear()
+    _PREFIX_STORE.clear()
 
 
 def get_saved_prefix(key: str) -> TurboBusSavedPrefix | None:
-    return _SAVED_PREFIXES.get(str(key))
+    return _PREFIX_STORE.get(str(key))
 
 
 class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
@@ -207,6 +265,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         )
         self.runtime = None
         self._adapters_by_prefix: dict[str, Any] = {}
+        self._backing_pool = TurboBusCPUBackingPool()
         _emit_event(
             "init",
             role=str(role),
@@ -631,7 +690,10 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         prepare_start = time.perf_counter()
         kv_caches = list(self.state.kv_caches.values())
         alloc_start = time.perf_counter()
-        cpu_backings = self._allocate_cpu_backings(request.block_count, kv_caches)
+        cpu_backings, reused_backing = self._backing_pool.acquire(
+            request.block_count,
+            kv_caches,
+        )
         cpu_alloc_ms = (time.perf_counter() - alloc_start) * 1000.0
         group_start = time.perf_counter()
         groups = make_vllm_layer_groups_from_kv_caches(cpu_backings, kv_caches)
@@ -663,6 +725,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             runtime_init_ms=runtime_init_ms,
             prepare_ms=prepare_ms,
             cpu_alloc_ms=cpu_alloc_ms,
+            reused_backing=reused_backing,
             group_ms=group_ms,
             adapter_ms=adapter_ms,
             refs_ms=refs_ms,
@@ -688,6 +751,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                 "runtime_init_ms": runtime_init_ms,
                 "prepare_ms": prepare_ms,
                 "cpu_alloc_ms": cpu_alloc_ms,
+                "reused_backing": reused_backing,
                 "group_ms": group_ms,
                 "adapter_ms": adapter_ms,
                 "refs_ms": refs_ms,
@@ -709,6 +773,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             runtime_init_ms=f"{runtime_init_ms:.3f}",
             prepare_ms=f"{prepare_ms:.3f}",
             cpu_alloc_ms=f"{cpu_alloc_ms:.3f}",
+            reused_backing=reused_backing,
             group_ms=f"{group_ms:.3f}",
             adapter_ms=f"{adapter_ms:.3f}",
             refs_ms=f"{refs_ms:.3f}",
@@ -721,25 +786,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         )
 
     def _allocate_cpu_backings(self, block_count: int, kv_caches: list[Any]) -> list[Any]:
-        try:
-            import torch
-        except ImportError as exc:  # pragma: no cover - import-time convenience only
-            raise RuntimeError("PyTorch is required to allocate vLLM CPU backings") from exc
-
-        slots_per_layer = max(1, int(block_count) * _max_lanes_per_layer(kv_caches))
-        backings = []
-        for kv_cache in kv_caches:
-            from .vllm import block_bytes_from_vllm_kv_tensor
-
-            block_bytes = block_bytes_from_vllm_kv_tensor(kv_cache)
-            backings.append(
-                torch.empty(
-                    slots_per_layer * block_bytes,
-                    dtype=torch.uint8,
-                    pin_memory=True,
-                )
-            )
-        return backings
+        return TurboBusCPUBackingPool._allocate(block_count, kv_caches)
 
 
 def _request_params(request) -> dict[str, Any]:
@@ -903,6 +950,16 @@ def _max_lanes_per_layer(kv_caches: list[Any]) -> int:
             for kv_cache in kv_caches
         ),
         default=1,
+    )
+
+
+def _backing_signature(block_count: int, kv_caches: list[Any]) -> tuple[tuple[int, int], ...]:
+    from .vllm import block_bytes_from_vllm_kv_tensor
+
+    slots_per_layer = max(1, int(block_count) * _max_lanes_per_layer(kv_caches))
+    return tuple(
+        (slots_per_layer, block_bytes_from_vllm_kv_tensor(kv_cache))
+        for kv_cache in kv_caches
     )
 
 
