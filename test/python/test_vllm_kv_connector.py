@@ -96,6 +96,18 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertIsNone(store.get("a"))
         self.assertIs(store.get("b"), second)
 
+    def test_prefix_store_isolates_same_key_by_session(self) -> None:
+        store = TurboBusPrefixStore()
+        first = TurboBusSavedPrefix("key", [object()], block_count=1, matched_tokens=16, session_id="a")
+        second = TurboBusSavedPrefix("key", [object()], block_count=2, matched_tokens=32, session_id="b")
+
+        self.assertEqual(store.put(first), [])
+        self.assertEqual(store.put(second), [])
+
+        self.assertIs(store.get("key", "a"), first)
+        self.assertIs(store.get("key", "b"), second)
+        self.assertIsNone(store.get("key"))
+
     def test_cpu_backing_pool_reuses_released_backings(self) -> None:
         pool = TurboBusCPUBackingPool()
         first = [object(), object()]
@@ -337,6 +349,29 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertEqual(connector.get_finished(set()), (None, None))
         self.assertEqual(connector.get_finished({"req0"}), ({"req0"}, None))
         self.assertEqual(connector.get_finished(set()), (None, None))
+
+    def test_saved_prefix_is_registered_under_connector_session(self) -> None:
+        connector = self.make_connector({"turbobus.session_id": "session-a"})
+        connector.state.kv_caches = {
+            "0": mock.Mock(),
+            "1": mock.Mock(),
+        }
+        request = TurboBusRequestMetadata("req0", "saved", (1, 2), 32, 2)
+        metadata = TurboBusConnectorMetadata()
+        metadata.add_save_request(request)
+        connector._connector_metadata = metadata
+
+        with (
+            mock.patch("turbobus.vllm_kv_connector._make_runtime_from_config", return_value=object()),
+            mock.patch.object(connector._backing_pool, "acquire", return_value=([object(), object()], False)),
+            mock.patch("turbobus.vllm_kv_connector.make_vllm_layer_range_refs_from_ids", return_value=[object()]),
+            mock.patch("turbobus.vllm.make_vllm_layer_groups_from_kv_caches", return_value=[object()]),
+            mock.patch("turbobus.vllm.VllmKVSlotAdapter", return_value=FakeAdapter()),
+        ):
+            connector.wait_for_save()
+
+        self.assertIsNone(get_saved_prefix("saved"))
+        self.assertEqual(get_saved_prefix("saved", "session-a").source_request_id, "req0")
 
     def test_replacing_saved_prefix_releases_previous_backing(self) -> None:
         connector = self.make_connector()

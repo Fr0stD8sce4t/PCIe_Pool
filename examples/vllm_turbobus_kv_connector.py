@@ -70,6 +70,7 @@ def run(args) -> None:
             "turbobus.restore_block_limit": args.restore_blocks,
             "turbobus.restore_enabled": args.restore_enabled,
             "turbobus.max_saved_prefixes": args.max_saved_prefixes,
+            "turbobus.session_id": args.session_id,
         },
     )
     llm_kwargs = {
@@ -98,7 +99,7 @@ def run(args) -> None:
     )
     first_outputs = llm.generate([first_prompt], base_sampling)
 
-    first_saved = get_saved_prefix(args.prefix_key)
+    first_saved = get_saved_prefix(args.prefix_key, args.session_id)
     restore_prefix_key = args.prefix_key
     restore_base_prompt = first_prompt
     saved = first_saved
@@ -118,7 +119,7 @@ def run(args) -> None:
             },
         )
         llm.generate([second_save_prompt], second_save_sampling)
-        second_saved = get_saved_prefix(args.second_save_prefix_key)
+        second_saved = get_saved_prefix(args.second_save_prefix_key, args.session_id)
         restore_prefix_key = args.second_save_prefix_key
         restore_base_prompt = second_save_prompt
         saved = second_saved
@@ -165,6 +166,7 @@ def run(args) -> None:
         f"prompt_repeat={args.prompt_repeat}",
         f"prefix_key={args.prefix_key}",
         f"second_save_prefix_key={args.second_save_prefix_key}",
+        f"session_id={args.session_id}",
         f"restore_prefix_key={restore_prefix_key}",
         f"second_prompt_suffix={args.second_prompt_suffix!r}",
         f"requested_matched_tokens={args.matched_tokens}",
@@ -222,7 +224,7 @@ def run(args) -> None:
         "vllm_kv_connector_result",
         f"source_request={source_request_id}",
         f"source_blocks={source_blocks}",
-        f"shared_prefix={second_prompt.startswith(first_prompt)}",
+        f"shared_prefix={second_prompt.startswith(restore_base_prompt)}",
         f"prompt_tokens={len(getattr(outputs[0], 'prompt_token_ids', []) or []) if outputs else 0}",
         f"generated_text={generated_text!r}",
     )
@@ -238,6 +240,7 @@ def parse_args():
     parser.add_argument("--prefix-key", default="qwen3-prefix")
     parser.add_argument("--second-save-prefix-key", default=None)
     parser.add_argument("--second-save-prompt", default="The capital of Germany is")
+    parser.add_argument("--session-id", default="vllm-kv-connector-example")
     parser.add_argument("--matched-tokens", type=int, default=128)
     parser.add_argument("--max-tokens", type=int, default=8)
     parser.add_argument("--target-gpu", type=int, required=True)

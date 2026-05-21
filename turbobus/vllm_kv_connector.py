@@ -52,6 +52,7 @@ class TurboBusSavedPrefix:
     cpu_backings: list[Any]
     block_count: int
     matched_tokens: int
+    session_id: str = "default"
     source_request_id: str = ""
     bytes: int = 0
     elapsed_ms: float = 0.0
@@ -85,27 +86,32 @@ class TurboBusPrefixStore:
         if not prefix.key:
             raise ValueError("prefix key must not be empty")
         evicted = []
-        previous = self._prefixes.pop(str(prefix.key), None)
+        store_key = self._store_key(prefix.key, prefix.session_id)
+        previous = self._prefixes.pop(store_key, None)
         if previous is not None:
             evicted.append(previous)
-        self._prefixes[str(prefix.key)] = prefix
+        self._prefixes[store_key] = prefix
         while self.max_prefixes > 0 and len(self._prefixes) > self.max_prefixes:
             oldest_key = next(iter(self._prefixes))
             removed = self._prefixes.pop(oldest_key)
             evicted.append(removed)
         return evicted
 
-    def get(self, key: str) -> TurboBusSavedPrefix | None:
-        return self._prefixes.get(str(key))
+    def get(self, key: str, session_id: str = "default") -> TurboBusSavedPrefix | None:
+        return self._prefixes.get(self._store_key(key, session_id))
 
-    def remove(self, key: str) -> TurboBusSavedPrefix | None:
-        return self._prefixes.pop(str(key), None)
+    def remove(self, key: str, session_id: str = "default") -> TurboBusSavedPrefix | None:
+        return self._prefixes.pop(self._store_key(key, session_id), None)
 
     def clear(self) -> None:
         self._prefixes.clear()
 
     def __len__(self) -> int:
         return len(self._prefixes)
+
+    @staticmethod
+    def _store_key(key: str, session_id: str = "default") -> str:
+        return f"{str(session_id)}\0{str(key)}"
 
 
 class TurboBusCPUBackingPool:
@@ -186,6 +192,7 @@ def register_saved_prefix(
     *,
     block_count: int,
     matched_tokens: int,
+    session_id: str = "default",
     source_request_id: str = "",
     bytes: int = 0,
     elapsed_ms: float = 0.0,
@@ -207,6 +214,7 @@ def register_saved_prefix(
         cpu_backings=list(cpu_backings),
         block_count=int(block_count),
         matched_tokens=int(matched_tokens),
+        session_id=str(session_id),
         source_request_id=str(source_request_id),
         bytes=int(bytes),
         elapsed_ms=float(elapsed_ms),
@@ -227,6 +235,7 @@ def register_saved_prefix(
     _emit_event(
         "register_saved_prefix",
         prefix_key=str(key),
+        session_id=str(session_id),
         block_count=int(block_count),
         matched_tokens=int(matched_tokens),
         source_request_id=str(source_request_id),
@@ -238,16 +247,16 @@ def clear_saved_prefixes() -> None:
     _PREFIX_STORE.clear()
 
 
-def get_saved_prefix(key: str) -> TurboBusSavedPrefix | None:
-    return _PREFIX_STORE.get(str(key))
+def get_saved_prefix(key: str, session_id: str = "default") -> TurboBusSavedPrefix | None:
+    return _PREFIX_STORE.get(str(key), str(session_id))
 
 
 def _store_saved_prefix(prefix: TurboBusSavedPrefix) -> list[TurboBusSavedPrefix]:
     return _PREFIX_STORE.put(prefix)
 
 
-def _remove_saved_prefix(key: str) -> TurboBusSavedPrefix | None:
-    return _PREFIX_STORE.remove(key)
+def _remove_saved_prefix(key: str, session_id: str = "default") -> TurboBusSavedPrefix | None:
+    return _PREFIX_STORE.remove(key, session_id)
 
 
 class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
@@ -288,6 +297,11 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             "turbobus.restore_enabled",
             os.environ.get("TURBOBUS_RESTORE_ENABLED", "0") == "1",
         )
+        self.session_id = _extra_config_str(
+            vllm_config,
+            "turbobus.session_id",
+            _kv_transfer_engine_id(vllm_config),
+        )
         self.max_saved_prefixes = _extra_config_int(
             vllm_config,
             "turbobus.max_saved_prefixes",
@@ -300,6 +314,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         _emit_event(
             "init",
             role=str(role),
+            session_id=self.session_id,
             restore_enabled=self.restore_enabled,
             restore_block_limit=self.restore_block_limit,
             max_saved_prefixes=self.max_saved_prefixes,
@@ -338,19 +353,21 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             )
             return 0, False
         prefix_key = _request_prefix_key(params)
-        saved = get_saved_prefix(prefix_key)
+        saved = get_saved_prefix(prefix_key, self.session_id)
         if saved is None:
             self.state.events.append(
                 {
                     "event": "match_miss",
                     "request_id": str(getattr(request, "request_id", "unknown")),
                     "prefix_key": prefix_key,
+                    "session_id": self.session_id,
                 }
             )
             _emit_event(
                 "match_miss",
                 request_id=str(getattr(request, "request_id", "unknown")),
                 prefix_key=prefix_key,
+                session_id=self.session_id,
             )
             return 0, False
         matched_tokens = int(params.get("turbobus.matched_tokens", 0))
@@ -367,6 +384,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                 "event": "match",
                 "request_id": str(getattr(request, "request_id", "unknown")),
                 "prefix_key": prefix_key,
+                "session_id": self.session_id,
                 "matched_tokens": matched_tokens,
                 "num_computed_tokens": int(num_computed_tokens),
                 "available_tokens": max(0, available),
@@ -376,6 +394,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             "match",
             request_id=str(getattr(request, "request_id", "unknown")),
             prefix_key=prefix_key,
+            session_id=self.session_id,
             matched_tokens=matched_tokens,
             num_computed_tokens=int(num_computed_tokens),
             available_tokens=max(0, available),
@@ -389,12 +408,13 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         if num_external_tokens <= 0:
             return
         prefix_key = _request_prefix_key(params)
-        saved = get_saved_prefix(prefix_key)
+        saved = get_saved_prefix(prefix_key, self.session_id)
         if saved is None:
             _emit_event(
                 "alloc_miss",
                 request_id=str(getattr(request, "request_id", "unknown")),
                 prefix_key=prefix_key,
+                session_id=self.session_id,
             )
             return
         block_ids = _flatten_block_ids(extract_vllm_block_ids(blocks))
@@ -419,6 +439,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                 "event": "alloc",
                 "request_id": request_id,
                 "prefix_key": prefix_key,
+                "session_id": self.session_id,
                 "matched_tokens": int(num_external_tokens),
                 "block_count": len(block_ids),
             }
@@ -427,6 +448,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             "alloc",
             request_id=request_id,
             prefix_key=prefix_key,
+            session_id=self.session_id,
             matched_tokens=int(num_external_tokens),
             block_count=len(block_ids),
         )
@@ -659,7 +681,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
 
     def _restore_request(self, request: TurboBusRequestMetadata) -> None:
         total_start = time.perf_counter()
-        saved = get_saved_prefix(request.prefix_key)
+        saved = get_saved_prefix(request.prefix_key, self.session_id)
         if saved is None:
             raise RuntimeError(f"saved prefix {request.prefix_key!r} is not registered")
         prepare_start = time.perf_counter()
@@ -682,6 +704,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                 "event": "restore",
                 "request_id": request.request_id,
                 "prefix_key": request.prefix_key,
+                "session_id": self.session_id,
                 "block_count": len(request.block_ids),
                 "matched_tokens": request.matched_tokens,
                 "elapsed_ms": transfer_ms,
@@ -697,6 +720,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             "restore",
             request_id=request.request_id,
             prefix_key=request.prefix_key,
+            session_id=self.session_id,
             block_count=len(request.block_ids),
             matched_tokens=request.matched_tokens,
             elapsed_ms=f"{transfer_ms:.3f}",
@@ -752,6 +776,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             cpu_backings=cpu_backings,
             block_count=request.block_count,
             matched_tokens=request.matched_tokens,
+            session_id=self.session_id,
             source_request_id=request.request_id,
             elapsed_ms=transfer_ms,
             runtime_init_ms=runtime_init_ms,
@@ -770,10 +795,11 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         _store_saved_prefix(prefix)
         for removed in evicted:
             if removed.key != prefix.key:
-                _remove_saved_prefix(removed.key)
+                _remove_saved_prefix(removed.key, removed.session_id)
         _emit_event(
             "register_saved_prefix",
             prefix_key=request.prefix_key,
+            session_id=self.session_id,
             block_count=request.block_count,
             matched_tokens=request.matched_tokens,
             source_request_id=request.request_id,
@@ -783,7 +809,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         self.state.saved_request_ids.add(request.request_id)
         register_ms = (time.perf_counter() - register_start) * 1000.0
         total_ms = (time.perf_counter() - total_start) * 1000.0
-        saved = get_saved_prefix(request.prefix_key)
+        saved = get_saved_prefix(request.prefix_key, self.session_id)
         if saved is not None:
             saved.register_ms = register_ms
             saved.total_ms = total_ms
@@ -792,6 +818,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                 "event": "save",
                 "request_id": request.request_id,
                 "prefix_key": request.prefix_key,
+                "session_id": self.session_id,
                 "block_count": len(request.block_ids),
                 "matched_tokens": request.matched_tokens,
                 "elapsed_ms": transfer_ms,
@@ -814,6 +841,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             "save",
             request_id=request.request_id,
             prefix_key=request.prefix_key,
+            session_id=self.session_id,
             block_count=len(request.block_ids),
             matched_tokens=request.matched_tokens,
             elapsed_ms=f"{transfer_ms:.3f}",
@@ -845,6 +873,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                 {
                     "event": "evict_prefix",
                     "prefix_key": removed.key,
+                    "session_id": removed.session_id,
                     "block_count": removed.block_count,
                     "source_request_id": removed.source_request_id,
                 }
@@ -852,6 +881,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             _emit_event(
                 "evict_prefix",
                 prefix_key=removed.key,
+                session_id=removed.session_id,
                 block_count=removed.block_count,
                 source_request_id=removed.source_request_id,
             )
@@ -990,6 +1020,22 @@ def _extra_config_bool(vllm_config, key: str, default: bool) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).lower() in {"1", "true", "yes", "on"}
+
+
+def _extra_config_str(vllm_config, key: str, default: str) -> str:
+    config = getattr(vllm_config, "kv_transfer_config", None)
+    getter = getattr(config, "get_from_extra_config", None)
+    if getter is None:
+        return str(default)
+    return str(getter(key, default))
+
+
+def _kv_transfer_engine_id(vllm_config) -> str:
+    config = getattr(vllm_config, "kv_transfer_config", None)
+    engine_id = getattr(config, "engine_id", None)
+    if engine_id:
+        return str(engine_id)
+    return "default"
 
 
 def _make_runtime_from_config(vllm_config) -> Runtime:
