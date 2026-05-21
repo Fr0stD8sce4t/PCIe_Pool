@@ -108,6 +108,27 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertIs(store.get("key", "b"), second)
         self.assertIsNone(store.get("key"))
 
+    def test_prefix_store_can_clear_one_session(self) -> None:
+        store = TurboBusPrefixStore()
+        first = TurboBusSavedPrefix("key", [object()], block_count=1, matched_tokens=16, session_id="a")
+        second = TurboBusSavedPrefix("key", [object()], block_count=2, matched_tokens=32, session_id="b")
+        store.put(first)
+        store.put(second)
+
+        store.clear("a")
+
+        self.assertIsNone(store.get("key", "a"))
+        self.assertIs(store.get("key", "b"), second)
+
+    def test_clear_saved_prefixes_can_clear_one_session(self) -> None:
+        register_saved_prefix("key", [object()], block_count=1, matched_tokens=16, session_id="a")
+        register_saved_prefix("key", [object()], block_count=2, matched_tokens=32, session_id="b")
+
+        clear_saved_prefixes("a")
+
+        self.assertIsNone(get_saved_prefix("key", "a"))
+        self.assertEqual(get_saved_prefix("key", "b").block_count, 2)
+
     def test_cpu_backing_pool_reuses_released_backings(self) -> None:
         pool = TurboBusCPUBackingPool()
         first = [object(), object()]

@@ -54,7 +54,7 @@ def run(args) -> None:
     from turbobus.vllm_kv_connector import clear_saved_prefixes, get_saved_prefix
 
     torch.cuda.set_device(args.runtime_target_gpu)
-    clear_saved_prefixes()
+    clear_saved_prefixes(args.session_id)
 
     relay_gpus = ",".join(str(gpu) for gpu in args.runtime_relay_gpus)
     ktc = KVTransferConfig(

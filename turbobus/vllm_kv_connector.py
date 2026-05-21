@@ -103,8 +103,14 @@ class TurboBusPrefixStore:
     def remove(self, key: str, session_id: str = "default") -> TurboBusSavedPrefix | None:
         return self._prefixes.pop(self._store_key(key, session_id), None)
 
-    def clear(self) -> None:
-        self._prefixes.clear()
+    def clear(self, session_id: str | None = None) -> None:
+        if session_id is None:
+            self._prefixes.clear()
+            return
+        prefix = f"{str(session_id)}\0"
+        for key in list(self._prefixes):
+            if key.startswith(prefix):
+                self._prefixes.pop(key)
 
     def __len__(self) -> int:
         return len(self._prefixes)
@@ -243,8 +249,8 @@ def register_saved_prefix(
     )
 
 
-def clear_saved_prefixes() -> None:
-    _PREFIX_STORE.clear()
+def clear_saved_prefixes(session_id: str | None = None) -> None:
+    _PREFIX_STORE.clear(session_id)
 
 
 def get_saved_prefix(key: str, session_id: str = "default") -> TurboBusSavedPrefix | None:
