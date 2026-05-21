@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Mapping
 
+from .offload_store import TransferStats
 from .inference import InferenceKVSlot, InferenceKVSlotAdapter
 from .runtime import Runtime
 
@@ -115,6 +116,18 @@ class VllmKVSlotAdapter:
         for group_id, names in submitted:
             self.adapters[group_id].wait_prefix(names)
         return handles
+
+    def transfer_stats(self, refs: Iterable[VllmKVBlockRef]) -> TransferStats:
+        names_by_group = self._register_and_group(refs)
+        total = TransferStats()
+        for group_id, names in names_by_group.items():
+            stats = self.adapters[group_id].transfer_stats(names)
+            total = TransferStats(
+                bytes=total.bytes + stats.bytes,
+                direct_chunks=total.direct_chunks + stats.direct_chunks,
+                relay_chunks=total.relay_chunks + stats.relay_chunks,
+            )
+        return total
 
     def _register_and_group(
         self,

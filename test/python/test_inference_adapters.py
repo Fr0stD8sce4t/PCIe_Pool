@@ -42,6 +42,7 @@ class FakeHandle:
     def __init__(self, events=None) -> None:
         self.wait_calls = 0
         self.events = events
+        self.stats = None
 
     def wait(self) -> None:
         self.wait_calls += 1
@@ -58,12 +59,20 @@ class FakeRuntime:
 
     def fetch_ranges_to_gpu(self, cpu_tensor, gpu_tensor, ranges):
         handle = FakeHandle(self.events)
+        handle.stats = {
+            "bytes": sum(item["bytes"] for item in ranges),
+            "direct_chunks": len(ranges),
+        }
         self.calls.append(("prefetch_ranges", cpu_tensor, gpu_tensor, ranges, handle))
         self.events.append("submit_prefetch")
         return handle
 
     def offload_ranges_to_cpu(self, gpu_tensor, cpu_tensor, ranges):
         handle = FakeHandle(self.events)
+        handle.stats = {
+            "bytes": sum(item["bytes"] for item in ranges),
+            "relay_chunks": len(ranges),
+        }
         self.calls.append(("evict_ranges", gpu_tensor, cpu_tensor, ranges, handle))
         self.events.append("submit_evict")
         return handle
@@ -117,6 +126,18 @@ class InferenceKVSlotAdapterTest(unittest.TestCase):
         adapter.wait_prefix(names)
         self.assertEqual(runtime.calls[0][4].wait_calls, 1)
         self.assertEqual(len(handles), 2)
+
+    def test_transfer_stats_reports_last_prefix_transfer(self) -> None:
+        runtime = FakeRuntime()
+        cpu = FakeTensor(128)
+        gpu = object()
+        adapter = InferenceKVSlotAdapter(runtime, cpu, gpu)
+        adapter.register_slots(make_contiguous_kv_slots("prefix", 2, 32))
+
+        adapter.restore_prefix(["prefix0", "prefix1"])
+
+        self.assertEqual(adapter.transfer_stats(["prefix0", "prefix1"]).bytes, 64)
+        self.assertEqual(adapter.transfer_stats(["prefix0", "prefix1"]).direct_chunks, 2)
 
 
 class VllmKVSlotAdapterTest(unittest.TestCase):
@@ -216,6 +237,19 @@ class VllmKVSlotAdapterTest(unittest.TestCase):
         self.assertEqual(runtime.events, ["submit_prefetch", "submit_prefetch", "wait", "wait"])
         self.assertEqual(runtime.calls[0][4].wait_calls, 1)
         self.assertEqual(runtime.calls[1][4].wait_calls, 1)
+
+    def test_transfer_stats_sums_groups(self) -> None:
+        runtime = FakeRuntime()
+        group0 = VllmKVGroup(0, FakeTensor(128), object(), block_bytes=32)
+        group1 = VllmKVGroup(1, FakeTensor(128), object(), block_bytes=32)
+        adapter = VllmKVSlotAdapter(runtime, [group0, group1])
+        refs = make_vllm_layer_block_refs_from_ids("req0", [1], layer_count=2)
+
+        adapter.restore_prefix(refs)
+        stats = adapter.transfer_stats(refs)
+
+        self.assertEqual(stats.bytes, 64)
+        self.assertEqual(stats.direct_chunks, 2)
 
 
 if __name__ == "__main__":

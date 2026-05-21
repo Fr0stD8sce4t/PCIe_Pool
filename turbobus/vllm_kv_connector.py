@@ -5,7 +5,7 @@ import os
 import time
 from typing import Any
 
-from .offload_store import summarize_transfer_handles
+from .offload_store import TransferStats, summarize_transfer_handles
 from .runtime import Runtime, RuntimeOptions
 from .vllm import make_vllm_layer_range_refs_from_ids
 from .vllm_integration import extract_vllm_block_ids
@@ -705,7 +705,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         handles = adapter.restore_prefix(refs)
         transfer_ms = (time.perf_counter() - transfer_start) * 1000.0
         total_ms = (time.perf_counter() - total_start) * 1000.0
-        stats = summarize_transfer_handles(handles).as_dict()
+        stats = _adapter_transfer_stats(adapter, refs, handles).as_dict()
         self.state.events.append(
             {
                 "event": "restore",
@@ -776,7 +776,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         transfer_start = time.perf_counter()
         handles = adapter.save_prefix(refs)
         transfer_ms = (time.perf_counter() - transfer_start) * 1000.0
-        stats = summarize_transfer_handles(handles).as_dict()
+        stats = _adapter_transfer_stats(adapter, refs, handles).as_dict()
         register_start = time.perf_counter()
         prefix = TurboBusSavedPrefix(
             key=request.prefix_key,
@@ -906,6 +906,20 @@ def _request_params(request) -> dict[str, Any]:
         if isinstance(params, dict):
             return params
     return {}
+
+
+def _adapter_transfer_stats(adapter, refs, handles) -> TransferStats:
+    getter = getattr(adapter, "transfer_stats", None)
+    if getter is None:
+        return summarize_transfer_handles(handles)
+    stats = getter(refs)
+    if isinstance(stats, TransferStats):
+        return stats
+    return TransferStats(
+        bytes=int(getattr(stats, "bytes", 0) or 0),
+        direct_chunks=int(getattr(stats, "direct_chunks", 0) or 0),
+        relay_chunks=int(getattr(stats, "relay_chunks", 0) or 0),
+    )
 
 
 def _request_prefix_key(params: dict[str, Any]) -> str:

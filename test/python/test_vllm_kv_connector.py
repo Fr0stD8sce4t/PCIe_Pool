@@ -497,6 +497,38 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertIn("transfer_ms", event)
         self.assertIn("total_ms", event)
 
+    def test_restore_event_prefers_adapter_transfer_stats(self) -> None:
+        class StatsAdapter(FakeAdapter):
+            def transfer_stats(self, refs):
+                self.stats_refs = list(refs)
+                return SimpleNamespace(bytes=96, direct_chunks=3, relay_chunks=2)
+
+        adapter = StatsAdapter()
+        connector = self.make_connector({"turbobus.restore_enabled": True})
+        connector.state.kv_caches = {"0": mock.Mock()}
+        request = mock.Mock(
+            request_id="req0",
+            prefix_key="default",
+            block_ids=(1,),
+            matched_tokens=16,
+            cpu_slot_start=0,
+        )
+        register_saved_prefix("default", [object()], block_count=1, matched_tokens=16)
+
+        with (
+            mock.patch.object(connector, "_adapter_for_saved_prefix", return_value=adapter),
+            mock.patch(
+                "turbobus.vllm_kv_connector.make_vllm_layer_range_refs_from_ids",
+                return_value=["ref0"],
+            ),
+        ):
+            connector._restore_request(request)
+
+        self.assertEqual(adapter.stats_refs, ["ref0"])
+        self.assertEqual(connector.state.events[-1]["bytes"], 96)
+        self.assertEqual(connector.state.events[-1]["direct_chunks"], 3)
+        self.assertEqual(connector.state.events[-1]["relay_chunks"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

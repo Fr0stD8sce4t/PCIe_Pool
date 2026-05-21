@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
-from .offload_store import OffloadManager
+from .offload_store import OffloadManager, TransferStats
 from .runtime import Runtime
 
 
@@ -67,6 +67,9 @@ class InferenceKVSlotAdapter:
 
     def wait_prefix(self, names: Iterable[str]) -> None:
         self.manager.wait_many(names)
+
+    def transfer_stats(self, names: Iterable[str]) -> TransferStats:
+        return self.manager.transfer_stats_many(names)
 
 
 def make_contiguous_kv_slots(
