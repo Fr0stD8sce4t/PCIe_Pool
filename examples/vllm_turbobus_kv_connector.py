@@ -267,7 +267,7 @@ def parse_args():
     )
     parser.add_argument("--chunk-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument("--profile-bytes", type=int, default=16 * 1024 * 1024)
-    parser.add_argument("--min-pool-bytes", type=int, default=16 * 1024 * 1024)
+    parser.add_argument("--min-pool-bytes", type=int, default=12 * 1024 * 1024)
     parser.add_argument("--mode", choices=["auto", "direct", "relay", "pool"], default="pool")
     parser.add_argument("--log-output", default=None)
     parser.add_argument(

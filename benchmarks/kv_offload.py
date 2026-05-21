@@ -405,7 +405,7 @@ def main() -> None:
     parser.add_argument("--block-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--chunk-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument("--profile-bytes", type=int, default=16 * 1024 * 1024)
-    parser.add_argument("--min-pool-bytes", type=int, default=16 * 1024 * 1024)
+    parser.add_argument("--min-pool-bytes", type=int, default=12 * 1024 * 1024)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--iterations", type=int, default=5)
     parser.add_argument("--mode", choices=["auto", "pool", "direct", "relay", "all"], default="pool")

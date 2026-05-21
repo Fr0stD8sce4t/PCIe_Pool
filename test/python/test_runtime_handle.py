@@ -118,7 +118,7 @@ class RuntimeOptionsTest(unittest.TestCase):
         self.assertEqual(decision.resolved_mode, TransferMode.DIRECT)
         self.assertEqual(decision.reason, "h2d request has only 1 chunk(s)")
 
-    def test_auto_transfer_selector_avoids_pool_for_small_kv_requests(self) -> None:
+    def test_auto_transfer_selector_avoids_pool_below_default_min_bytes(self) -> None:
         class Relay:
             relay_device = 5
             effective_bw_gbps = 7.6
@@ -128,17 +128,17 @@ class RuntimeOptionsTest(unittest.TestCase):
             direct_h2d_bw_gbps = 7.5
             relays = [Relay()]
 
-        selector = AutoTransferSelector(min_pool_bytes=16 * 1024 * 1024)
+        selector = AutoTransferSelector()
         decision = selector.choose(
             Profile(),
-            request_bytes=14 * 1024 * 1024,
+            request_bytes=11 * 1024 * 1024,
             chunk_bytes=4 * 1024 * 1024,
             request_chunks=56,
         )
 
         self.assertEqual(decision.resolved_mode, TransferMode.DIRECT)
 
-    def test_auto_transfer_selector_uses_pool_after_min_bytes(self) -> None:
+    def test_auto_transfer_selector_uses_pool_above_default_min_bytes(self) -> None:
         class Relay:
             relay_device = 5
             effective_bw_gbps = 7.6
@@ -148,10 +148,10 @@ class RuntimeOptionsTest(unittest.TestCase):
             direct_h2d_bw_gbps = 7.5
             relays = [Relay()]
 
-        selector = AutoTransferSelector(min_pool_bytes=16 * 1024 * 1024)
+        selector = AutoTransferSelector()
         decision = selector.choose(
             Profile(),
-            request_bytes=28 * 1024 * 1024,
+            request_bytes=14 * 1024 * 1024,
             chunk_bytes=4 * 1024 * 1024,
             request_chunks=56,
         )

@@ -78,7 +78,7 @@ def speedup(numerator_ms: str, denominator_ms: str) -> str:
 def run_case(args, mode: str, restore_blocks: int, matched_tokens: int, log_path: Path):
     script = Path(__file__).with_name("vllm_turbobus_kv_connector.py")
     repo_root = Path(__file__).resolve().parents[1]
-    min_pool_bytes = getattr(args, "min_pool_bytes", 16 * 1024 * 1024)
+    min_pool_bytes = getattr(args, "min_pool_bytes", 12 * 1024 * 1024)
     command = [
         sys.executable,
         str(script),
@@ -140,7 +140,7 @@ def run_case(args, mode: str, restore_blocks: int, matched_tokens: int, log_path
 
 def build_sweep_summary_lines(args, results) -> list[str]:
     case_rows = []
-    min_pool_bytes = getattr(args, "min_pool_bytes", 16 * 1024 * 1024)
+    min_pool_bytes = getattr(args, "min_pool_bytes", 12 * 1024 * 1024)
     lines = ["SWEEP_SUMMARY_BEGIN"]
     lines.append(
         " ".join(
@@ -322,7 +322,7 @@ def parse_args():
     parser.add_argument("--modes", default="auto,direct,relay,pool")
     parser.add_argument("--chunk-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument("--profile-bytes", type=int, default=16 * 1024 * 1024)
-    parser.add_argument("--min-pool-bytes", type=int, default=16 * 1024 * 1024)
+    parser.add_argument("--min-pool-bytes", type=int, default=12 * 1024 * 1024)
     parser.add_argument("--enforce-eager", action="store_true")
     parser.add_argument("--enable-multiproc-executor", action="store_true")
     parser.add_argument("--no-map-physical-gpus", action="store_true")
