@@ -48,16 +48,25 @@ class InferenceKVSlotAdapter:
             )
 
     def restore_prefix(self, names: Iterable[str]) -> list:
-        names = list(names)
-        handles = self.manager.prefetch_many(names)
-        self.manager.wait_many(names)
+        names, handles = self.submit_restore_prefix(names)
+        self.wait_prefix(names)
         return handles
 
     def save_prefix(self, names: Iterable[str]) -> list:
-        names = list(names)
-        handles = self.manager.evict_many(names)
-        self.manager.wait_many(names)
+        names, handles = self.submit_save_prefix(names)
+        self.wait_prefix(names)
         return handles
+
+    def submit_restore_prefix(self, names: Iterable[str]) -> tuple[list[str], list]:
+        names = list(names)
+        return names, self.manager.prefetch_many(names)
+
+    def submit_save_prefix(self, names: Iterable[str]) -> tuple[list[str], list]:
+        names = list(names)
+        return names, self.manager.evict_many(names)
+
+    def wait_prefix(self, names: Iterable[str]) -> None:
+        self.manager.wait_many(names)
 
 
 def make_contiguous_kv_slots(

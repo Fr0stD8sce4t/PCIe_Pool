@@ -95,15 +95,25 @@ class VllmKVSlotAdapter:
     def restore_prefix(self, refs: Iterable[VllmKVBlockRef]) -> list:
         names_by_group = self._register_and_group(refs)
         handles = []
+        submitted = []
         for group_id, names in names_by_group.items():
-            handles.extend(self.adapters[group_id].restore_prefix(names))
+            names, group_handles = self.adapters[group_id].submit_restore_prefix(names)
+            submitted.append((group_id, names))
+            handles.extend(group_handles)
+        for group_id, names in submitted:
+            self.adapters[group_id].wait_prefix(names)
         return handles
 
     def save_prefix(self, refs: Iterable[VllmKVBlockRef]) -> list:
         names_by_group = self._register_and_group(refs)
         handles = []
+        submitted = []
         for group_id, names in names_by_group.items():
-            handles.extend(self.adapters[group_id].save_prefix(names))
+            names, group_handles = self.adapters[group_id].submit_save_prefix(names)
+            submitted.append((group_id, names))
+            handles.extend(group_handles)
+        for group_id, names in submitted:
+            self.adapters[group_id].wait_prefix(names)
         return handles
 
     def _register_and_group(
