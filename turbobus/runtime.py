@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 import json
@@ -315,6 +316,7 @@ class Runtime:
         self.options = options or RuntimeOptions()
         self._last_resolved_transfer_mode = TransferMode.POOL
         self._last_auto_decision: AutoTransferDecision | None = None
+        self._forced_transfer_mode: TransferMode | None = None
         if TransferMode(self.options.transfer_mode) is TransferMode.AUTO:
             self._last_resolved_transfer_mode = TransferMode.AUTO
         self._runtime = _turbobus.Runtime(self.options.to_native())
@@ -355,28 +357,67 @@ class Runtime:
         range_count: int | None = None,
     ) -> AutoTransferDecision:
         requested_mode = TransferMode(self.options.transfer_mode)
+        forced_mode = getattr(self, "_forced_transfer_mode", None)
+        if forced_mode is not None:
+            return self._explicit_transfer_decision(
+                forced_mode,
+                bytes,
+                range_count,
+                reason="batch resolved transfer mode",
+                clear_auto_decision=False,
+            )
         if requested_mode is not TransferMode.AUTO:
-            request_chunks = max(
-                1,
-                int(range_count)
-                if range_count is not None
-                else math.ceil(max(0, int(bytes)) / max(1, int(self.options.chunk_bytes))),
-            )
-            decision = AutoTransferDecision(
-                requested_mode=requested_mode,
-                resolved_mode=requested_mode,
-                request_bytes=max(0, int(bytes)),
-                request_chunks=request_chunks,
-                direct_h2d_bw_gbps=0.0,
-                relay_effective_bw_gbps=0.0,
-                eligible_relay_devices=tuple(self.relay_gpus),
+            return self._explicit_transfer_decision(
+                requested_mode,
+                bytes,
+                range_count,
                 reason="explicit transfer mode",
+                clear_auto_decision=True,
             )
-            self._last_resolved_transfer_mode = requested_mode
-            self._last_auto_decision = None
-            self._runtime.set_transfer_mode(_runtime_transfer_mode_value(requested_mode))
-            return decision
 
+        decision = self._auto_transfer_decision(bytes, direction, range_count)
+        self._last_resolved_transfer_mode = decision.resolved_mode
+        self._last_auto_decision = decision
+        self._runtime.set_transfer_mode(_runtime_transfer_mode_value(decision.resolved_mode))
+        return decision
+
+    def _explicit_transfer_decision(
+        self,
+        mode: TransferMode,
+        bytes: int,
+        range_count: int | None,
+        *,
+        reason: str,
+        clear_auto_decision: bool,
+    ) -> AutoTransferDecision:
+        request_chunks = max(
+            1,
+            int(range_count)
+            if range_count is not None
+            else math.ceil(max(0, int(bytes)) / max(1, int(self.options.chunk_bytes))),
+        )
+        decision = AutoTransferDecision(
+            requested_mode=mode,
+            resolved_mode=mode,
+            request_bytes=max(0, int(bytes)),
+            request_chunks=request_chunks,
+            direct_h2d_bw_gbps=0.0,
+            relay_effective_bw_gbps=0.0,
+            eligible_relay_devices=tuple(self.relay_gpus),
+            reason=reason,
+        )
+        self._last_resolved_transfer_mode = mode
+        if clear_auto_decision:
+            self._last_auto_decision = None
+        self._runtime.set_transfer_mode(_runtime_transfer_mode_value(mode))
+        return decision
+
+    def _auto_transfer_decision(
+        self,
+        bytes: int,
+        direction: str,
+        range_count: int | None,
+    ) -> AutoTransferDecision:
         plan_profile = (
             self.planner_profile()
             if self.options.enable_dynamic_weights
@@ -404,10 +445,22 @@ class Runtime:
             request_chunks=range_count,
             direction=direction,
         )
-        self._last_resolved_transfer_mode = decision.resolved_mode
-        self._last_auto_decision = decision
-        self._runtime.set_transfer_mode(_runtime_transfer_mode_value(decision.resolved_mode))
         return decision
+
+    @contextmanager
+    def batch_transfer_mode(
+        self,
+        bytes: int,
+        direction: str,
+        range_count: int | None = None,
+    ):
+        decision = self.resolve_transfer_mode(bytes, direction=direction, range_count=range_count)
+        previous = self._forced_transfer_mode
+        self._forced_transfer_mode = decision.resolved_mode
+        try:
+            yield decision
+        finally:
+            self._forced_transfer_mode = previous
 
     def last_transfer_mode(self) -> TransferMode:
         return self._last_resolved_transfer_mode

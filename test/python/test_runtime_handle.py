@@ -247,6 +247,48 @@ class RuntimeOptionsTest(unittest.TestCase):
         self.assertEqual(runtime.last_auto_decision_dict()["auto_resolved_mode"], "pool")
         self.assertEqual(runtime.last_auto_decision_dict()["auto_eligible_relays"], "1")
 
+    def test_batch_transfer_mode_keeps_outer_auto_decision(self) -> None:
+        class Relay:
+            relay_device = 1
+            effective_bw_gbps = 7.6
+            p2p_enabled = True
+
+        class RelayProfile:
+            direct_h2d_bw_gbps = 7.5
+            relays = [Relay()]
+
+        class FakeRuntime:
+            def profile(self, bytes: int, force: bool = False):
+                return RelayProfile()
+
+            def cached_profile(self):
+                return RelayProfile()
+
+            def planner_profile(self):
+                return RelayProfile()
+
+            def set_transfer_mode(self, mode):
+                self.mode = mode
+
+        runtime = object.__new__(runtime_module.Runtime)
+        runtime.target_gpu = 0
+        runtime.relay_gpus = [1]
+        runtime.options = RuntimeOptions(
+            transfer_mode="auto",
+            chunk_bytes=4 * 1024 * 1024,
+        )
+        runtime._runtime = FakeRuntime()
+        runtime._last_resolved_transfer_mode = TransferMode.AUTO
+        runtime._last_auto_decision = None
+        runtime._forced_transfer_mode = None
+
+        with runtime.batch_transfer_mode(32 * 1024 * 1024, "h2d", 56):
+            inner = runtime.resolve_transfer_mode(1024 * 1024, "h2d", 2)
+
+        self.assertEqual(inner.resolved_mode, TransferMode.POOL)
+        self.assertEqual(runtime.last_auto_decision_dict()["auto_request_bytes"], 32 * 1024 * 1024)
+        self.assertEqual(runtime.last_auto_decision_dict()["auto_request_chunks"], 56)
+
     def test_from_tuning_json_reads_best_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "tune.json"

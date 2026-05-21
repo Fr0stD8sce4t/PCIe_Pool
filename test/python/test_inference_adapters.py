@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+from types import SimpleNamespace
 import unittest
 
 from turbobus.inference import InferenceKVSlotAdapter, make_contiguous_kv_slots
@@ -56,6 +58,13 @@ class FakeRuntime:
     def __init__(self) -> None:
         self.calls = []
         self.events = []
+        self.options = SimpleNamespace(chunk_bytes=32)
+        self.batch_calls = []
+
+    @contextmanager
+    def batch_transfer_mode(self, bytes, direction, range_count=None):
+        self.batch_calls.append((bytes, direction, range_count))
+        yield SimpleNamespace(resolved_mode="direct")
 
     def fetch_ranges_to_gpu(self, cpu_tensor, gpu_tensor, ranges):
         handle = FakeHandle(self.events)
@@ -219,6 +228,9 @@ class VllmKVSlotAdapterTest(unittest.TestCase):
         adapter.restore_prefix(refs)
 
         self.assertEqual(len(runtime.calls), 6)
+        self.assertEqual(runtime.batch_calls[0], (64, "h2d", 2))
+        self.assertEqual(runtime.batch_calls[1], (64, "d2h", 2))
+        self.assertEqual(runtime.batch_calls[2], (64, "h2d", 2))
         self.assertEqual(runtime.calls[0][0], "prefetch_ranges")
         self.assertEqual(runtime.calls[0][3], [{"src_offset": 0, "dst_offset": 32, "bytes": 32}])
         self.assertEqual(runtime.calls[1][3], [{"src_offset": 0, "dst_offset": 32, "bytes": 32}])

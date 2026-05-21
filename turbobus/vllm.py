@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
+import math
 from typing import Iterable, Mapping
 
 from .offload_store import TransferStats
@@ -94,27 +96,33 @@ class VllmKVSlotAdapter:
         return names
 
     def restore_prefix(self, refs: Iterable[VllmKVBlockRef]) -> list:
+        refs = list(refs)
         names_by_group = self._register_and_group(refs)
         handles = []
         submitted = []
-        for group_id, names in names_by_group.items():
-            names, group_handles = self.adapters[group_id].submit_restore_prefix(names)
-            submitted.append((group_id, names))
-            handles.extend(group_handles)
-        for group_id, names in submitted:
-            self.adapters[group_id].wait_prefix(names)
+        batch_bytes, batch_chunks = self._batch_size(refs)
+        with self._batch_transfer_mode(batch_bytes, "h2d", batch_chunks):
+            for group_id, names in names_by_group.items():
+                names, group_handles = self.adapters[group_id].submit_restore_prefix(names)
+                submitted.append((group_id, names))
+                handles.extend(group_handles)
+            for group_id, names in submitted:
+                self.adapters[group_id].wait_prefix(names)
         return handles
 
     def save_prefix(self, refs: Iterable[VllmKVBlockRef]) -> list:
+        refs = list(refs)
         names_by_group = self._register_and_group(refs)
         handles = []
         submitted = []
-        for group_id, names in names_by_group.items():
-            names, group_handles = self.adapters[group_id].submit_save_prefix(names)
-            submitted.append((group_id, names))
-            handles.extend(group_handles)
-        for group_id, names in submitted:
-            self.adapters[group_id].wait_prefix(names)
+        batch_bytes, batch_chunks = self._batch_size(refs)
+        with self._batch_transfer_mode(batch_bytes, "d2h", batch_chunks):
+            for group_id, names in names_by_group.items():
+                names, group_handles = self.adapters[group_id].submit_save_prefix(names)
+                submitted.append((group_id, names))
+                handles.extend(group_handles)
+            for group_id, names in submitted:
+                self.adapters[group_id].wait_prefix(names)
         return handles
 
     def transfer_stats(self, refs: Iterable[VllmKVBlockRef]) -> TransferStats:
@@ -139,6 +147,29 @@ class VllmKVSlotAdapter:
         for ref in refs:
             names_by_group.setdefault(ref.group_id, []).append(vllm_block_name(ref))
         return names_by_group
+
+    def _batch_size(self, refs: Iterable[VllmKVBlockRef]) -> tuple[int, int]:
+        total_bytes = 0
+        total_chunks = 0
+        options = getattr(self.runtime, "options", None)
+        chunk_bytes = max(1, int(getattr(options, "chunk_bytes", 16 * 1024 * 1024)))
+        for ref in refs:
+            group = self.groups[ref.group_id]
+            byte_count = ref.byte_count if ref.byte_count is not None else group.block_bytes
+            total_bytes += int(byte_count)
+            total_chunks += max(1, math.ceil(int(byte_count) / chunk_bytes))
+        return total_bytes, total_chunks
+
+    def _batch_transfer_mode(self, bytes_: int, direction: str, chunks: int):
+        batch_transfer_mode = getattr(self.runtime, "batch_transfer_mode", None)
+        if batch_transfer_mode is not None:
+            return batch_transfer_mode(bytes_, direction, chunks)
+        return _null_context()
+
+
+@contextmanager
+def _null_context():
+    yield None
 
 
 def vllm_block_name(ref: VllmKVBlockRef) -> str:
