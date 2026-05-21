@@ -237,6 +237,22 @@ class VllmKVSlotAdapterTest(unittest.TestCase):
         self.assertEqual(runtime.calls[2][0], "evict_ranges")
         self.assertEqual(runtime.calls[4][0], "prefetch_ranges")
 
+    def test_restore_batch_mode_uses_total_bytes_across_layers(self) -> None:
+        runtime = FakeRuntime()
+        runtime.options.chunk_bytes = 128
+        groups = [
+            VllmKVGroup(index, FakeTensor(1024), object(), block_bytes=128)
+            for index in range(4)
+        ]
+        adapter = VllmKVSlotAdapter(runtime, groups)
+        refs = make_vllm_layer_block_refs_from_ids("req0", [1, 2], layer_count=4)
+
+        adapter.restore_prefix(refs)
+
+        self.assertEqual(runtime.batch_calls, [(1024, "h2d", 8)])
+        self.assertEqual(len(runtime.calls), 4)
+        self.assertTrue(all(call[0] == "prefetch_ranges" for call in runtime.calls))
+
     def test_restore_submits_all_layers_before_waiting(self) -> None:
         runtime = FakeRuntime()
         group0 = VllmKVGroup(0, FakeTensor(128), object(), block_bytes=32)

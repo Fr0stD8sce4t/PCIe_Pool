@@ -247,6 +247,52 @@ class RuntimeOptionsTest(unittest.TestCase):
         self.assertEqual(runtime.last_auto_decision_dict()["auto_resolved_mode"], "pool")
         self.assertEqual(runtime.last_auto_decision_dict()["auto_eligible_relays"], "1")
 
+    def test_auto_transfer_mode_stays_direct_when_relays_remain_missing(self) -> None:
+        class EmptyRelayProfile:
+            direct_h2d_bw_gbps = 7.5
+            relays = []
+
+        class FakeRuntime:
+            def __init__(self) -> None:
+                self.mode = None
+                self.profile_calls = 0
+                self.profile_force = None
+
+            def profile(self, bytes: int, force: bool = False):
+                self.profile_calls += 1
+                self.profile_force = force
+                return EmptyRelayProfile()
+
+            def cached_profile(self):
+                return EmptyRelayProfile()
+
+            def planner_profile(self):
+                return EmptyRelayProfile()
+
+            def set_transfer_mode(self, mode):
+                self.mode = mode
+
+        runtime = object.__new__(runtime_module.Runtime)
+        runtime.target_gpu = 0
+        runtime.relay_gpus = [1]
+        runtime.options = RuntimeOptions(
+            transfer_mode="auto",
+            chunk_bytes=4 * 1024 * 1024,
+        )
+        runtime._runtime = FakeRuntime()
+        runtime._last_resolved_transfer_mode = TransferMode.AUTO
+        runtime._last_auto_decision = None
+        runtime._forced_transfer_mode = None
+
+        decision = runtime.resolve_transfer_mode(32 * 1024 * 1024, direction="h2d")
+
+        self.assertEqual(runtime._runtime.profile_calls, 1)
+        self.assertTrue(runtime._runtime.profile_force)
+        self.assertEqual(decision.resolved_mode, TransferMode.DIRECT)
+        self.assertEqual(decision.reason, "h2d has no eligible relay paths")
+        self.assertEqual(runtime.last_transfer_mode(), TransferMode.DIRECT)
+        self.assertEqual(runtime.last_auto_decision_dict()["auto_resolved_mode"], "direct")
+
     def test_batch_transfer_mode_keeps_outer_auto_decision(self) -> None:
         class Relay:
             relay_device = 1
