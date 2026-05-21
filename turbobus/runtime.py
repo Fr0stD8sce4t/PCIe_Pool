@@ -380,7 +380,10 @@ class Runtime:
             if self.options.enable_dynamic_weights
             else self.cached_profile()
         )
-        if plan_profile.direct_h2d_bw_gbps <= 0.0 and not plan_profile.relays:
+        if (
+            plan_profile.direct_h2d_bw_gbps <= 0.0
+            or (self.relay_gpus and not plan_profile.relays)
+        ):
             self.profile(self.options.profile_bytes, force=False)
         selector = AutoTransferSelector(
             min_chunks_for_relay=self.options.min_chunks_for_relay,

@@ -194,6 +194,54 @@ class RuntimeOptionsTest(unittest.TestCase):
         self.assertEqual(decision.resolved_mode, TransferMode.DIRECT)
         self.assertEqual(runtime.last_transfer_mode(), TransferMode.DIRECT)
 
+    def test_auto_transfer_mode_profiles_when_cached_relays_are_missing(self) -> None:
+        class Relay:
+            relay_device = 1
+            effective_bw_gbps = 7.6
+            p2p_enabled = True
+
+        class EmptyRelayProfile:
+            direct_h2d_bw_gbps = 7.5
+            relays = []
+
+        class RelayProfile:
+            direct_h2d_bw_gbps = 7.5
+            relays = [Relay()]
+
+        class FakeRuntime:
+            def __init__(self) -> None:
+                self.mode = None
+                self.profile_calls = 0
+
+            def profile(self, bytes: int, force: bool = False):
+                self.profile_calls += 1
+                return RelayProfile()
+
+            def cached_profile(self):
+                return RelayProfile() if self.profile_calls else EmptyRelayProfile()
+
+            def planner_profile(self):
+                return self.cached_profile()
+
+            def set_transfer_mode(self, mode):
+                self.mode = mode
+
+        runtime = object.__new__(runtime_module.Runtime)
+        runtime.target_gpu = 0
+        runtime.relay_gpus = [1]
+        runtime.options = RuntimeOptions(
+            transfer_mode="auto",
+            chunk_bytes=4 * 1024 * 1024,
+        )
+        runtime._runtime = FakeRuntime()
+        runtime._last_resolved_transfer_mode = TransferMode.AUTO
+
+        decision = runtime.resolve_transfer_mode(32 * 1024 * 1024, direction="h2d")
+
+        self.assertEqual(runtime._runtime.profile_calls, 1)
+        self.assertEqual(decision.resolved_mode, TransferMode.POOL)
+        self.assertEqual(runtime.last_transfer_mode(), TransferMode.POOL)
+
     def test_from_tuning_json_reads_best_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "tune.json"
