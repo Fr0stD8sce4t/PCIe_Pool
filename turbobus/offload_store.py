@@ -65,6 +65,12 @@ class OffloadBlock:
             return None
         return self.last_handle.stats
 
+    @property
+    def last_transfer_stats(self) -> TransferStats | None:
+        if self.last_handle is None:
+            return None
+        return summarize_transfer_handles([self.last_handle])
+
 
 def summarize_transfer_handles(handles: Iterable) -> TransferStats:
     unique = []
@@ -212,6 +218,9 @@ class OffloadStore:
 
     def stats(self, name: str):
         return self.block(name).last_stats
+
+    def transfer_stats(self, name: str) -> TransferStats | None:
+        return self.block(name).last_transfer_stats
 
     def _mark_waited(self, block: OffloadBlock) -> None:
         if block.last_operation == "prefetch":

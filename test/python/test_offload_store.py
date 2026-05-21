@@ -134,6 +134,7 @@ class OffloadStoreTest(unittest.TestCase):
         self.assertEqual(store.block("kv0").last_operation, "prefetch")
         self.assertEqual(store.block("kv0").state, BlockState.PREFETCHING)
         self.assertEqual(store.stats("kv0"), {"label": "prefetch"})
+        self.assertEqual(store.transfer_stats("kv0"), TransferStats())
 
         store.wait("kv0")
         self.assertEqual(prefetch.wait_calls, 1)
@@ -144,6 +145,7 @@ class OffloadStoreTest(unittest.TestCase):
         self.assertEqual(store.block("kv0").last_operation, "evict")
         self.assertEqual(store.block("kv0").state, BlockState.EVICTING)
         self.assertEqual(store.stats("kv0"), {"label": "evict"})
+        self.assertEqual(store.transfer_stats("kv0"), TransferStats())
 
         store.wait("kv0")
         self.assertEqual(evict.wait_calls, 1)
