@@ -32,6 +32,38 @@ class TransferStats:
         }
 
 
+@dataclass(frozen=True)
+class OffloadBlockInfo:
+    name: str
+    block_id: object
+    cpu_slot: object | None
+    gpu_slot: object | None
+    cpu_offset: int
+    gpu_offset: int
+    bytes: int
+    state: BlockState
+    last_operation: str | None
+    transfer_stats: TransferStats | None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "block_id": self.block_id,
+            "cpu_slot": self.cpu_slot,
+            "gpu_slot": self.gpu_slot,
+            "cpu_offset": self.cpu_offset,
+            "gpu_offset": self.gpu_offset,
+            "bytes": self.bytes,
+            "state": self.state.value,
+            "last_operation": self.last_operation,
+            "transfer_stats": (
+                self.transfer_stats.as_dict()
+                if self.transfer_stats is not None
+                else None
+            ),
+        }
+
+
 @dataclass
 class OffloadBlock:
     name: str
@@ -70,6 +102,20 @@ class OffloadBlock:
         if self.last_handle is None:
             return None
         return summarize_transfer_handles([self.last_handle])
+
+    def info(self) -> OffloadBlockInfo:
+        return OffloadBlockInfo(
+            name=self.name,
+            block_id=self.block_id,
+            cpu_slot=self.cpu_slot,
+            gpu_slot=self.gpu_slot,
+            cpu_offset=self.cpu_offset,
+            gpu_offset=self.gpu_offset,
+            bytes=self.bytes,
+            state=self.state,
+            last_operation=self.last_operation,
+            transfer_stats=self.last_transfer_stats,
+        )
 
 
 def summarize_transfer_handles(handles: Iterable) -> TransferStats:
@@ -150,6 +196,14 @@ class OffloadStore:
 
     def blocks(self) -> Iterable[OffloadBlock]:
         return self._blocks.values()
+
+    def block_info(self, name: str) -> OffloadBlockInfo:
+        return self.block(name).info()
+
+    def block_infos(self, names: Iterable[str] | None = None) -> list[OffloadBlockInfo]:
+        if names is None:
+            return [block.info() for block in self._blocks.values()]
+        return [self.block(name).info() for name in names]
 
     def prefetch(self, name: str):
         block = self.block(name)

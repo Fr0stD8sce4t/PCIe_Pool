@@ -9,6 +9,7 @@ from turbobus import (
     KVBlockStore,
     OffloadManager,
     OffloadStore,
+    OffloadBlockInfo,
     TransferStats,
     summarize_transfer_handles,
 )
@@ -112,6 +113,67 @@ class OffloadStoreTest(unittest.TestCase):
         self.assertEqual(block.cpu_offset, 16)
         self.assertEqual(block.gpu_offset, 32)
         self.assertEqual(block.bytes, 8)
+
+    def test_block_info_returns_connector_snapshot(self) -> None:
+        store = OffloadStore(FakeRuntime())
+        store.add(
+            "kv0",
+            FakeTensor(128),
+            object(),
+            block_id=("req0", 1),
+            cpu_slot=3,
+            gpu_slot=7,
+            cpu_offset=16,
+            gpu_offset=32,
+            byte_count=8,
+        )
+
+        info = store.block_info("kv0")
+
+        self.assertEqual(
+            info,
+            OffloadBlockInfo(
+                name="kv0",
+                block_id=("req0", 1),
+                cpu_slot=3,
+                gpu_slot=7,
+                cpu_offset=16,
+                gpu_offset=32,
+                bytes=8,
+                state=BlockState.CPU,
+                last_operation=None,
+                transfer_stats=None,
+            ),
+        )
+        self.assertEqual(
+            info.as_dict(),
+            {
+                "name": "kv0",
+                "block_id": ("req0", 1),
+                "cpu_slot": 3,
+                "gpu_slot": 7,
+                "cpu_offset": 16,
+                "gpu_offset": 32,
+                "bytes": 8,
+                "state": "cpu",
+                "last_operation": None,
+                "transfer_stats": None,
+            },
+        )
+
+    def test_block_infos_accepts_optional_name_filter(self) -> None:
+        store = OffloadStore(FakeRuntime())
+        store.add("kv0", FakeTensor(1), object())
+        store.add("kv1", FakeTensor(1), object())
+
+        self.assertEqual(
+            [info.name for info in store.block_infos(["kv1"])],
+            ["kv1"],
+        )
+        self.assertEqual(
+            [info.name for info in store.block_infos()],
+            ["kv0", "kv1"],
+        )
 
     def test_add_rejects_invalid_packed_offsets(self) -> None:
         store = OffloadStore(FakeRuntime())
