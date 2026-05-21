@@ -212,9 +212,11 @@ class RuntimeOptionsTest(unittest.TestCase):
             def __init__(self) -> None:
                 self.mode = None
                 self.profile_calls = 0
+                self.profile_force = None
 
             def profile(self, bytes: int, force: bool = False):
                 self.profile_calls += 1
+                self.profile_force = force
                 return RelayProfile()
 
             def cached_profile(self):
@@ -239,6 +241,7 @@ class RuntimeOptionsTest(unittest.TestCase):
         decision = runtime.resolve_transfer_mode(32 * 1024 * 1024, direction="h2d")
 
         self.assertEqual(runtime._runtime.profile_calls, 1)
+        self.assertTrue(runtime._runtime.profile_force)
         self.assertEqual(decision.resolved_mode, TransferMode.POOL)
         self.assertEqual(runtime.last_transfer_mode(), TransferMode.POOL)
 
