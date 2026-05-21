@@ -80,10 +80,12 @@ class TurboBusPrefixStore:
     def __init__(self) -> None:
         self._prefixes: dict[str, TurboBusSavedPrefix] = {}
 
-    def put(self, prefix: TurboBusSavedPrefix) -> None:
+    def put(self, prefix: TurboBusSavedPrefix) -> TurboBusSavedPrefix | None:
         if not prefix.key:
             raise ValueError("prefix key must not be empty")
+        previous = self._prefixes.get(str(prefix.key))
         self._prefixes[str(prefix.key)] = prefix
+        return previous
 
     def get(self, key: str) -> TurboBusSavedPrefix | None:
         return self._prefixes.get(str(key))
@@ -106,6 +108,9 @@ class TurboBusCPUBackingPool:
     def release(self, block_count: int, kv_caches: list[Any], cpu_backings: list[Any]) -> None:
         signature = _backing_signature(block_count, kv_caches)
         self._free_by_shape.setdefault(signature, []).append(list(cpu_backings))
+
+    def release_prefix(self, prefix: TurboBusSavedPrefix, kv_caches: list[Any]) -> None:
+        self.release(prefix.block_count, kv_caches, prefix.cpu_backings)
 
     @staticmethod
     def _allocate(block_count: int, kv_caches: list[Any]) -> list[Any]:
@@ -183,8 +188,6 @@ def register_saved_prefix(
     direct_chunks: int = 0,
     relay_chunks: int = 0,
 ) -> None:
-    if not key:
-        raise ValueError("prefix key must not be empty")
     prefix = TurboBusSavedPrefix(
         key=str(key),
         cpu_backings=list(cpu_backings),
@@ -206,7 +209,7 @@ def register_saved_prefix(
         direct_chunks=int(direct_chunks),
         relay_chunks=int(relay_chunks),
     )
-    _PREFIX_STORE.put(prefix)
+    _store_saved_prefix(prefix)
     _emit_event(
         "register_saved_prefix",
         prefix_key=str(key),
@@ -223,6 +226,10 @@ def clear_saved_prefixes() -> None:
 
 def get_saved_prefix(key: str) -> TurboBusSavedPrefix | None:
     return _PREFIX_STORE.get(str(key))
+
+
+def _store_saved_prefix(prefix: TurboBusSavedPrefix) -> TurboBusSavedPrefix | None:
+    return _PREFIX_STORE.put(prefix)
 
 
 class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
@@ -715,22 +722,37 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         transfer_ms = (time.perf_counter() - transfer_start) * 1000.0
         stats = _summarize_handles(handles)
         register_start = time.perf_counter()
-        register_saved_prefix(
-            request.prefix_key,
-            cpu_backings,
+        previous = _store_saved_prefix(
+            TurboBusSavedPrefix(
+                key=request.prefix_key,
+                cpu_backings=cpu_backings,
+                block_count=request.block_count,
+                matched_tokens=request.matched_tokens,
+                source_request_id=request.request_id,
+                elapsed_ms=transfer_ms,
+                runtime_init_ms=runtime_init_ms,
+                prepare_ms=prepare_ms,
+                cpu_alloc_ms=cpu_alloc_ms,
+                reused_backing=reused_backing,
+                group_ms=group_ms,
+                adapter_ms=adapter_ms,
+                refs_ms=refs_ms,
+                transfer_ms=transfer_ms,
+                bytes=stats["bytes"],
+                direct_chunks=stats["direct_chunks"],
+                relay_chunks=stats["relay_chunks"],
+            )
+        )
+        if previous is not None:
+            self._backing_pool.release_prefix(previous, kv_caches)
+            self._adapters_by_prefix.pop(previous.key, None)
+        _emit_event(
+            "register_saved_prefix",
+            prefix_key=request.prefix_key,
             block_count=request.block_count,
             matched_tokens=request.matched_tokens,
             source_request_id=request.request_id,
-            elapsed_ms=transfer_ms,
-            runtime_init_ms=runtime_init_ms,
-            prepare_ms=prepare_ms,
-            cpu_alloc_ms=cpu_alloc_ms,
-            reused_backing=reused_backing,
-            group_ms=group_ms,
-            adapter_ms=adapter_ms,
-            refs_ms=refs_ms,
-            transfer_ms=transfer_ms,
-            **stats,
+            layers=len(cpu_backings),
         )
         self._adapters_by_prefix[request.prefix_key] = adapter
         self.state.saved_request_ids.add(request.request_id)

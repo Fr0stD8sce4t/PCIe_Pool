@@ -9,6 +9,7 @@ from turbobus.vllm_kv_connector import (
     TurboBusConnector,
     TurboBusConnectorMetadata,
     TurboBusPrefixStore,
+    TurboBusRequestMetadata,
     TurboBusSavedPrefix,
     clear_saved_prefixes,
     get_saved_prefix,
@@ -78,9 +79,11 @@ class TurboBusConnectorTest(unittest.TestCase):
 
     def test_prefix_store_replaces_saved_prefix_by_key(self) -> None:
         store = TurboBusPrefixStore()
-        store.put(TurboBusSavedPrefix("key", [object()], block_count=1, matched_tokens=16))
-        store.put(TurboBusSavedPrefix("key", [object()], block_count=2, matched_tokens=32))
+        first = TurboBusSavedPrefix("key", [object()], block_count=1, matched_tokens=16)
+        self.assertIsNone(store.put(first))
+        previous = store.put(TurboBusSavedPrefix("key", [object()], block_count=2, matched_tokens=32))
 
+        self.assertIs(previous, first)
         self.assertEqual(store.get("key").block_count, 2)
 
     def test_cpu_backing_pool_reuses_released_backings(self) -> None:
@@ -324,6 +327,42 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertEqual(connector.get_finished(set()), (None, None))
         self.assertEqual(connector.get_finished({"req0"}), ({"req0"}, None))
         self.assertEqual(connector.get_finished(set()), (None, None))
+
+    def test_replacing_saved_prefix_releases_previous_backing(self) -> None:
+        connector = self.make_connector()
+        connector.state.kv_caches = {
+            "0": mock.Mock(),
+            "1": mock.Mock(),
+        }
+        first = TurboBusRequestMetadata("req0", "saved", (1, 2), 32, 2)
+        second = TurboBusRequestMetadata("req1", "saved", (3, 4), 32, 2)
+        metadata = TurboBusConnectorMetadata()
+        metadata.add_save_request(first)
+        metadata.add_save_request(second)
+        connector._connector_metadata = metadata
+
+        with (
+            mock.patch("turbobus.vllm_kv_connector._make_runtime_from_config", return_value=object()),
+            mock.patch.object(
+                connector._backing_pool,
+                "acquire",
+                side_effect=[
+                    ([object(), object()], False),
+                    ([object(), object()], True),
+                ],
+            ) as acquire,
+            mock.patch.object(connector._backing_pool, "release_prefix") as release,
+            mock.patch("turbobus.vllm_kv_connector.make_vllm_layer_range_refs_from_ids", return_value=[object()]),
+            mock.patch("turbobus.vllm.make_vllm_layer_groups_from_kv_caches", return_value=[object()]),
+            mock.patch("turbobus.vllm.VllmKVSlotAdapter", return_value=FakeAdapter()),
+        ):
+            connector.wait_for_save()
+
+        self.assertEqual(acquire.call_count, 2)
+        release.assert_called_once()
+        saved = get_saved_prefix("saved")
+        self.assertEqual(saved.source_request_id, "req1")
+        self.assertTrue(saved.reused_backing)
 
     def test_restore_event_reports_timing_and_shape(self) -> None:
         connector = self.make_connector({"turbobus.restore_enabled": True})
