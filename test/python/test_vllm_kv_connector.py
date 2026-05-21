@@ -61,6 +61,16 @@ class FakeHandle:
     stats = FakeStats()
 
 
+class FakeTensor:
+    shape = (1, 8, 4)
+
+    def stride(self, dim):
+        return (32, 4, 1)[dim]
+
+    def element_size(self):
+        return 2
+
+
 class FakeAdapter:
     def restore_prefix(self, refs):
         return [FakeHandle()]
@@ -370,6 +380,62 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertEqual(connector.get_finished(set()), (None, None))
         self.assertEqual(connector.get_finished({"req0"}), ({"req0"}, None))
         self.assertEqual(connector.get_finished(set()), (None, None))
+
+    def test_save_kv_layer_copies_layers_before_wait_for_save_registers_prefix(self) -> None:
+        connector = self.make_connector()
+        layer0 = FakeTensor()
+        layer1 = FakeTensor()
+        connector.state.kv_caches = {
+            "layer0": layer0,
+            "layer1": layer1,
+        }
+        request = TurboBusRequestMetadata("req0", "saved", (1, 2), 32, 2)
+        metadata = TurboBusConnectorMetadata()
+        metadata.add_save_request(request)
+        connector._connector_metadata = metadata
+
+        adapters = [FakeAdapter(), FakeAdapter()]
+        with (
+            mock.patch("turbobus.vllm_kv_connector._make_runtime_from_config", return_value=object()),
+            mock.patch.object(connector._backing_pool, "acquire", return_value=([object(), object()], False)),
+            mock.patch("turbobus.vllm.VllmKVSlotAdapter", side_effect=adapters),
+        ):
+            connector.save_kv_layer("layer0", layer0, attn_metadata=object())
+            connector.save_kv_layer("layer1", layer1, attn_metadata=object())
+            connector.wait_for_save()
+
+        saved = get_saved_prefix("saved")
+        self.assertIsNotNone(saved)
+        self.assertEqual(saved.source_request_id, "req0")
+        self.assertEqual(saved.bytes, 128)
+        self.assertEqual(saved.direct_chunks, 2)
+        self.assertEqual(saved.relay_chunks, 0)
+        self.assertEqual(connector.state.events[-1]["event"], "save")
+        self.assertEqual(connector.state.events[-1]["layers"], 2)
+        self.assertEqual(connector.state.events[-1]["ranges"], 2)
+        self.assertEqual(connector.get_finished({"req0"}), ({"req0"}, None))
+
+    def test_wait_for_save_rejects_incomplete_layer_save(self) -> None:
+        connector = self.make_connector()
+        layer0 = FakeTensor()
+        layer1 = FakeTensor()
+        connector.state.kv_caches = {
+            "layer0": layer0,
+            "layer1": layer1,
+        }
+        request = TurboBusRequestMetadata("req0", "saved", (1,), 16, 1)
+        metadata = TurboBusConnectorMetadata()
+        metadata.add_save_request(request)
+        connector._connector_metadata = metadata
+
+        with (
+            mock.patch("turbobus.vllm_kv_connector._make_runtime_from_config", return_value=object()),
+            mock.patch.object(connector._backing_pool, "acquire", return_value=([object(), object()], False)),
+            mock.patch("turbobus.vllm.VllmKVSlotAdapter", return_value=FakeAdapter()),
+        ):
+            connector.save_kv_layer("layer0", layer0, attn_metadata=object())
+            with self.assertRaises(RuntimeError):
+                connector.wait_for_save()
 
     def test_saved_prefix_is_registered_under_connector_session(self) -> None:
         connector = self.make_connector({"turbobus.session_id": "session-a"})

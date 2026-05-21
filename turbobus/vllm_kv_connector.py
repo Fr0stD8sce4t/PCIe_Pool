@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import os
 import time
 from typing import Any
@@ -76,6 +76,26 @@ class _ScheduledRequestView:
     req_id: str
     new_block_ids: Any
     kv_transfer_params: dict[str, Any]
+
+
+@dataclass
+class _LayerSaveContext:
+    request: TurboBusRequestMetadata
+    cpu_backings: list[Any]
+    kv_caches: list[Any]
+    reused_backing: bool
+    total_start: float
+    runtime_init_ms: float = 0.0
+    cpu_alloc_ms: float = 0.0
+    group_ms: float = 0.0
+    adapter_ms: float = 0.0
+    refs_ms: float = 0.0
+    transfer_ms: float = 0.0
+    bytes: int = 0
+    direct_chunks: int = 0
+    relay_chunks: int = 0
+    ranges: int = 0
+    saved_layers: set[int] = field(default_factory=set)
 
 
 class TurboBusPrefixStore:
@@ -316,6 +336,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         )
         self.runtime = None
         self._adapters_by_prefix: dict[str, Any] = {}
+        self._layer_save_contexts: dict[str, _LayerSaveContext] = {}
         self._backing_pool = TurboBusCPUBackingPool()
         self._prefix_store = TurboBusPrefixStore(max_prefixes=self.max_saved_prefixes)
         _emit_event(
@@ -516,6 +537,22 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         return None
 
     def save_kv_layer(self, layer_name: str, kv_layer, attn_metadata, **kwargs) -> None:
+        metadata = self._get_connector_metadata()
+        if not isinstance(metadata, TurboBusConnectorMetadata) or not metadata.save_requests:
+            return None
+        if not self.state.kv_caches:
+            raise RuntimeError("vLLM did not register KV caches for TurboBus")
+
+        kv_items = list(self.state.kv_caches.items())
+        layer_index = _layer_index(layer_name, kv_layer, kv_items)
+        kv_caches = [item[1] for item in kv_items]
+        for request in metadata.save_requests:
+            context = self._layer_save_contexts.get(request.request_id)
+            if context is None:
+                context = self._start_layer_save_context(request, kv_caches)
+            if layer_index in context.saved_layers:
+                continue
+            self._save_request_layer(context, layer_name, layer_index, kv_layer)
         return None
 
     def wait_for_save(self) -> None:
@@ -523,7 +560,16 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         if not isinstance(metadata, TurboBusConnectorMetadata) or not metadata.save_requests:
             return None
         for request in metadata.save_requests:
-            self._save_request(request)
+            context = self._layer_save_contexts.pop(request.request_id, None)
+            if context is None or not context.saved_layers:
+                self._save_request(request)
+                continue
+            if len(context.saved_layers) != len(context.kv_caches):
+                raise RuntimeError(
+                    f"saved {len(context.saved_layers)} of {len(context.kv_caches)} "
+                    f"KV layers for request {request.request_id}"
+                )
+            self._finish_layer_save_context(context)
         return None
 
     def get_finished(self, finished_req_ids: set[str]):
@@ -739,6 +785,204 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             **stats,
         )
 
+    def _start_layer_save_context(
+        self,
+        request: TurboBusRequestMetadata,
+        kv_caches: list[Any],
+    ) -> _LayerSaveContext:
+        total_start = time.perf_counter()
+        runtime_start = time.perf_counter()
+        if self.runtime is None:
+            self.runtime = _make_runtime_from_config(self._vllm_config)
+        runtime_init_ms = (time.perf_counter() - runtime_start) * 1000.0
+        alloc_start = time.perf_counter()
+        cpu_backings, reused_backing = self._backing_pool.acquire(
+            request.block_count,
+            kv_caches,
+        )
+        cpu_alloc_ms = (time.perf_counter() - alloc_start) * 1000.0
+        context = _LayerSaveContext(
+            request=request,
+            cpu_backings=cpu_backings,
+            kv_caches=list(kv_caches),
+            reused_backing=reused_backing,
+            total_start=total_start,
+            runtime_init_ms=runtime_init_ms,
+            cpu_alloc_ms=cpu_alloc_ms,
+        )
+        self._layer_save_contexts[request.request_id] = context
+        return context
+
+    def _save_request_layer(
+        self,
+        context: _LayerSaveContext,
+        layer_name: str,
+        layer_index: int,
+        kv_layer,
+    ) -> None:
+        from .vllm import VllmKVGroup
+        from .vllm import VllmKVSlotAdapter
+
+        request = context.request
+        group_start = time.perf_counter()
+        from .vllm import block_bytes_from_vllm_kv_tensor
+
+        group = VllmKVGroup(
+            group_id=layer_index,
+            layer_id=layer_index,
+            cpu_backing=context.cpu_backings[layer_index],
+            gpu_kv_backing=kv_layer,
+            block_bytes=block_bytes_from_vllm_kv_tensor(kv_layer),
+        )
+        context.group_ms += (time.perf_counter() - group_start) * 1000.0
+        adapter_start = time.perf_counter()
+        adapter = VllmKVSlotAdapter(self.runtime, [group])
+        context.adapter_ms += (time.perf_counter() - adapter_start) * 1000.0
+        refs_start = time.perf_counter()
+        refs = make_vllm_layer_range_refs_from_ids(
+            request.request_id,
+            request.block_ids,
+            [kv_layer],
+            cpu_slot_start=request.cpu_slot_start,
+        )
+        refs = [replace(ref, group_id=layer_index) for ref in refs]
+        context.refs_ms += (time.perf_counter() - refs_start) * 1000.0
+        transfer_start = time.perf_counter()
+        handles = adapter.save_prefix(refs)
+        transfer_ms = (time.perf_counter() - transfer_start) * 1000.0
+        stats = _adapter_transfer_stats(adapter, refs, handles)
+        context.transfer_ms += transfer_ms
+        context.bytes += stats.bytes
+        context.direct_chunks += stats.direct_chunks
+        context.relay_chunks += stats.relay_chunks
+        context.ranges += len(refs)
+        context.saved_layers.add(layer_index)
+        self.state.events.append(
+            {
+                "event": "save_layer",
+                "request_id": request.request_id,
+                "prefix_key": request.prefix_key,
+                "session_id": self.session_id,
+                "layer_name": str(layer_name),
+                "layer_index": layer_index,
+                "ranges": len(refs),
+                "elapsed_ms": transfer_ms,
+                **stats.as_dict(),
+            }
+        )
+        _emit_event(
+            "save_layer",
+            request_id=request.request_id,
+            prefix_key=request.prefix_key,
+            session_id=self.session_id,
+            layer_name=str(layer_name),
+            layer_index=layer_index,
+            ranges=len(refs),
+            elapsed_ms=f"{transfer_ms:.3f}",
+            **stats.as_dict(),
+        )
+
+    def _finish_layer_save_context(self, context: _LayerSaveContext) -> None:
+        request = context.request
+        register_start = time.perf_counter()
+        prefix = TurboBusSavedPrefix(
+            key=request.prefix_key,
+            cpu_backings=context.cpu_backings,
+            block_count=request.block_count,
+            matched_tokens=request.matched_tokens,
+            session_id=self.session_id,
+            source_request_id=request.request_id,
+            elapsed_ms=context.transfer_ms,
+            runtime_init_ms=context.runtime_init_ms,
+            prepare_ms=(
+                context.cpu_alloc_ms
+                + context.group_ms
+                + context.adapter_ms
+                + context.refs_ms
+            ),
+            cpu_alloc_ms=context.cpu_alloc_ms,
+            reused_backing=context.reused_backing,
+            group_ms=context.group_ms,
+            adapter_ms=context.adapter_ms,
+            refs_ms=context.refs_ms,
+            transfer_ms=context.transfer_ms,
+            bytes=context.bytes,
+            direct_chunks=context.direct_chunks,
+            relay_chunks=context.relay_chunks,
+        )
+        evicted = self._store_prefix(prefix)
+        _store_saved_prefix(prefix)
+        for removed in evicted:
+            if removed.key != prefix.key:
+                _remove_saved_prefix(removed.key, removed.session_id)
+        _emit_event(
+            "register_saved_prefix",
+            prefix_key=request.prefix_key,
+            session_id=self.session_id,
+            block_count=request.block_count,
+            matched_tokens=request.matched_tokens,
+            source_request_id=request.request_id,
+            layers=len(context.cpu_backings),
+        )
+        self.state.saved_request_ids.add(request.request_id)
+        register_ms = (time.perf_counter() - register_start) * 1000.0
+        total_ms = (time.perf_counter() - context.total_start) * 1000.0
+        saved = get_saved_prefix(request.prefix_key, self.session_id)
+        if saved is not None:
+            saved.register_ms = register_ms
+            saved.total_ms = total_ms
+        stats = TransferStats(
+            bytes=context.bytes,
+            direct_chunks=context.direct_chunks,
+            relay_chunks=context.relay_chunks,
+        ).as_dict()
+        self.state.events.append(
+            {
+                "event": "save",
+                "request_id": request.request_id,
+                "prefix_key": request.prefix_key,
+                "session_id": self.session_id,
+                "block_count": len(request.block_ids),
+                "matched_tokens": request.matched_tokens,
+                "elapsed_ms": context.transfer_ms,
+                "runtime_init_ms": context.runtime_init_ms,
+                "prepare_ms": saved.prepare_ms if saved is not None else 0.0,
+                "cpu_alloc_ms": context.cpu_alloc_ms,
+                "reused_backing": context.reused_backing,
+                "group_ms": context.group_ms,
+                "adapter_ms": context.adapter_ms,
+                "refs_ms": context.refs_ms,
+                "transfer_ms": context.transfer_ms,
+                "register_ms": register_ms,
+                "total_ms": total_ms,
+                "layers": len(context.kv_caches),
+                "ranges": context.ranges,
+                **stats,
+            }
+        )
+        _emit_event(
+            "save",
+            request_id=request.request_id,
+            prefix_key=request.prefix_key,
+            session_id=self.session_id,
+            block_count=len(request.block_ids),
+            matched_tokens=request.matched_tokens,
+            elapsed_ms=f"{context.transfer_ms:.3f}",
+            runtime_init_ms=f"{context.runtime_init_ms:.3f}",
+            prepare_ms=f"{(saved.prepare_ms if saved is not None else 0.0):.3f}",
+            cpu_alloc_ms=f"{context.cpu_alloc_ms:.3f}",
+            reused_backing=context.reused_backing,
+            group_ms=f"{context.group_ms:.3f}",
+            adapter_ms=f"{context.adapter_ms:.3f}",
+            refs_ms=f"{context.refs_ms:.3f}",
+            transfer_ms=f"{context.transfer_ms:.3f}",
+            register_ms=f"{register_ms:.3f}",
+            total_ms=f"{total_ms:.3f}",
+            layers=len(context.kv_caches),
+            ranges=context.ranges,
+            **stats,
+        )
+
     def _save_request(self, request: TurboBusRequestMetadata) -> None:
         total_start = time.perf_counter()
         runtime_start = time.perf_counter()
@@ -920,6 +1164,14 @@ def _adapter_transfer_stats(adapter, refs, handles) -> TransferStats:
         direct_chunks=int(getattr(stats, "direct_chunks", 0) or 0),
         relay_chunks=int(getattr(stats, "relay_chunks", 0) or 0),
     )
+
+
+def _layer_index(layer_name: str, kv_layer, kv_items: list[tuple[str, Any]]) -> int:
+    layer_name = str(layer_name)
+    for index, (registered_name, registered_layer) in enumerate(kv_items):
+        if layer_name == str(registered_name) or kv_layer is registered_layer:
+            return index
+    raise KeyError(f"unknown vLLM KV layer: {layer_name}")
 
 
 def _request_prefix_key(params: dict[str, Any]) -> str:
