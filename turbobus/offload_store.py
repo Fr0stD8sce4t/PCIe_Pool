@@ -222,6 +222,13 @@ class OffloadStore:
     def transfer_stats(self, name: str) -> TransferStats | None:
         return self.block(name).last_transfer_stats
 
+    def transfer_stats_many(self, names: Iterable[str]) -> TransferStats:
+        return summarize_transfer_handles(
+            block.last_handle
+            for block in (self.block(name) for name in names)
+            if block.last_handle is not None
+        )
+
     def _mark_waited(self, block: OffloadBlock) -> None:
         if block.last_operation == "prefetch":
             block.state = BlockState.GPU

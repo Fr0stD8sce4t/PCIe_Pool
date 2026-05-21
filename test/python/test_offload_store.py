@@ -51,11 +51,17 @@ class FakeRuntime:
 
     def fetch_ranges_to_gpu(self, cpu_tensor, gpu_tensor, ranges):
         self.calls.append(("prefetch_ranges", cpu_tensor, gpu_tensor, ranges))
-        return FakeHandle("prefetch_ranges")
+        return FakeHandle(
+            "prefetch_ranges",
+            {"bytes": sum(item["bytes"] for item in ranges), "direct_chunks": len(ranges)},
+        )
 
     def offload_ranges_to_cpu(self, gpu_tensor, cpu_tensor, ranges):
         self.calls.append(("evict_ranges", gpu_tensor, cpu_tensor, ranges))
-        return FakeHandle("evict_ranges")
+        return FakeHandle(
+            "evict_ranges",
+            {"bytes": sum(item["bytes"] for item in ranges), "relay_chunks": len(ranges)},
+        )
 
 
 class OffloadStoreTest(unittest.TestCase):
@@ -196,6 +202,10 @@ class OffloadStoreTest(unittest.TestCase):
         self.assertEqual(handles[0].wait_calls, 1)
         self.assertEqual(store.block("kv0").state, BlockState.GPU)
         self.assertEqual(store.block("kv1").state, BlockState.GPU)
+        self.assertEqual(
+            store.transfer_stats_many(["kv0", "kv1"]),
+            TransferStats(bytes=16, direct_chunks=2),
+        )
 
     def test_evict_many_uses_reversed_ranges_for_packed_blocks(self) -> None:
         runtime = FakeRuntime()
@@ -222,6 +232,10 @@ class OffloadStoreTest(unittest.TestCase):
         self.assertEqual(handles[0].wait_calls, 1)
         self.assertEqual(store.block("kv0").state, BlockState.CPU)
         self.assertEqual(store.block("kv1").state, BlockState.CPU)
+        self.assertEqual(
+            store.transfer_stats_many(["kv0", "kv1"]),
+            TransferStats(bytes=16, relay_chunks=2),
+        )
 
     def test_manager_aliases_point_to_store(self) -> None:
         self.assertIs(OffloadManager, OffloadStore)
