@@ -6,19 +6,6 @@ from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
 
 ## Current
 
-### 4. Improve Multi-Relay Executor Behavior
-
-Ensure relay staging slots and streams are isolated per relay. Verify pool
-transfer can use direct plus more than one relay path. Report per-relay
-bytes/chunks in stats.
-
-Acceptance:
-
-- CUDA correctness tests pass on a multi-GPU server.
-- Path stats show all used relays.
-
-## Upcoming
-
 ### 5. Wire Daemon Transfer Reservations Into Runtime Planning
 
 Add or stabilize daemon messages for transfer reservation and release. Runtime
@@ -29,6 +16,8 @@ Acceptance:
 
 - Daemon state tests cover quota and reservation release.
 - Runtime stats expose reservation/session information.
+
+## Upcoming
 
 ### 6. Continue vLLM Connector Lifecycle Cleanup
 
@@ -60,6 +49,13 @@ Acceptance:
 - Benchmark reports iteration proxy time, transfer time, and path split.
 
 ## Completed
+
+- 2026-05-22: Improve multi-relay executor behavior.
+  - Added a CUDA correctness test for a pool transfer that uses direct plus two
+    relay paths.
+  - The test verifies per-relay bytes/chunks and path stats for all used paths.
+  - Native benchmark output now prints direct/relay chunk counts, per-relay
+    bytes/chunks, and path stats.
 
 - 2026-05-22: Add multi-relay planner coverage.
   - Extended `test/cpp/test_planner.cpp` with two relay GPUs.

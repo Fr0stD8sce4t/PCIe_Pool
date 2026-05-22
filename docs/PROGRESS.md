@@ -9,7 +9,13 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
-- Multi-relay planner coverage in progress
+- Multi-relay executor behavior
+  - Added `test_multi_relay_pool` for direct plus two relay H2D correctness.
+  - The test checks returned data, per-relay bytes/chunks, and path stats.
+  - `bench_pool_bandwidth` now prints per-relay and per-path stats so server
+    benchmark output shows which relay paths were used.
+
+- `6ba90ed Add multi-relay planner coverage`
   - Extended the C++ planner test with two relay paths.
   - H2D asserts direct/relay chunk assignment follows 20/40/10 effective
     bandwidth.
@@ -134,6 +140,21 @@ PY
 
 Result: `h2d [4, 8, 2]`, `d2h [2, 4, 6]`.
 
+For the multi-relay executor behavior:
+
+```text
+git diff --check
+```
+
+Result: passed.
+
+```text
+cmake -S test/cpp -B build-test
+```
+
+Result: not run locally because `cmake` is not installed in this Windows
+environment.
+
 Local C++/CUDA checks were not run because `cmake` is not installed in this
 environment.
 
@@ -151,6 +172,5 @@ Then run native and vLLM checks on target GPU 6 with relay GPU 5.
 
 ## Next Task
 
-Start with the task under `## Current` in `docs/NEXT_STEPS.md`: improve
-multi-relay executor behavior so relay staging slots and stats are isolated per
-relay.
+Start with the task under `## Current` in `docs/NEXT_STEPS.md`: wire daemon
+transfer reservations into Runtime planning.

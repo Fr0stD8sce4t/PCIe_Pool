@@ -18,6 +18,9 @@ target_link_libraries(test_direct_h2d PRIVATE turbobus_core)
 add_executable(test_relay_h2d_p2p test_relay_h2d_p2p.cu)
 target_link_libraries(test_relay_h2d_p2p PRIVATE turbobus_core)
 
+add_executable(test_multi_relay_pool test_multi_relay_pool.cu)
+target_link_libraries(test_multi_relay_pool PRIVATE turbobus_core)
+
 add_executable(test_profiler test_profiler.cu)
 target_link_libraries(test_profiler PRIVATE turbobus_core)
 
@@ -26,4 +29,3 @@ target_link_libraries(test_p2p_matrix PRIVATE turbobus_core)
 
 add_executable(bench_pool_bandwidth bench_pool_bandwidth.cu)
 target_link_libraries(bench_pool_bandwidth PRIVATE turbobus_core)
-

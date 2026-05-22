@@ -163,6 +163,7 @@ double RunMode(const char* mode, turbobus::CudaRelayExecutor& executor, std::uin
   const auto start = std::chrono::steady_clock::now();
   auto handle = executor.Submit(src_view, dst_view, plan);
   executor.Wait(handle);
+  const auto stats = executor.GetStats(handle);
   const auto stop = std::chrono::steady_clock::now();
   const auto microseconds =
       std::chrono::duration_cast<std::chrono::microseconds>(stop - start).count();
@@ -180,6 +181,23 @@ double RunMode(const char* mode, turbobus::CudaRelayExecutor& executor, std::uin
   const double bandwidth = Gbps(plan.total_bytes, static_cast<float>(milliseconds));
   std::cout << mode << "_milliseconds=" << milliseconds << "\n";
   std::cout << mode << "_gib_per_second=" << bandwidth << "\n";
+  std::cout << mode << "_direct_chunks=" << stats.direct_chunks << "\n";
+  std::cout << mode << "_relay_chunks=" << stats.relay_chunks << "\n";
+  for (std::size_t i = 0; i < stats.relay_devices.size(); ++i) {
+    std::cout << mode << "_relay_device=" << stats.relay_devices[i]
+              << " bytes=" << stats.relay_device_bytes[i]
+              << " chunks=" << stats.relay_device_chunks[i] << "\n";
+  }
+  for (const auto& path : stats.path_stats) {
+    std::cout << mode << "_path"
+              << " kind="
+              << (path.kind == turbobus::PathKind::DirectH2D ? "direct" : "relay")
+              << " relay=" << path.relay_device
+              << " bytes=" << path.bytes
+              << " chunks=" << path.chunks
+              << " cuda_ms=" << path.cuda_elapsed_ms
+              << " gib_per_second=" << path.gib_per_second << "\n";
+  }
   return bandwidth;
 }
 
