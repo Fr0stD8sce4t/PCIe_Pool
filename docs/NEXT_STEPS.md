@@ -6,16 +6,35 @@ from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
 
 ## Current
 
-- Run server-side paper validation and tighten measured behavior toward the
-  paper claims.
-  - The local harness now clears stale workload outputs before each non-dry
-    run and fails a workload when its fresh metrics are missing; use the
-    command in `docs/PROGRESS.md` for the next target-server run.
-  - A target-server vLLM run exposed that this vLLM build still requires
-    `request_finished_all_groups()`; TurboBus now has that compatibility hook,
-    so rerun the vLLM/paper validation command after pulling the latest commit.
+### 19. Add explicit paper speedup summaries
+
+Use the server-side paper validation outputs to add first-class speedup summary
+lines to `benchmarks/paper_validation.py`.
+
+Acceptance:
+
+- The paper validation summary reports direct/relay versus pool or auto
+  speedups for model loading, vLLM KV restore, and training offload when the
+  required modes are present.
+- Missing comparison modes produce `NA` values instead of failing the run.
+- The summary keeps the existing per-workload `paper_metric` lines.
+- Focused tests cover model-loading, vLLM, and training speedup summaries.
 
 ## Completed
+
+- 2026-05-22: Run server-side paper validation and tighten measured behavior
+  toward the paper claims.
+  - Target-server validation on GPU 6 with relay GPU 5 completed with all
+    three workloads reporting `status=ok`, `returncode=0`, and empty
+    `validation_errors`.
+  - Model-loading auto mode reported 17.107 ms median load time,
+    14.614 GiB/s, and a pool auto decision.
+  - vLLM KV auto mode reported 3.013 ms restore latency, 4.538 GiB/s, and a
+    real connector save/restore path over 28 layers.
+  - Training-offload auto mode reported 33.539 ms median iteration time,
+    32.173 ms transfer time, and 15.541 GiB/s.
+  - This confirmed the `request_finished_all_groups()` compatibility fix
+    unblocked the current server vLLM connector lifecycle.
 
 - 2026-05-22: Close remaining framework-specific integration gaps.
   - `benchmarks/paper_validation.py` now supports `--dry-run` so local checks

@@ -9,6 +9,19 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- Record successful server paper validation
+  - Target-server validation completed on GPU 6 with relay GPU 5.
+  - `paper_validation.py` reported `status=ok`, `returncode=0`, and empty
+    `validation_errors` for model-loading, vLLM KV, and training-offload.
+  - Model-loading auto mode measured 17.107 ms median load time and
+    14.614 GiB/s with direct plus relay chunks.
+  - vLLM KV auto mode measured 3.013 ms restore latency, 4.538 GiB/s, and
+    connector save/restore over 28 layers.
+  - Training-offload auto mode measured 33.539 ms median iteration time,
+    32.173 ms transfer time, and 15.541 GiB/s.
+  - Next focus: add explicit paper speedup summaries so future server runs can
+    report direct/relay comparisons without manual inspection.
+
 - Restore vLLM multi-group finish hook
   - The target server vLLM build still requires
     `request_finished_all_groups()` on `KVConnectorBase_V1` / `SupportsHMA`.
@@ -277,6 +290,15 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
   - Connector configuration was consolidated around shared keys.
 
 ## Last Verified Checks
+
+For the target-server paper validation:
+
+```text
+python benchmarks/paper_validation.py --target-gpu 6 --relay-gpus 5 --workloads all --mode auto --force-profile --verify --output-dir benchmarks/results/paper_validation --json-output benchmarks/results/paper_validation/paper_validation.json --summary-output benchmarks/results/paper_validation/paper_validation.txt
+```
+
+Result: passed on the target server. All three workloads reported
+`status=ok`, `returncode=0`, and empty `validation_errors`.
 
 For the vLLM multi-group finish hook:
 
@@ -723,5 +745,5 @@ python examples/vllm_turbobus_kv_connector_sweep.py --model Qwen/Qwen3-0.6B --ta
 
 ## Next Task
 
-Start with the task under `## Current` in `docs/NEXT_STEPS.md`: close
-remaining framework-specific integration gaps.
+Start with the task under `## Current` in `docs/NEXT_STEPS.md`: add explicit
+paper speedup summaries.
