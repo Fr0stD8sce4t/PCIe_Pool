@@ -115,7 +115,7 @@ def run(args) -> None:
         max_tokens=args.max_tokens,
         extra_args={
             "kv_transfer_params": {
-                "turbobus.do_save": args.restore_enabled,
+                "turbobus.do_save": args.save_enabled,
                 "turbobus.prefix_key": args.prefix_key,
                 "turbobus.save_blocks": args.restore_blocks,
                 "turbobus.matched_tokens": args.matched_tokens,
@@ -137,7 +137,7 @@ def run(args) -> None:
             max_tokens=args.max_tokens,
             extra_args={
                 "kv_transfer_params": {
-                    "turbobus.do_save": args.restore_enabled,
+                    "turbobus.do_save": args.save_enabled,
                     "turbobus.prefix_key": args.second_save_prefix_key,
                     "turbobus.save_blocks": args.restore_blocks,
                     "turbobus.matched_tokens": args.matched_tokens,
@@ -201,6 +201,7 @@ def run(args) -> None:
         f"requested_matched_tokens={args.matched_tokens}",
         f"matched_tokens={matched_tokens}",
         f"restore_blocks={args.restore_blocks}",
+        f"save_enabled={args.save_enabled}",
         f"restore_enabled={args.restore_enabled}",
         f"max_saved_prefixes={args.max_saved_prefixes}",
         f"chunk_bytes={args.chunk_bytes}",
@@ -306,9 +307,22 @@ def parse_args():
     parser.add_argument("--restore-blocks", type=int, default=8)
     parser.add_argument("--max-saved-prefixes", type=int, default=0)
     parser.add_argument(
+        "--save-enabled",
+        dest="save_enabled",
+        action="store_true",
+        help="Ask the first request to save its prefix through the vLLM connector lifecycle.",
+    )
+    parser.add_argument(
+        "--no-save",
+        dest="save_enabled",
+        action="store_false",
+        help="Do not ask the first request to save a prefix.",
+    )
+    parser.set_defaults(save_enabled=True)
+    parser.add_argument(
         "--restore-enabled",
         action="store_true",
-        help="Actually write TurboBus CPU backing into vLLM KV slots. Keep off until saved backing data is available.",
+        help="Actually write saved TurboBus CPU backing into later vLLM KV slots.",
     )
     parser.add_argument("--chunk-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument("--profile-bytes", type=int, default=16 * 1024 * 1024)

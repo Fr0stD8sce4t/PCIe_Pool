@@ -18,6 +18,12 @@ Acceptance:
 - The example reports connector events without mutating connector internals.
 - Connector changes stay version-aware for the current server vLLM build.
 
+Progress:
+
+- 2026-05-22: Decoupled the example's save request from
+  `--restore-enabled`. The first request now asks the connector to save by
+  default, while restore remains an explicit opt-in for the second request.
+
 ## Completed
 
 - 2026-05-22: Add batch block operations on top of the existing transfer APIs.

@@ -9,6 +9,14 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- Keep vLLM connector save intent independent from restore
+  - `examples/vllm_turbobus_kv_connector.py` now asks the first request to
+    save through connector `kv_transfer_params` by default.
+  - `--restore-enabled` now only controls whether the second request restores
+    saved backing into vLLM KV slots.
+  - Added a focused parser test so `--no-save` can explicitly disable the save
+    request without changing restore behavior.
+
 - Add batch block operations on top of Runtime transfers
   - Added `OffloadBatch` to carry batch operation names, handles, block
     snapshots, and transfer stats for future connector use.
@@ -169,6 +177,16 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
   - Connector configuration was consolidated around shared keys.
 
 ## Last Verified Checks
+
+For vLLM connector example save intent:
+
+```text
+python -m unittest discover -s test\python -p "test_vllm_kv_connector_example.py" -v
+python -m unittest discover -s test\python -p "test_vllm_kv_connector.py" -v
+python -m compileall examples\vllm_turbobus_kv_connector.py test\python\test_vllm_kv_connector_example.py -q
+```
+
+Result: passed.
 
 For batch block operations:
 
