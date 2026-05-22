@@ -9,6 +9,17 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- Harden paper validation success checks
+  - `benchmarks/paper_validation.py` now deletes stale workload output files
+    before each non-dry run.
+  - Workloads with return code 0 but no fresh JSON/case output or no collected
+    paper metrics now get explicit `missing-output`, `missing-metrics`, or
+    `invalid-output` statuses.
+  - The compact summary reports `validation_errors=` for each workload, and
+    the CLI exits nonzero for these validation failures.
+  - Added focused tests for stale-output cleanup, missing metric detection, and
+    `--keep-going` behavior.
+
 - Close remaining framework-specific integration gaps
   - `benchmarks/paper_validation.py` now has a `--dry-run` mode so local
     checks can validate command construction without reading stale outputs.
@@ -257,6 +268,17 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
   - Connector configuration was consolidated around shared keys.
 
 ## Last Verified Checks
+
+For paper validation success gating:
+
+```text
+python -m unittest discover -s test\python -p "test_paper_validation.py" -v
+python -m compileall benchmarks\paper_validation.py test\python\test_paper_validation.py -q
+python benchmarks\paper_validation.py --target-gpu 6 --relay-gpus 5 --workloads model-loading --mode pool --dry-run --no-copy-summary
+git diff --check
+```
+
+Result: passed.
 
 For framework gap closure and summary-field updates:
 

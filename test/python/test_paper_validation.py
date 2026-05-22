@@ -238,6 +238,63 @@ class PaperValidationTest(unittest.TestCase):
         self.assertIn("--daemon-socket-path", result["workloads"][0]["command"])
         self.assertIn("dry_run=True", paper_validation.compact_summary(result))
 
+    def test_run_validation_rejects_missing_fresh_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            paths = paper_validation.output_paths(output_dir, "model-loading")
+            paths["json"].write_text(
+                json.dumps({"modes": {"pool": {"summary": {"median_load_ms": 1}}}}),
+                encoding="utf-8",
+            )
+            args = make_args(output_dir=tmpdir, workloads="model-loading")
+
+            with mock.patch.object(
+                paper_validation,
+                "run_command",
+                return_value=paper_validation.subprocess.CompletedProcess(
+                    ["model-loading"],
+                    0,
+                    "",
+                    "",
+                ),
+            ):
+                result = paper_validation.run_validation(args)
+
+        workload = result["workloads"][0]
+        self.assertEqual(workload["status"], "missing-output")
+        self.assertIn("missing_output_file", workload["validation_errors"])
+        self.assertIn("missing_paper_metrics", workload["validation_errors"])
+        self.assertEqual(workload["data"], {})
+        self.assertFalse(paths["json"].exists())
+        self.assertIn("validation_errors=missing_output_file,missing_paper_metrics", paper_validation.compact_summary(result))
+
+    def test_keep_going_continues_after_missing_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            args = make_args(
+                output_dir=tmpdir,
+                workloads="model-loading,training-offload",
+                keep_going=True,
+            )
+
+            with mock.patch.object(
+                paper_validation,
+                "run_command",
+                return_value=paper_validation.subprocess.CompletedProcess(
+                    ["workload"],
+                    0,
+                    "",
+                    "",
+                ),
+            ):
+                result = paper_validation.run_validation(args)
+
+        self.assertEqual(
+            [item["workload"] for item in result["workloads"]],
+            ["model-loading", "training-offload"],
+        )
+        self.assertEqual([item["status"] for item in result["workloads"]], ["missing-output"] * 2)
+
 
 if __name__ == "__main__":
     unittest.main()

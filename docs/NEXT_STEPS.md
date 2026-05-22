@@ -8,6 +8,9 @@ from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
 
 - Run server-side paper validation and tighten measured behavior toward the
   paper claims.
+  - The local harness now clears stale workload outputs before each non-dry
+    run and fails a workload when its fresh metrics are missing; use the
+    command in `docs/PROGRESS.md` for the next target-server run.
 
 ## Completed
 

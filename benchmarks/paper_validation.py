@@ -14,6 +14,7 @@ BENCHMARKS = REPO_ROOT / "benchmarks"
 EXAMPLES = REPO_ROOT / "examples"
 
 WORKLOADS = ("model-loading", "vllm-kv", "training-offload")
+OUTPUT_FILE_KEYS = ("json", "summary", "cases_json", "cases_csv")
 
 
 def parse_csv(value: str) -> list[str]:
@@ -45,6 +46,17 @@ def output_paths(output_dir: Path, workload: str) -> dict[str, Path]:
         "cases_csv": output_dir / f"{safe}_cases.csv",
         "log_dir": output_dir / f"{safe}_logs",
     }
+
+
+def data_path_for_workload(workload: str, paths: dict[str, Path]) -> Path:
+    return paths["cases_json"] if workload == "vllm-kv" else paths["json"]
+
+
+def clear_workload_outputs(paths: dict[str, Path]) -> None:
+    for key in OUTPUT_FILE_KEYS:
+        path = paths[key]
+        if path.is_file():
+            path.unlink()
 
 
 def daemon_command_args(args) -> list[str]:
@@ -355,6 +367,33 @@ def collect_workload_metrics(workload: str, paths: dict[str, Path]) -> tuple[obj
     raise ValueError(f"unsupported workload: {workload}")
 
 
+def workload_validation_errors(data_path: Path, metrics: list[dict]) -> list[str]:
+    errors = []
+    if not data_path.exists():
+        errors.append("missing_output_file")
+    if not metrics:
+        errors.append("missing_paper_metrics")
+    return errors
+
+
+def workload_status(dry_run: bool, returncode: int, validation_errors: list[str]) -> str:
+    if dry_run:
+        return "dry-run"
+    if returncode != 0:
+        return "failed"
+    if "invalid_output" in validation_errors:
+        return "invalid-output"
+    if "missing_output_file" in validation_errors:
+        return "missing-output"
+    if validation_errors:
+        return "missing-metrics"
+    return "ok"
+
+
+def workload_failed(status: str) -> bool:
+    return status not in ("ok", "dry-run")
+
+
 def metric_line(metric: dict) -> str:
     ordered = [
         "workload",
@@ -402,11 +441,12 @@ def compact_summary(result: dict) -> str:
         ),
     ]
     for workload in result["workloads"]:
+        errors = ",".join(workload.get("validation_errors", []))
         lines.append(
             "paper_workload "
             f"workload={workload['workload']} status={workload['status']} "
             f"returncode={workload['returncode']} summary={workload['summary_path']} "
-            f"json={workload['data_path']}"
+            f"json={workload['data_path']} validation_errors={errors}"
         )
         for metric in workload["metrics"]:
             lines.append(metric_line(metric))
@@ -449,6 +489,8 @@ def run_validation(args) -> dict:
     for workload in workloads:
         paths = output_paths(output_dir, workload)
         command = build_workload_command(args, workload, paths)
+        data_path = data_path_for_workload(workload, paths)
+        validation_errors = []
         if args.dry_run:
             print(
                 "paper_validation_dry_run",
@@ -460,30 +502,33 @@ def run_validation(args) -> dict:
             data = [] if workload == "vllm-kv" else {}
             metrics = []
         else:
+            clear_workload_outputs(paths)
             print("paper_validation_run", f"workload={workload}", " ".join(command), flush=True)
             completed = run_command(command)
-            data, metrics = collect_workload_metrics(workload, paths)
-        data_path = paths["cases_json"] if workload == "vllm-kv" else paths["json"]
+            try:
+                data, metrics = collect_workload_metrics(workload, paths)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                data = [] if workload == "vllm-kv" else {}
+                metrics = []
+                validation_errors.append("invalid_output")
+                validation_errors.append(type(exc).__name__)
+            validation_errors.extend(workload_validation_errors(data_path, metrics))
+        status = workload_status(args.dry_run, completed.returncode, validation_errors)
         workload_result = {
             "workload": workload,
-            "status": (
-                "dry-run"
-                if args.dry_run
-                else "ok"
-                if completed.returncode == 0
-                else "failed"
-            ),
+            "status": status,
             "returncode": completed.returncode,
             "command": command,
             "stdout": completed.stdout,
             "stderr": completed.stderr,
             "summary_path": str(paths["summary"]),
             "data_path": str(data_path),
+            "validation_errors": validation_errors,
             "data": data,
             "metrics": metrics,
         }
         result["workloads"].append(workload_result)
-        if completed.returncode != 0 and not args.keep_going:
+        if workload_failed(status) and not args.keep_going:
             break
     return result
 
@@ -542,7 +587,7 @@ def main() -> None:
         print("paper_validation summary_output", output)
     if not args.no_copy_summary:
         print(summary)
-    if any(item["returncode"] != 0 for item in result["workloads"]):
+    if any(workload_failed(item["status"]) for item in result["workloads"]):
         sys.exit(1)
 
 
