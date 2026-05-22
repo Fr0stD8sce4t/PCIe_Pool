@@ -58,6 +58,7 @@ class ModelWeightLoaderTest(unittest.TestCase):
         self.assertEqual(bucket.block_id, ("layer0", 0))
         self.assertEqual(bucket.cpu_slot, ("layer0", 0))
         self.assertEqual(bucket.gpu_slot, ("layer0", 0))
+        self.assertEqual(loader.block_ids(), [("layer0", 0)])
         self.assertEqual(loader.names(), ["layer0.mlp"])
         self.assertEqual(loader.bucket_info("layer0.mlp").state, BlockState.CPU)
 

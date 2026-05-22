@@ -9,6 +9,15 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- Make the Python offload object layer reusable by future connectors
+  - Added block-store style aliases and helpers to `OffloadStore` for
+    `add_block`, `get_block`, `block_ids`, and block state cleanup.
+  - `ModelWeightLoader`, `TrainingOffloadManager`, and
+    `InferenceKVSlotAdapter` now inherit the shared block-store layer instead
+    of wrapping a second internal store object.
+  - Added focused tests for the reusable block-store aliases and for the
+    loader, training, and inference adapters exposing shared block ids.
+
 - Extend daemon smoke to training offload
   - Added `training-offload` as a supported daemon smoke workload so the same
     wrapper can exercise the training offload benchmark through a local daemon.
@@ -152,6 +161,24 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
   - Connector configuration was consolidated around shared keys.
 
 ## Last Verified Checks
+
+For reusable offload block-store aliases:
+
+```text
+python -m unittest discover -s test\python -p "test_offload_store.py" -v
+```
+
+Result: 16 tests passed.
+
+```text
+python -m unittest discover -s test\python -p "test_model_loading.py" -v
+python -m unittest discover -s test\python -p "test_training_offload.py" -v
+python -m unittest discover -s test\python -p "test_inference_adapters.py" -v
+python -m compileall turbobus\offload_store.py turbobus\model_loading.py turbobus\training_offload.py turbobus\inference.py test\python\test_offload_store.py test\python\test_model_loading.py test\python\test_training_offload.py test\python\test_inference_adapters.py -q
+git diff --check
+```
+
+Result: passed.
 
 Additional local checks on the Windows development environment:
 

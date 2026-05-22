@@ -182,8 +182,36 @@ class OffloadStore:
         self._blocks[name] = block
         return block
 
+    def add_block(
+        self,
+        name: str,
+        cpu_tensor,
+        gpu_tensor=None,
+        *,
+        block_id=None,
+        cpu_slot=None,
+        gpu_slot=None,
+        cpu_offset: int = 0,
+        gpu_offset: int = 0,
+        byte_count: int | None = None,
+    ) -> OffloadBlock:
+        return self.add(
+            name,
+            cpu_tensor,
+            gpu_tensor,
+            block_id=block_id,
+            cpu_slot=cpu_slot,
+            gpu_slot=gpu_slot,
+            cpu_offset=cpu_offset,
+            gpu_offset=gpu_offset,
+            byte_count=byte_count,
+        )
+
     def remove(self, name: str) -> OffloadBlock:
         return self._blocks.pop(name)
+
+    def remove_block(self, name: str) -> OffloadBlock:
+        return self.remove(name)
 
     def block(self, name: str) -> OffloadBlock:
         try:
@@ -191,8 +219,14 @@ class OffloadStore:
         except KeyError as exc:
             raise KeyError(f"unknown offload block: {name}") from exc
 
+    def get_block(self, name: str) -> OffloadBlock:
+        return self.block(name)
+
     def names(self) -> list[str]:
         return list(self._blocks)
+
+    def block_ids(self) -> list[object]:
+        return [block.block_id for block in self._blocks.values()]
 
     def blocks(self) -> Iterable[OffloadBlock]:
         return self._blocks.values()
@@ -282,6 +316,27 @@ class OffloadStore:
             for block in (self.block(name) for name in names)
             if block.last_handle is not None
         )
+
+    def set_block_state(
+        self,
+        name: str,
+        state: BlockState,
+        *,
+        clear_transfer_state: bool = False,
+    ) -> OffloadBlock:
+        block = self.block(name)
+        block.state = state
+        if clear_transfer_state:
+            self.clear_block_transfer_state(name)
+        return block
+
+    def clear_block_transfer_state(self, name: str) -> OffloadBlock:
+        block = self.block(name)
+        block.last_prefetch = None
+        block.last_evict = None
+        block.last_handle = None
+        block.last_operation = None
+        return block
 
     def _mark_waited(self, block: OffloadBlock) -> None:
         if block.last_operation == "prefetch":

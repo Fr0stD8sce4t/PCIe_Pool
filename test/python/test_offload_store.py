@@ -175,6 +175,25 @@ class OffloadStoreTest(unittest.TestCase):
             ["kv0", "kv1"],
         )
 
+    def test_block_store_aliases_and_state_helpers(self) -> None:
+        runtime = FakeRuntime()
+        store = OffloadStore(runtime)
+        cpu = FakeTensor(64)
+        gpu = object()
+
+        block = store.add_block("kv0", cpu, gpu)
+        store.prefetch("kv0")
+        store.wait("kv0")
+
+        self.assertIs(store.get_block("kv0"), block)
+        self.assertEqual(store.block_ids(), ["kv0"])
+
+        store.set_block_state("kv0", BlockState.GPU, clear_transfer_state=True)
+        self.assertEqual(store.get_block("kv0").state, BlockState.GPU)
+        self.assertIsNone(store.get_block("kv0").last_handle)
+        store.clear_block_transfer_state("kv0")
+        self.assertIsNone(store.get_block("kv0").last_operation)
+
     def test_add_rejects_invalid_packed_offsets(self) -> None:
         store = OffloadStore(FakeRuntime())
 

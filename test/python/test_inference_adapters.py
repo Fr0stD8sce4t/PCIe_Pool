@@ -119,6 +119,7 @@ class InferenceKVSlotAdapterTest(unittest.TestCase):
         self.assertEqual(runtime.calls[1][4].wait_calls, 1)
         self.assertEqual(len(restore_handles), 2)
         self.assertEqual(len(save_handles), 2)
+        self.assertEqual(adapter.block_ids(), [0, 1])
 
     def test_submit_and_wait_can_be_called_separately(self) -> None:
         runtime = FakeRuntime()

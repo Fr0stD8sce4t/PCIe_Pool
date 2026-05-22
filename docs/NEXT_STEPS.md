@@ -6,20 +6,30 @@ from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
 
 ## Current
 
-### 12. Make the Python offload object layer reusable by future connectors
+### 13. Add batch block operations on top of the existing transfer APIs
 
-Keep the Python offload and block-management layer moving toward
-connector-shaped block ids, CPU backings, GPU slots, async handles, and
-per-block stats, while keeping the native runtime as a transfer engine only.
+`prefetch_many(names)` and `evict_many(names)` are the stable benchmark and
+future connector entry points. Keep the simple per-block path as the fallback
+for non-packed tensors, and keep the shared Runtime transfer policy underneath
+the block layer.
 
 Acceptance:
 
-- `OffloadStore` stays backward compatible while it evolves toward a
-  block-store style API.
-- Shared block concepts are reusable by future connector and benchmark code.
-- Workload policy stays out of native transfer execution.
+- Batch block operations stay available through the reusable block-store API.
+- Packed CPU/GPU backing buffers keep using range-batched Runtime transfers.
+- The block layer stays thin and does not absorb workload policy.
 
 ## Completed
+
+- 2026-05-22: Make the Python offload object layer reusable by future
+  connectors.
+  - Added block-store style aliases and helpers to `OffloadStore` for
+    `add_block`, `get_block`, `block_ids`, and block state cleanup.
+  - `ModelWeightLoader`, `TrainingOffloadManager`, and
+    `InferenceKVSlotAdapter` now inherit the common block-store layer instead
+    of wrapping it with a second internal store object.
+  - Added focused tests for the reusable block-store aliases and for the
+    loader, training, and inference adapters exposing shared block ids.
 
 - 2026-05-22: Add daemon multi-process benchmark smoke.
   - Added `benchmarks/daemon_smoke.py` to start a local daemon, run two
@@ -115,7 +125,6 @@ Acceptance:
 
 ## Upcoming
 
-- Add batch block operations on top of the existing transfer APIs.
 - Build the real vLLM KV offload integration path.
 - Add production-shaped offload clients for the three paper workloads.
 - Expand daemon work toward the paper architecture.

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
-from .offload_store import OffloadManager, TransferStats
+from .offload_store import OffloadStore, TransferStats
 from .runtime import Runtime
 
 
@@ -20,7 +20,7 @@ class InferenceKVSlot:
     gpu_slot: object | None = None
 
 
-class InferenceKVSlotAdapter:
+class InferenceKVSlotAdapter(OffloadStore):
     """Register framework KV slots and restore/save them through TurboBus."""
 
     def __init__(
@@ -29,13 +29,14 @@ class InferenceKVSlotAdapter:
         cpu_backing,
         gpu_kv_backing,
     ) -> None:
-        self.manager = OffloadManager(runtime)
+        super().__init__(runtime)
+        self.manager = self
         self.cpu_backing = cpu_backing
         self.gpu_kv_backing = gpu_kv_backing
 
     def register_slots(self, slots: Iterable[InferenceKVSlot]) -> None:
         for slot in slots:
-            self.manager.add(
+            self.add(
                 slot.name,
                 self.cpu_backing,
                 self.gpu_kv_backing,
@@ -59,17 +60,17 @@ class InferenceKVSlotAdapter:
 
     def submit_restore_prefix(self, names: Iterable[str]) -> tuple[list[str], list]:
         names = list(names)
-        return names, self.manager.prefetch_many(names)
+        return names, self.prefetch_many(names)
 
     def submit_save_prefix(self, names: Iterable[str]) -> tuple[list[str], list]:
         names = list(names)
-        return names, self.manager.evict_many(names)
+        return names, self.evict_many(names)
 
     def wait_prefix(self, names: Iterable[str]) -> None:
-        self.manager.wait_many(names)
+        self.wait_many(names)
 
     def transfer_stats(self, names: Iterable[str]) -> TransferStats:
-        return self.manager.transfer_stats_many(names)
+        return self.transfer_stats_many(names)
 
 
 def make_contiguous_kv_slots(

@@ -69,6 +69,7 @@ class TrainingOffloadManagerTest(unittest.TestCase):
         self.assertEqual(bucket.block_id, ("adam", 0))
         self.assertEqual(bucket.cpu_slot, ("adam", 0))
         self.assertEqual(bucket.gpu_slot, ("adam", 0))
+        self.assertEqual(manager.block_ids(), [("adam", 0)])
         self.assertEqual(manager.bucket_info("adam.m0").state, BlockState.CPU)
 
     def test_prefetch_and_offload_use_runtime_directions(self) -> None:

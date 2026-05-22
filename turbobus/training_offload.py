@@ -11,12 +11,12 @@ from .offload_store import (
 )
 
 
-class TrainingOffloadManager:
+class TrainingOffloadManager(OffloadStore):
     """Parameter or optimizer bucket movement API backed by Runtime transfers."""
 
     def __init__(self, runtime) -> None:
-        self.runtime = runtime
-        self.store = OffloadStore(runtime)
+        super().__init__(runtime)
+        self.store = self
 
     def add_bucket(
         self,
@@ -29,7 +29,7 @@ class TrainingOffloadManager:
         gpu_offset: int = 0,
         byte_count: int | None = None,
     ) -> OffloadBlock:
-        return self.store.add(
+        return self.add(
             name,
             cpu_tensor,
             gpu_tensor,
@@ -75,67 +75,59 @@ class TrainingOffloadManager:
         return blocks
 
     def names(self) -> list[str]:
-        return self.store.names()
+        return super().names()
 
     def bucket(self, name: str) -> OffloadBlock:
-        return self.store.block(name)
+        return self.get_block(name)
 
     def bucket_info(self, name: str) -> OffloadBlockInfo:
-        return self.store.block_info(name)
+        return self.block_info(name)
 
     def bucket_infos(self, names: Iterable[str] | None = None) -> list[OffloadBlockInfo]:
-        return self.store.block_infos(names)
+        return self.block_infos(names)
 
     def prefetch_bucket(self, name: str):
-        return self.store.prefetch(name)
+        return self.prefetch(name)
 
     def prefetch_buckets(self, names: Iterable[str]) -> list:
-        return self.store.prefetch_many(names)
+        return self.prefetch_many(names)
 
     def prefetch_all(self) -> list:
         return self.prefetch_buckets(self.names())
 
     def offload_bucket(self, name: str):
-        return self.store.evict(name)
+        return self.evict(name)
 
     def offload_buckets(self, names: Iterable[str]) -> list:
-        return self.store.evict_many(names)
+        return self.evict_many(names)
 
     def offload_all(self) -> list:
         return self.offload_buckets(self.names())
 
     def wait(self, name: str) -> None:
-        self.store.wait(name)
+        super().wait(name)
 
     def wait_many(self, names: Iterable[str]) -> None:
-        self.store.wait_many(names)
+        super().wait_many(names)
 
     def wait_all(self) -> None:
         self.wait_many(self.names())
 
     def transfer_stats(self, name: str) -> TransferStats | None:
-        return self.store.transfer_stats(name)
+        return super().transfer_stats(name)
 
     def transfer_stats_many(self, names: Iterable[str]) -> TransferStats:
-        return self.store.transfer_stats_many(names)
+        return super().transfer_stats_many(names)
 
     def mark_on_cpu(self, names: Iterable[str] | None = None) -> None:
         selected = self.names() if names is None else list(names)
         for name in selected:
-            block = self.bucket(name)
-            block.state = BlockState.CPU
-            block.last_operation = None
-            block.last_handle = None
-            block.last_prefetch = None
-            block.last_evict = None
+            self.set_block_state(name, BlockState.CPU, clear_transfer_state=True)
 
     def mark_on_gpu(self, names: Iterable[str] | None = None) -> None:
         selected = self.names() if names is None else list(names)
         for name in selected:
-            block = self.bucket(name)
-            block.state = BlockState.GPU
-            block.last_operation = None
-            block.last_handle = None
+            self.set_block_state(name, BlockState.GPU, clear_transfer_state=True)
 
 
 TrainingOffloadStore = TrainingOffloadManager

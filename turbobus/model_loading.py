@@ -11,12 +11,12 @@ from .offload_store import (
 )
 
 
-class ModelWeightLoader:
+class ModelWeightLoader(OffloadStore):
     """Model-weight bucket loading API backed by Runtime H2D transfers."""
 
     def __init__(self, runtime) -> None:
-        self.runtime = runtime
-        self.store = OffloadStore(runtime)
+        super().__init__(runtime)
+        self.store = self
 
     def add_bucket(
         self,
@@ -29,7 +29,7 @@ class ModelWeightLoader:
         gpu_offset: int = 0,
         byte_count: int | None = None,
     ) -> OffloadBlock:
-        return self.store.add(
+        return self.add(
             name,
             cpu_tensor,
             gpu_tensor,
@@ -75,49 +75,45 @@ class ModelWeightLoader:
         return blocks
 
     def names(self) -> list[str]:
-        return self.store.names()
+        return super().names()
 
     def bucket(self, name: str) -> OffloadBlock:
-        return self.store.block(name)
+        return self.get_block(name)
 
     def bucket_info(self, name: str) -> OffloadBlockInfo:
-        return self.store.block_info(name)
+        return self.block_info(name)
 
     def bucket_infos(self, names: Iterable[str] | None = None) -> list[OffloadBlockInfo]:
-        return self.store.block_infos(names)
+        return self.block_infos(names)
 
     def load_bucket(self, name: str):
-        return self.store.prefetch(name)
+        return self.prefetch(name)
 
     def load_buckets(self, names: Iterable[str]) -> list:
-        return self.store.prefetch_many(names)
+        return self.prefetch_many(names)
 
     def load_all(self) -> list:
         return self.load_buckets(self.names())
 
     def wait(self, name: str) -> None:
-        self.store.wait(name)
+        super().wait(name)
 
     def wait_many(self, names: Iterable[str]) -> None:
-        self.store.wait_many(names)
+        super().wait_many(names)
 
     def wait_all(self) -> None:
         self.wait_many(self.names())
 
     def transfer_stats(self, name: str) -> TransferStats | None:
-        return self.store.transfer_stats(name)
+        return super().transfer_stats(name)
 
     def transfer_stats_many(self, names: Iterable[str]) -> TransferStats:
-        return self.store.transfer_stats_many(names)
+        return super().transfer_stats_many(names)
 
     def mark_unloaded(self, names: Iterable[str] | None = None) -> None:
         selected = self.names() if names is None else list(names)
         for name in selected:
-            block = self.bucket(name)
-            block.state = BlockState.CPU
-            block.last_operation = None
-            block.last_handle = None
-            block.last_prefetch = None
+            self.set_block_state(name, BlockState.CPU, clear_transfer_state=True)
 
 
 ModelLoader = ModelWeightLoader
