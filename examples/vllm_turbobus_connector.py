@@ -11,9 +11,7 @@ import traceback
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-
-def parse_relay_gpus(value: str) -> list[int]:
-    return [int(item) for item in value.split(",") if item.strip()]
+from turbobus.example_config import configure_cuda_runtime_mapping, parse_gpu_list
 
 
 def default_log_path() -> str:
@@ -22,15 +20,13 @@ def default_log_path() -> str:
 
 
 def configure_cuda_devices(args) -> None:
-    physical_relays = parse_relay_gpus(args.relay_gpus)
-    visible = [args.target_gpu, *physical_relays]
-    if args.map_physical_gpus and not os.environ.get("CUDA_VISIBLE_DEVICES"):
-        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(gpu) for gpu in visible)
-        args.runtime_target_gpu = 0
-        args.runtime_relay_gpus = list(range(1, len(visible)))
-        return
-    args.runtime_target_gpu = args.target_gpu
-    args.runtime_relay_gpus = physical_relays
+    mapping = configure_cuda_runtime_mapping(
+        args.target_gpu,
+        args.relay_gpus,
+        map_physical_gpus=args.map_physical_gpus,
+    )
+    args.runtime_target_gpu = mapping.runtime_target_gpu
+    args.runtime_relay_gpus = list(mapping.runtime_relay_gpus)
 
 
 def prompt_text(prompt: str, repeat: int) -> str:
@@ -142,7 +138,7 @@ def run(args) -> None:
     print(
         "vllm_connector_config",
         f"target={args.target_gpu}",
-        f"relays={parse_relay_gpus(args.relay_gpus)}",
+        f"relays={parse_gpu_list(args.relay_gpus)}",
         f"runtime_target={args.runtime_target_gpu}",
         f"runtime_relays={args.runtime_relay_gpus}",
         f"cuda_visible_devices={os.environ.get('CUDA_VISIBLE_DEVICES', '')}",
