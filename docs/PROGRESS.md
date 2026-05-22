@@ -9,6 +9,17 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- Add training offload bucket API and benchmark
+  - Added `turbobus.training_offload.TrainingOffloadManager` and
+    `TrainingOffloadStore` for PyTorch parameter or optimizer bucket movement.
+  - The API supports prefetch from CPU pinned memory to the target GPU and
+    offload back to CPU pinned memory through the shared Runtime path.
+  - Packed CPU/GPU backing buffers use range-batched Runtime transfers in both
+    H2D and D2H directions.
+  - Added `benchmarks/training_offload.py` to report iteration proxy time,
+    transfer time, compute proxy time, H2D/D2H path split, and speedup summary
+    lines.
+
 - Add model loading workload API and benchmark
   - Added `turbobus.model_loading.ModelWeightLoader` and `ModelLoader` for
     model-weight bucket loading through the shared Runtime H2D path.
@@ -260,6 +271,26 @@ python -m compileall turbobus\model_loading.py benchmarks\model_loading.py test\
 
 Result: passed.
 
+For training offload bucket API and benchmark:
+
+```text
+python -m unittest discover -s test\python -p "test_training_offload.py" -v
+```
+
+Result: 5 tests passed.
+
+```text
+python -m unittest discover -s test\python -p "test_offload_store.py" -v
+```
+
+Result: 15 tests passed.
+
+```text
+python -m compileall turbobus\training_offload.py benchmarks\training_offload.py test\python\test_training_offload.py -q
+```
+
+Result: passed.
+
 ## Known Server Follow-Up
 
 After C++/CUDA/pybind edits, reinstall before server tests:
@@ -274,5 +305,5 @@ Then run native and vLLM checks on target GPU 6 with relay GPU 5.
 
 ## Next Task
 
-Start with the task under `## Current` in `docs/NEXT_STEPS.md`: add training
-offload bucket API and benchmark.
+Start with the task under `## Current` in `docs/NEXT_STEPS.md`: add daemon
+shared profile cache support for Runtime.

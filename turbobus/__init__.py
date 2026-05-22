@@ -9,6 +9,7 @@ from .offload_store import (
     summarize_transfer_handles,
 )
 from .model_loading import ModelLoader, ModelWeightLoader
+from .training_offload import TrainingOffloadManager, TrainingOffloadStore
 from .inference import (
     FrameworkKVSlot,
     FrameworkKVSlotAdapter,
@@ -66,6 +67,8 @@ __all__ = [
     "RuntimeOptions",
     "TransferMode",
     "TransferStats",
+    "TrainingOffloadManager",
+    "TrainingOffloadStore",
     "VllmKVBlockRef",
     "VllmKVGroup",
     "VllmKVSlotAdapter",

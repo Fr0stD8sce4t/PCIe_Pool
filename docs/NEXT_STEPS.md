@@ -6,16 +6,28 @@ from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
 
 ## Current
 
-### 8. Add Training Offload Bucket API And Benchmark
+### 9. Add Daemon Shared Profile Cache
 
-Add PyTorch tensor bucket movement suitable for parameter or optimizer state
-offload.
+Let Runtime read and publish measured direct/relay profile data through the
+daemon so multiple processes do not each need to profile the same target/relay
+pair.
 
 Acceptance:
 
-- Benchmark reports iteration proxy time, transfer time, and path split.
+- Runtime can use daemon-provided profile data before local profiling.
+- Runtime publishes a fresh profile back to the daemon after local profiling.
+- Unit tests cover cache hit, cache miss, and stale or invalid daemon data.
 
 ## Completed
+
+- 2026-05-22: Add training offload bucket API and benchmark.
+  - Added `TrainingOffloadManager` / `TrainingOffloadStore` for parameter or
+    optimizer bucket prefetch and offload through Runtime.
+  - Added packed CPU/GPU bucket registration so training offload can use
+    range-batched H2D and D2H transfers.
+  - Added `benchmarks/training_offload.py` to measure iteration proxy time,
+    transfer time, compute proxy time, and H2D/D2H path split.
+  - Added focused unit tests for the training offload API with a fake Runtime.
 
 - 2026-05-22: Add model loading workload API and benchmark.
   - Added `ModelWeightLoader` / `ModelLoader` as a model-weight bucket API over
