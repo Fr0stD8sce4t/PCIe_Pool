@@ -20,13 +20,16 @@ def profile_to_dict(profile) -> dict:
     return {
         "target_device": profile.target_device,
         "direct_h2d_bw_gbps": profile.direct_h2d_bw_gbps,
+        "direct_d2h_bw_gbps": profile.direct_d2h_bw_gbps,
         "relays": [
             {
                 "relay_device": relay.relay_device,
                 "target_device": relay.target_device,
                 "h2d_bw_gbps": relay.h2d_bw_gbps,
+                "d2h_bw_gbps": relay.d2h_bw_gbps,
                 "p2p_bw_gbps": relay.p2p_bw_gbps,
                 "effective_bw_gbps": relay.effective_bw_gbps,
+                "effective_d2h_bw_gbps": relay.effective_d2h_bw_gbps,
                 "p2p_enabled": relay.p2p_enabled,
             }
             for relay in profile.relays
@@ -352,13 +355,19 @@ def compact_summary(result: dict) -> str:
             f"iterations={config['iterations']} mode={config['mode']} "
             f"dynamic_weights={config['dynamic_weights']}"
         ),
-        f"profile direct_h2d_bw_gbps={result['profile']['direct_h2d_bw_gbps']:.3f}",
+        (
+            "profile "
+            f"direct_h2d_bw_gbps={result['profile']['direct_h2d_bw_gbps']:.3f} "
+            f"direct_d2h_bw_gbps={result['profile']['direct_d2h_bw_gbps']:.3f}"
+        ),
     ]
     for relay in result["profile"]["relays"]:
         lines.append(
             "profile_relay "
             f"relay={relay['relay_device']} h2d={relay['h2d_bw_gbps']:.3f} "
-            f"p2p={relay['p2p_bw_gbps']:.3f} effective={relay['effective_bw_gbps']:.3f} "
+            f"d2h={relay['d2h_bw_gbps']:.3f} p2p={relay['p2p_bw_gbps']:.3f} "
+            f"effective={relay['effective_bw_gbps']:.3f} "
+            f"effective_d2h={relay['effective_d2h_bw_gbps']:.3f} "
             f"p2p_enabled={relay['p2p_enabled']}"
         )
 

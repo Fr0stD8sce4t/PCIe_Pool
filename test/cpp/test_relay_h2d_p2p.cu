@@ -131,6 +131,9 @@ int main() {
   assignment.path.kind = turbobus::PathKind::RelayH2DThenP2P;
   assignment.path.target_device = target;
   assignment.path.relay_device = relay;
+  assignment.path.h2d_bw_gbps = 1.0;
+  assignment.path.d2h_bw_gbps = 1.0;
+  assignment.path.p2p_bw_gbps = 1.0;
   assignment.path.effective_bw_gbps = 1.0;
 
   for (std::size_t offset = 0; offset < bytes; offset += options.chunk_bytes) {

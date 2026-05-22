@@ -20,13 +20,16 @@ int main() {
   turbobus::ProfileResult profile;
   profile.target_device = 0;
   profile.direct_h2d_bw_gbps = 20.0;
+  profile.direct_d2h_bw_gbps = 10.0;
 
   turbobus::RelayProfile relay;
   relay.relay_device = 1;
   relay.target_device = 0;
   relay.h2d_bw_gbps = 40.0;
+  relay.d2h_bw_gbps = 30.0;
   relay.p2p_bw_gbps = 100.0;
   relay.effective_bw_gbps = 40.0;
+  relay.effective_d2h_bw_gbps = 30.0;
   relay.p2p_enabled = true;
   profile.relays.push_back(relay);
 
@@ -102,9 +105,11 @@ int main() {
     assert(assignment.path.direction == turbobus::TransferDirection::D2H);
     if (assignment.path.kind == turbobus::PathKind::DirectD2H) {
       has_direct_d2h = true;
+      assert(assignment.path.effective_bw_gbps == 10.0);
     }
     if (assignment.path.kind == turbobus::PathKind::RelayP2PThenD2H) {
       has_relay_d2h = true;
+      assert(assignment.path.effective_bw_gbps == 30.0);
     }
   }
   assert(has_direct_d2h);

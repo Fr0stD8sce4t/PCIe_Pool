@@ -82,13 +82,17 @@ PYBIND11_MODULE(_turbobus, m) {
       .def_readonly("relay_device", &turbobus::RelayProfile::relay_device)
       .def_readonly("target_device", &turbobus::RelayProfile::target_device)
       .def_readonly("h2d_bw_gbps", &turbobus::RelayProfile::h2d_bw_gbps)
+      .def_readonly("d2h_bw_gbps", &turbobus::RelayProfile::d2h_bw_gbps)
       .def_readonly("p2p_bw_gbps", &turbobus::RelayProfile::p2p_bw_gbps)
       .def_readonly("effective_bw_gbps", &turbobus::RelayProfile::effective_bw_gbps)
+      .def_readonly("effective_d2h_bw_gbps",
+                    &turbobus::RelayProfile::effective_d2h_bw_gbps)
       .def_readonly("p2p_enabled", &turbobus::RelayProfile::p2p_enabled);
 
   py::class_<turbobus::ProfileResult>(m, "ProfileResult")
       .def_readonly("target_device", &turbobus::ProfileResult::target_device)
       .def_readonly("direct_h2d_bw_gbps", &turbobus::ProfileResult::direct_h2d_bw_gbps)
+      .def_readonly("direct_d2h_bw_gbps", &turbobus::ProfileResult::direct_d2h_bw_gbps)
       .def_readonly("relays", &turbobus::ProfileResult::relays);
 
   py::class_<turbobus::Path>(m, "Path")
@@ -103,6 +107,7 @@ PYBIND11_MODULE(_turbobus, m) {
       .def_readonly("target_device", &turbobus::Path::target_device)
       .def_readonly("relay_device", &turbobus::Path::relay_device)
       .def_readonly("h2d_bw_gbps", &turbobus::Path::h2d_bw_gbps)
+      .def_readonly("d2h_bw_gbps", &turbobus::Path::d2h_bw_gbps)
       .def_readonly("p2p_bw_gbps", &turbobus::Path::p2p_bw_gbps)
       .def_readonly("effective_bw_gbps", &turbobus::Path::effective_bw_gbps)
       .def_readonly("enabled", &turbobus::Path::enabled);

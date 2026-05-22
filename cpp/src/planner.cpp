@@ -15,8 +15,13 @@ std::vector<Path> ChunkPlanner::BuildPaths(const ProfileResult& profile,
                                            double relay_min_direct_ratio,
                                            TransferDirection direction) const {
   std::vector<Path> paths;
+  const double direct_bw =
+      direction == TransferDirection::H2D
+          ? profile.direct_h2d_bw_gbps
+          : (profile.direct_d2h_bw_gbps > 0.0 ? profile.direct_d2h_bw_gbps
+                                               : profile.direct_h2d_bw_gbps);
 
-  if (mode != TransferMode::RelayOnly && profile.direct_h2d_bw_gbps > 0.0) {
+  if (mode != TransferMode::RelayOnly && direct_bw > 0.0) {
     Path direct;
     direct.kind = direction == TransferDirection::H2D ? PathKind::DirectH2D
                                                       : PathKind::DirectD2H;
@@ -24,23 +29,31 @@ std::vector<Path> ChunkPlanner::BuildPaths(const ProfileResult& profile,
     direct.target_device = profile.target_device;
     direct.relay_device = kHostDevice;
     direct.h2d_bw_gbps = profile.direct_h2d_bw_gbps;
+    direct.d2h_bw_gbps = profile.direct_d2h_bw_gbps > 0.0
+                              ? profile.direct_d2h_bw_gbps
+                              : profile.direct_h2d_bw_gbps;
     direct.p2p_bw_gbps = 0.0;
-    direct.effective_bw_gbps = profile.direct_h2d_bw_gbps;
+    direct.effective_bw_gbps = direct_bw;
     direct.enabled = true;
     paths.push_back(direct);
   }
 
   if (mode != TransferMode::DirectOnly) {
     for (const auto& relay : profile.relays) {
-      if (!relay.p2p_enabled || relay.effective_bw_gbps <= 0.0) {
+      const double relay_effective_bw =
+          direction == TransferDirection::H2D
+              ? relay.effective_bw_gbps
+              : (relay.effective_d2h_bw_gbps > 0.0
+                     ? relay.effective_d2h_bw_gbps
+                     : relay.effective_bw_gbps);
+      if (!relay.p2p_enabled || relay_effective_bw <= 0.0) {
         continue;
       }
-      if (relay.effective_bw_gbps < relay_min_effective_bw_gbps) {
+      if (relay_effective_bw < relay_min_effective_bw_gbps) {
         continue;
       }
-      if (profile.direct_h2d_bw_gbps > 0.0 && relay_min_direct_ratio > 0.0 &&
-          relay.effective_bw_gbps <
-              profile.direct_h2d_bw_gbps * relay_min_direct_ratio) {
+      if (direct_bw > 0.0 && relay_min_direct_ratio > 0.0 &&
+          relay_effective_bw < direct_bw * relay_min_direct_ratio) {
         continue;
       }
       Path path;
@@ -50,8 +63,10 @@ std::vector<Path> ChunkPlanner::BuildPaths(const ProfileResult& profile,
       path.target_device = relay.target_device;
       path.relay_device = relay.relay_device;
       path.h2d_bw_gbps = relay.h2d_bw_gbps;
+      path.d2h_bw_gbps =
+          relay.d2h_bw_gbps > 0.0 ? relay.d2h_bw_gbps : relay.h2d_bw_gbps;
       path.p2p_bw_gbps = relay.p2p_bw_gbps;
-      path.effective_bw_gbps = relay.effective_bw_gbps;
+      path.effective_bw_gbps = relay_effective_bw;
       path.enabled = true;
       paths.push_back(path);
     }

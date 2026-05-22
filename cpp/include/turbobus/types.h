@@ -66,6 +66,7 @@ struct Path {
   int target_device = 0;
   int relay_device = kHostDevice;
   double h2d_bw_gbps = 0.0;
+  double d2h_bw_gbps = 0.0;
   double p2p_bw_gbps = 0.0;
   double effective_bw_gbps = 0.0;
   bool enabled = true;
@@ -86,14 +87,17 @@ struct RelayProfile {
   int relay_device = kHostDevice;
   int target_device = 0;
   double h2d_bw_gbps = 0.0;
+  double d2h_bw_gbps = 0.0;
   double p2p_bw_gbps = 0.0;
   double effective_bw_gbps = 0.0;
+  double effective_d2h_bw_gbps = 0.0;
   bool p2p_enabled = false;
 };
 
 struct ProfileResult {
   int target_device = 0;
   double direct_h2d_bw_gbps = 0.0;
+  double direct_d2h_bw_gbps = 0.0;
   std::vector<RelayProfile> relays;
 };
 

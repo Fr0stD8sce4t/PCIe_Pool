@@ -70,6 +70,48 @@ double BandwidthProfiler::MeasureH2D(int device, std::size_t bytes) {
   return ElapsedGbps(milliseconds, bytes);
 }
 
+double BandwidthProfiler::MeasureD2H(int device, std::size_t bytes) {
+  void* host = nullptr;
+  void* src = nullptr;
+  cudaStream_t stream = nullptr;
+  cudaEvent_t start = nullptr;
+  cudaEvent_t stop = nullptr;
+
+  CheckCuda(cudaSetDevice(device), "cudaSetDevice d2h profile failed");
+  CheckCuda(cudaMallocHost(&host, bytes), "cudaMallocHost d2h profile failed");
+  CheckCuda(cudaMalloc(&src, bytes), "cudaMalloc d2h profile src failed");
+  CheckCuda(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking),
+            "cudaStreamCreate d2h profile failed");
+  CheckCuda(cudaEventCreate(&start), "cudaEventCreate d2h start failed");
+  CheckCuda(cudaEventCreate(&stop), "cudaEventCreate d2h stop failed");
+
+  try {
+    CheckCuda(cudaEventRecord(start, stream), "cudaEventRecord d2h start failed");
+    CheckCuda(cudaMemcpyAsync(host, src, bytes, cudaMemcpyDeviceToHost, stream),
+              "cudaMemcpyAsync d2h profile failed");
+    CheckCuda(cudaEventRecord(stop, stream), "cudaEventRecord d2h stop failed");
+    CheckCuda(cudaEventSynchronize(stop), "cudaEventSynchronize d2h failed");
+  } catch (...) {
+    cudaEventDestroy(stop);
+    cudaEventDestroy(start);
+    cudaStreamDestroy(stream);
+    cudaFree(src);
+    cudaFreeHost(host);
+    throw;
+  }
+
+  float milliseconds = 0.0f;
+  CheckCuda(cudaEventElapsedTime(&milliseconds, start, stop),
+            "cudaEventElapsedTime d2h failed");
+
+  cudaEventDestroy(stop);
+  cudaEventDestroy(start);
+  cudaStreamDestroy(stream);
+  cudaFree(src);
+  cudaFreeHost(host);
+  return ElapsedGbps(milliseconds, bytes);
+}
+
 double BandwidthProfiler::MeasureP2P(int src_device, int dst_device, std::size_t bytes) {
   void* src = nullptr;
   void* dst = nullptr;
@@ -127,6 +169,7 @@ ProfileResult BandwidthProfiler::Profile(int target_device,
   ProfileResult result;
   result.target_device = target_device;
   result.direct_h2d_bw_gbps = MeasureH2D(target_device, bytes);
+  result.direct_d2h_bw_gbps = MeasureD2H(target_device, bytes);
 
   for (const int relay_device : relay_devices) {
     if (relay_device == target_device) {
@@ -141,9 +184,12 @@ ProfileResult BandwidthProfiler::Profile(int target_device,
     relay.target_device = target_device;
     relay.p2p_enabled = can_access != 0;
     relay.h2d_bw_gbps = MeasureH2D(relay_device, bytes);
+    relay.d2h_bw_gbps = MeasureD2H(relay_device, bytes);
     if (relay.p2p_enabled) {
       relay.p2p_bw_gbps = MeasureP2P(relay_device, target_device, bytes);
       relay.effective_bw_gbps = std::min(relay.h2d_bw_gbps, relay.p2p_bw_gbps);
+      relay.effective_d2h_bw_gbps =
+          std::min(relay.d2h_bw_gbps, relay.p2p_bw_gbps);
     }
     result.relays.push_back(relay);
   }

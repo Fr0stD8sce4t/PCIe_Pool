@@ -14,8 +14,8 @@ class BandwidthProfiler {
 
  private:
   double MeasureH2D(int device, std::size_t bytes);
+  double MeasureD2H(int device, std::size_t bytes);
   double MeasureP2P(int src_device, int dst_device, std::size_t bytes);
 };
 
 }  // namespace turbobus
-

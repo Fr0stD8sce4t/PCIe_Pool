@@ -158,6 +158,56 @@ class RuntimeOptionsTest(unittest.TestCase):
 
         self.assertEqual(decision.resolved_mode, TransferMode.POOL)
 
+    def test_auto_transfer_selector_uses_direction_specific_d2h_bandwidth(self) -> None:
+        class Relay:
+            relay_device = 5
+            effective_bw_gbps = 100.0
+            effective_d2h_bw_gbps = 4.0
+            p2p_enabled = True
+
+        class Profile:
+            direct_h2d_bw_gbps = 100.0
+            direct_d2h_bw_gbps = 12.0
+            relays = [Relay()]
+
+        selector = AutoTransferSelector(min_relay_speedup=1.05)
+        decision = selector.choose(
+            Profile(),
+            request_bytes=8 * 1024 * 1024,
+            chunk_bytes=1024 * 1024,
+            request_chunks=8,
+            direction="d2h",
+        )
+
+        self.assertEqual(decision.resolved_mode, TransferMode.DIRECT)
+        self.assertEqual(decision.direct_h2d_bw_gbps, 12.0)
+        self.assertEqual(decision.relay_effective_bw_gbps, 4.0)
+
+    def test_auto_transfer_selector_falls_back_to_h2d_profile_for_old_d2h_cache(self) -> None:
+        class Relay:
+            relay_device = 5
+            effective_bw_gbps = 8.0
+            effective_d2h_bw_gbps = 0.0
+            p2p_enabled = True
+
+        class Profile:
+            direct_h2d_bw_gbps = 7.5
+            direct_d2h_bw_gbps = 0.0
+            relays = [Relay()]
+
+        selector = AutoTransferSelector()
+        decision = selector.choose(
+            Profile(),
+            request_bytes=32 * 1024 * 1024,
+            chunk_bytes=4 * 1024 * 1024,
+            request_chunks=8,
+            direction="d2h",
+        )
+
+        self.assertEqual(decision.resolved_mode, TransferMode.POOL)
+        self.assertEqual(decision.direct_h2d_bw_gbps, 7.5)
+        self.assertEqual(decision.relay_effective_bw_gbps, 8.0)
+
     def test_auto_transfer_mode_uses_explicit_profile_fallback(self) -> None:
         class FakeProfile:
             direct_h2d_bw_gbps = 0.0

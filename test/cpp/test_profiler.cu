@@ -69,18 +69,24 @@ int main() {
       target, relays, EnvSize("TURBOBUS_PROFILE_BYTES", 16ull * 1024ull * 1024ull));
 
   std::cout << "direct_h2d_bw_gbps=" << profile.direct_h2d_bw_gbps << "\n";
+  std::cout << "direct_d2h_bw_gbps=" << profile.direct_d2h_bw_gbps << "\n";
   assert(profile.direct_h2d_bw_gbps > 0.0);
+  assert(profile.direct_d2h_bw_gbps > 0.0);
 
   for (const auto& relay : profile.relays) {
     std::cout << "relay=" << relay.relay_device
               << " h2d=" << relay.h2d_bw_gbps
+              << " d2h=" << relay.d2h_bw_gbps
               << " p2p=" << relay.p2p_bw_gbps
               << " effective=" << relay.effective_bw_gbps
+              << " effective_d2h=" << relay.effective_d2h_bw_gbps
               << " p2p_enabled=" << relay.p2p_enabled << "\n";
     assert(relay.h2d_bw_gbps > 0.0);
+    assert(relay.d2h_bw_gbps > 0.0);
     if (relay.p2p_enabled) {
       assert(relay.p2p_bw_gbps > 0.0);
       assert(relay.effective_bw_gbps > 0.0);
+      assert(relay.effective_d2h_bw_gbps > 0.0);
     }
   }
 

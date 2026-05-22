@@ -64,9 +64,18 @@ class AutoTransferSelector:
             request_chunks = max(1, math.ceil(request_bytes / chunk_bytes)) if request_bytes else 0
         else:
             request_chunks = max(0, int(request_chunks))
-        direct_bw = max(0.0, float(getattr(profile, "direct_h2d_bw_gbps", 0.0) or 0.0))
-        eligible_relays = self._eligible_relays(profile, direct_bw)
-        relay_bw = sum(float(getattr(relay, "effective_bw_gbps", 0.0) or 0.0) for relay in eligible_relays)
+        direct_attr = "direct_h2d_bw_gbps" if direction == "h2d" else "direct_d2h_bw_gbps"
+        direct_bw = max(0.0, float(getattr(profile, direct_attr, 0.0) or 0.0))
+        if direction != "h2d" and direct_bw <= 0.0:
+            direct_bw = max(0.0, float(getattr(profile, "direct_h2d_bw_gbps", 0.0) or 0.0))
+        eligible_relays = self._eligible_relays(profile, direct_bw, direction)
+        relay_attr = "effective_bw_gbps" if direction == "h2d" else "effective_d2h_bw_gbps"
+        relay_bw = 0.0
+        for relay in eligible_relays:
+            effective_bw = max(0.0, float(getattr(relay, relay_attr, 0.0) or 0.0))
+            if direction != "h2d" and effective_bw <= 0.0:
+                effective_bw = max(0.0, float(getattr(relay, "effective_bw_gbps", 0.0) or 0.0))
+            relay_bw += effective_bw
 
         if request_bytes == 0:
             return self._decision(
@@ -159,10 +168,13 @@ class AutoTransferSelector:
             return 0.0
         return (float(bytes_) / (bandwidth_gbps * 1e9)) * 1000.0
 
-    def _eligible_relays(self, profile, direct_bw: float):
+    def _eligible_relays(self, profile, direct_bw: float, direction: str):
+        relay_attr = "effective_bw_gbps" if direction == "h2d" else "effective_d2h_bw_gbps"
         relays = []
         for relay in getattr(profile, "relays", []) or []:
-            effective_bw = max(0.0, float(getattr(relay, "effective_bw_gbps", 0.0) or 0.0))
+            effective_bw = max(0.0, float(getattr(relay, relay_attr, 0.0) or 0.0))
+            if direction != "h2d" and effective_bw <= 0.0:
+                effective_bw = max(0.0, float(getattr(relay, "effective_bw_gbps", 0.0) or 0.0))
             if not getattr(relay, "p2p_enabled", False) or effective_bw <= 0.0:
                 continue
             if effective_bw < self.relay_min_effective_bw_gbps:
@@ -423,7 +435,11 @@ class Runtime:
             if self.options.enable_dynamic_weights
             else self.cached_profile()
         )
-        missing_direct_profile = plan_profile.direct_h2d_bw_gbps <= 0.0
+        direct_attr = "direct_h2d_bw_gbps" if direction == "h2d" else "direct_d2h_bw_gbps"
+        direct_bw = getattr(plan_profile, direct_attr, 0.0)
+        if direction != "h2d" and direct_bw <= 0.0:
+            direct_bw = getattr(plan_profile, "direct_h2d_bw_gbps", 0.0)
+        missing_direct_profile = direct_bw <= 0.0
         missing_relay_profile = bool(self.relay_gpus) and not plan_profile.relays
         if missing_direct_profile or missing_relay_profile:
             self.profile(self.options.profile_bytes, force=missing_relay_profile)
@@ -758,6 +774,7 @@ def transfer_plan_to_dict(plan) -> dict:
                     "target_device": path.target_device,
                     "relay_device": path.relay_device,
                     "h2d_bw_gbps": path.h2d_bw_gbps,
+                    "d2h_bw_gbps": path.d2h_bw_gbps,
                     "p2p_bw_gbps": path.p2p_bw_gbps,
                     "effective_bw_gbps": path.effective_bw_gbps,
                     "enabled": path.enabled,

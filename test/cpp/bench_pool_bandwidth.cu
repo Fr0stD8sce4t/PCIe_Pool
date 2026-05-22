@@ -71,6 +71,7 @@ turbobus::ProfileResult FilterProfile(const turbobus::ProfileResult& profile,
   turbobus::ProfileResult filtered;
   filtered.target_device = profile.target_device;
   filtered.direct_h2d_bw_gbps = profile.direct_h2d_bw_gbps;
+  filtered.direct_d2h_bw_gbps = profile.direct_d2h_bw_gbps;
   for (const auto& relay : profile.relays) {
     if (std::find(relays.begin(), relays.end(), relay.relay_device) != relays.end()) {
       filtered.relays.push_back(relay);
@@ -88,6 +89,8 @@ turbobus::TransferPlan MakeDirectPlan(std::size_t bytes, std::size_t chunk_bytes
   direct.path.kind = turbobus::PathKind::DirectH2D;
   direct.path.target_device = target;
   direct.path.relay_device = turbobus::kHostDevice;
+  direct.path.h2d_bw_gbps = 1.0;
+  direct.path.d2h_bw_gbps = 1.0;
   direct.path.effective_bw_gbps = 1.0;
 
   for (std::size_t offset = 0; offset < bytes; offset += chunk_bytes) {
@@ -118,6 +121,9 @@ turbobus::TransferPlan MakeRelayOnlyPlan(std::size_t bytes, std::size_t chunk_by
     assignment.path.kind = turbobus::PathKind::RelayH2DThenP2P;
     assignment.path.target_device = target;
     assignment.path.relay_device = relay;
+    assignment.path.h2d_bw_gbps = 1.0;
+    assignment.path.d2h_bw_gbps = 1.0;
+    assignment.path.p2p_bw_gbps = 1.0;
     assignment.path.effective_bw_gbps = 1.0;
     assignments.push_back(assignment);
   }

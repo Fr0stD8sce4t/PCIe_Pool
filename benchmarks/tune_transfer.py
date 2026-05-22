@@ -22,13 +22,16 @@ def profile_to_dict(profile) -> dict:
     return {
         "target_device": profile.target_device,
         "direct_h2d_bw_gbps": profile.direct_h2d_bw_gbps,
+        "direct_d2h_bw_gbps": profile.direct_d2h_bw_gbps,
         "relays": [
             {
                 "relay_device": relay.relay_device,
                 "target_device": relay.target_device,
                 "h2d_bw_gbps": relay.h2d_bw_gbps,
+                "d2h_bw_gbps": relay.d2h_bw_gbps,
                 "p2p_bw_gbps": relay.p2p_bw_gbps,
                 "effective_bw_gbps": relay.effective_bw_gbps,
+                "effective_d2h_bw_gbps": relay.effective_d2h_bw_gbps,
                 "p2p_enabled": relay.p2p_enabled,
             }
             for relay in profile.relays

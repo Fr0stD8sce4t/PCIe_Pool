@@ -88,13 +88,16 @@ void TurboBusRuntime::EnsureProfile() {
   if (!has_profile_) {
     profile_.target_device = target_device_;
     profile_.direct_h2d_bw_gbps = 1.0;
+    profile_.direct_d2h_bw_gbps = 1.0;
     for (const int relay_device : enabled_relays_) {
       RelayProfile relay;
       relay.relay_device = relay_device;
       relay.target_device = target_device_;
       relay.h2d_bw_gbps = 1.0;
+      relay.d2h_bw_gbps = 1.0;
       relay.p2p_bw_gbps = 1.0;
       relay.effective_bw_gbps = 1.0;
+      relay.effective_d2h_bw_gbps = 1.0;
       relay.p2p_enabled = true;
       profile_.relays.push_back(relay);
     }
@@ -201,13 +204,19 @@ void TurboBusRuntime::UpdateDynamicWeights(const TransferStats& stats) {
   }
   const double alpha = std::clamp(options_.dynamic_weight_alpha, 0.0, 1.0);
   for (const auto& path : stats.path_stats) {
-    if (path.gib_per_second <= 0.0 || path.direction != TransferDirection::H2D) {
+    if (path.gib_per_second <= 0.0) {
       continue;
     }
     if (path.relay_device == kHostDevice) {
-      planner_profile_.direct_h2d_bw_gbps =
-          alpha * path.gib_per_second +
-          (1.0 - alpha) * planner_profile_.direct_h2d_bw_gbps;
+      if (path.direction == TransferDirection::H2D) {
+        planner_profile_.direct_h2d_bw_gbps =
+            alpha * path.gib_per_second +
+            (1.0 - alpha) * planner_profile_.direct_h2d_bw_gbps;
+      } else {
+        planner_profile_.direct_d2h_bw_gbps =
+            alpha * path.gib_per_second +
+            (1.0 - alpha) * planner_profile_.direct_d2h_bw_gbps;
+      }
       continue;
     }
     auto relay_it = std::find_if(
@@ -218,11 +227,19 @@ void TurboBusRuntime::UpdateDynamicWeights(const TransferStats& stats) {
     if (relay_it == planner_profile_.relays.end()) {
       continue;
     }
-    relay_it->h2d_bw_gbps =
-        alpha * path.gib_per_second + (1.0 - alpha) * relay_it->h2d_bw_gbps;
-    relay_it->effective_bw_gbps =
-        alpha * path.gib_per_second +
-        (1.0 - alpha) * relay_it->effective_bw_gbps;
+    if (path.direction == TransferDirection::H2D) {
+      relay_it->h2d_bw_gbps =
+          alpha * path.gib_per_second + (1.0 - alpha) * relay_it->h2d_bw_gbps;
+      relay_it->effective_bw_gbps =
+          alpha * path.gib_per_second +
+          (1.0 - alpha) * relay_it->effective_bw_gbps;
+    } else {
+      relay_it->d2h_bw_gbps =
+          alpha * path.gib_per_second + (1.0 - alpha) * relay_it->d2h_bw_gbps;
+      relay_it->effective_d2h_bw_gbps =
+          alpha * path.gib_per_second +
+          (1.0 - alpha) * relay_it->effective_d2h_bw_gbps;
+    }
   }
 }
 
