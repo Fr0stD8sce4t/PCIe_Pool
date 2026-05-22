@@ -110,6 +110,8 @@ class TurboBusDaemon:
                 return DaemonResponse(ok=False, error="relay GPU is not assigned to this session")
             if chunks > session.max_inflight_chunks:
                 return DaemonResponse(ok=False, error="reservation exceeds session chunk limit")
+            if session.active_chunks + chunks > session.max_inflight_chunks:
+                return DaemonResponse(ok=False, error="session chunk quota is unavailable")
             quota = self._relay_quotas.get(relay_gpu)
             if quota is None or not quota.can_reserve(chunks):
                 return DaemonResponse(ok=False, error="relay chunk quota is unavailable")
@@ -123,6 +125,7 @@ class TurboBusDaemon:
                 direction=str(direction),
             )
             self._reservations[reservation.reservation_id] = reservation
+            session.active_chunks += chunks
             quota.active_chunks += chunks
             return DaemonResponse(ok=True, payload={"reservation": asdict(reservation)})
 
@@ -137,6 +140,9 @@ class TurboBusDaemon:
         reservation = self._reservations.pop(reservation_id, None)
         if reservation is None:
             return None
+        session = self._sessions.get(reservation.session_id)
+        if session is not None:
+            session.active_chunks = max(0, session.active_chunks - reservation.chunks)
         quota = self._relay_quotas.get(reservation.relay_gpu)
         if quota is not None:
             quota.active_chunks = max(0, quota.active_chunks - reservation.chunks)

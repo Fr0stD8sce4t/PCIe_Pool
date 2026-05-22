@@ -98,6 +98,33 @@ class DaemonStateTest(unittest.TestCase):
         profile = daemon.describe()
         self.assertEqual(profile.payload["relay_quotas"][1]["active_chunks"], 0)
 
+    def test_transfer_reservation_uses_session_chunk_quota(self) -> None:
+        daemon = TurboBusDaemon(
+            relay_gpus=[1, 2],
+            max_sessions_per_relay=2,
+            max_inflight_chunks_per_relay=8,
+        )
+        register = daemon.register_session(
+            target_gpu=0,
+            requested_relays=[1, 2],
+            max_inflight_chunks=4,
+        )
+        session_id = register.payload["session"]["session_id"]
+
+        first = daemon.reserve_transfer(session_id, relay_gpu=1, chunks=3)
+        self.assertTrue(first.ok)
+
+        blocked = daemon.reserve_transfer(session_id, relay_gpu=2, chunks=2)
+        self.assertFalse(blocked.ok)
+        self.assertIn("session chunk quota", blocked.error)
+
+        reservation_id = first.payload["reservation"]["reservation_id"]
+        released = daemon.release_transfer(reservation_id)
+        self.assertTrue(released.ok)
+
+        second = daemon.reserve_transfer(session_id, relay_gpu=2, chunks=2)
+        self.assertTrue(second.ok)
+
 
 if __name__ == "__main__":
     unittest.main()

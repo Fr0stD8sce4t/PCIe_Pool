@@ -21,6 +21,7 @@ class Session:
     target_gpu: int
     relay_gpus: list[int]
     max_inflight_chunks: int
+    active_chunks: int = 0
     active: bool = True
 
 
