@@ -65,6 +65,28 @@ Prefer small, verifiable steps. The project should move toward the TurboBus
 paper system: daemon-managed PCIe bandwidth pooling through relay GPUs, with
 real large-model integration points instead of simulated inference workloads.
 
+### Active Roadmap Files
+
+At the start of each coding turn, read these files and use them to choose the
+next implementation task:
+
+1. `docs/TURBOBUS_ROADMAP.md`
+2. `docs/NEXT_STEPS.md`
+3. `docs/PROGRESS.md`
+
+The first unfinished item in `docs/NEXT_STEPS.md` is the default task. Do not
+replace this roadmap with isolated test, docs, summary, or benchmark parsing
+work unless that work directly unblocks the current code task.
+
+After each coding turn:
+
+- update `docs/PROGRESS.md` with the work completed, verification performed,
+  commit id if one was created, and any remaining risk;
+- update `docs/NEXT_STEPS.md` when an item is completed or blocked;
+- keep the next actionable code task at the top of `docs/NEXT_STEPS.md`.
+
+Tests are verification, not the main deliverable.
+
 ### Project Direction
 
 Advance TurboBus from a working research prototype into a usable KV/tensor

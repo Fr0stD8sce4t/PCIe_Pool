@@ -1,0 +1,70 @@
+# TurboBus Progress
+
+Update this file after every coding turn that changes the project.
+
+## Status As Of 2026-05-22
+
+The active goal is to turn TurboBus from a working prototype into a paper
+reproduction system for PCIe bandwidth pooling via relay GPUs.
+
+## Recent Mainline Commits
+
+- `c9cb837 Persist vLLM save intent until block allocation`
+  - The vLLM connector now keeps save parameters by request id until enough
+    allocated block ids arrive.
+  - This makes save metadata less dependent on one ideal scheduler-output
+    shape.
+
+- `c9ebc1f Add direction-aware transfer profiling`
+  - Native profiling now measures D2H bandwidth.
+  - Planner, Runtime, pybind, Python auto selection, benchmarks, and tests now
+    carry direction-specific D2H profile fields.
+
+- `86119ce Write structured vLLM sweep case outputs`
+  - vLLM connector sweep output is structured for later comparison.
+
+- `2b1597b Enforce daemon session chunk quota`
+  - Daemon session quota checks reject excess transfer chunks.
+
+- `ba8c1d0 Share vLLM example CUDA mapping`
+  - vLLM examples share CUDA device mapping helpers.
+
+- `7507ca6 Consolidate vLLM connector configuration`
+  - Connector configuration was consolidated around shared keys.
+
+## Last Verified Checks
+
+On the local Windows development environment:
+
+```text
+python -m unittest discover -s test\python -p "test_*.py" -v
+```
+
+Result: 96 tests passed, 3 skipped.
+
+```text
+python -m compileall turbobus benchmarks examples test\python -q
+git diff --check
+```
+
+Result: passed.
+
+Local C++/CUDA checks were not run because `cmake` is not installed in this
+environment.
+
+## Known Server Follow-Up
+
+After C++/CUDA/pybind edits, reinstall before server tests:
+
+```bash
+pip uninstall -y turbobus
+rm -rf build build-test build-temp *.egg-info turbobus/_turbobus*.so
+pip install -e .
+```
+
+Then run native and vLLM checks on target GPU 6 with relay GPU 5.
+
+## Next Task
+
+Start with item 1 in `docs/NEXT_STEPS.md`: split transfer selection out of
+`turbobus/runtime.py` while preserving public imports and behavior.
