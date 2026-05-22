@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 
 from turbobus.vllm_integration import VllmTurboBusIntegration, extract_vllm_block_ids
 
@@ -76,6 +77,9 @@ class VllmTurboBusIntegrationTest(unittest.TestCase):
     def test_extract_block_ids(self) -> None:
         self.assertEqual(extract_vllm_block_ids(FakeBlocks(([1, None, 3], []))), ((1, 3), ()))
         self.assertEqual(extract_vllm_block_ids(None), tuple())
+        self.assertEqual(extract_vllm_block_ids([1, None, 3]), ((1, 3),))
+        self.assertEqual(extract_vllm_block_ids(((1, 2), (3, None))), ((1, 2), (3,)))
+        self.assertEqual(extract_vllm_block_ids(SimpleNamespace(block_ids=[4, 5])), ((4, 5),))
 
     def test_hooks_capture_real_runner_cache_and_allocated_blocks(self) -> None:
         runtime = FakeRuntime()

@@ -9,6 +9,12 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- Broaden vLLM block-id extraction for version differences
+  - `extract_vllm_block_ids()` now accepts `block_ids` attributes and raw
+    list/tuple shapes in addition to `get_block_ids()`.
+  - Added regression coverage for raw block-id lists and simple namespace
+    shapes that mirror the current vLLM integration probes.
+
 - Keep vLLM connector save intent independent from restore
   - `examples/vllm_turbobus_kv_connector.py` now asks the first request to
     save through connector `kv_transfer_params` by default.
@@ -177,6 +183,17 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
   - Connector configuration was consolidated around shared keys.
 
 ## Last Verified Checks
+
+For vLLM block-id normalization:
+
+```text
+python -m unittest discover -s test\python -p "test_vllm_integration.py" -v
+python -m unittest discover -s test\python -p "test_vllm_kv_connector.py" -v
+python -m unittest discover -s test\python -p "test_vllm_kv_connector_example.py" -v
+python -m compileall turbobus\vllm_integration.py test\python\test_vllm_integration.py -q
+```
+
+Result: passed.
 
 For vLLM connector example save intent:
 

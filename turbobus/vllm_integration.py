@@ -256,17 +256,34 @@ def extract_vllm_block_ids(blocks) -> tuple[tuple[int, ...], ...]:
         return tuple()
     get_block_ids = getattr(blocks, "get_block_ids", None)
     if get_block_ids is None:
-        return tuple()
-    try:
-        raw = get_block_ids(allow_none=True)
-    except TypeError:
-        raw = get_block_ids()
+        raw = getattr(blocks, "block_ids", blocks)
+    else:
+        try:
+            raw = get_block_ids(allow_none=True)
+        except TypeError:
+            raw = get_block_ids()
+    return _normalize_block_id_groups(raw)
+
+
+def _normalize_block_id_groups(raw) -> tuple[tuple[int, ...], ...]:
     if raw is None:
         return tuple()
-    groups = []
-    for group_ids in raw:
-        if group_ids is None:
-            groups.append(tuple())
-        else:
-            groups.append(tuple(int(block_id) for block_id in group_ids if block_id is not None))
-    return tuple(groups)
+    if isinstance(raw, tuple):
+        if all(isinstance(item, int) or item is None for item in raw):
+            return (tuple(int(item) for item in raw if item is not None),)
+        return tuple(_normalize_block_id_group(group) for group in raw)
+    if isinstance(raw, list):
+        if not raw:
+            return tuple()
+        if all(isinstance(item, int) or item is None for item in raw):
+            return (tuple(int(item) for item in raw if item is not None),)
+        return tuple(_normalize_block_id_group(group) for group in raw)
+    return tuple(_normalize_block_id_group(raw),) if raw is not None else tuple()
+
+
+def _normalize_block_id_group(group) -> tuple[int, ...]:
+    if group is None:
+        return tuple()
+    if isinstance(group, int):
+        return (int(group),)
+    return tuple(int(block_id) for block_id in group if block_id is not None)

@@ -23,6 +23,9 @@ Progress:
 - 2026-05-22: Decoupled the example's save request from
   `--restore-enabled`. The first request now asks the connector to save by
   default, while restore remains an explicit opt-in for the second request.
+- 2026-05-22: Broadened vLLM block-id extraction to accept `block_ids`
+  attributes and raw list/tuple shapes, which helps the connector tolerate
+  version-specific allocation return forms.
 
 ## Completed
 
