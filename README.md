@@ -332,6 +332,23 @@ python examples/vllm_turbobus_kv_connector.py \
   --log-output benchmarks/results/vllm_qwen3_kv_connector_restore.log
 ```
 
+The official connector reads one shared TurboBus config from
+`KVTransferConfig.kv_connector_extra_config`, with environment variables as a
+fallback:
+
+| Extra config key | Environment fallback | Default |
+| --- | --- | --- |
+| `turbobus.target_gpu` | `TURBOBUS_TARGET_GPU` | `0` |
+| `turbobus.relay_gpus` | `TURBOBUS_RELAY_GPUS` | empty |
+| `turbobus.chunk_bytes` | `TURBOBUS_CHUNK_BYTES` | `4194304` |
+| `turbobus.profile_bytes` | `TURBOBUS_PROFILE_BYTES` | `16777216` |
+| `turbobus.mode` | `TURBOBUS_MODE` | `pool` |
+| `turbobus.min_pool_bytes` | `TURBOBUS_MIN_POOL_BYTES` | `12582912` |
+| `turbobus.restore_block_limit` | `TURBOBUS_RESTORE_BLOCK_LIMIT` | `0` |
+| `turbobus.restore_enabled` | `TURBOBUS_RESTORE_ENABLED` | `0` |
+| `turbobus.session_id` | vLLM engine id | `default` |
+| `turbobus.max_saved_prefixes` | `TURBOBUS_MAX_SAVED_PREFIXES` | `0` |
+
 To compare direct, relay, and pooled transfer on the same official connector
 path, run the sweep wrapper. Each case starts a fresh vLLM process and writes
 its own log, then the wrapper prints a compact `SWEEP_SUMMARY` and saves the

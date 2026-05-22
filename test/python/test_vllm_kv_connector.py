@@ -6,6 +6,7 @@ from unittest import mock
 
 from turbobus.vllm_kv_connector import (
     TurboBusCPUBackingPool,
+    TurboBusConnectorConfig,
     TurboBusConnector,
     TurboBusConnectorMetadata,
     TurboBusPrefixStore,
@@ -13,6 +14,7 @@ from turbobus.vllm_kv_connector import (
     TurboBusSavedPrefix,
     clear_saved_prefixes,
     get_saved_prefix,
+    _make_runtime_from_config,
     register_saved_prefix,
 )
 
@@ -160,6 +162,62 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertIs(second[0], first[0])
         self.assertFalse(reused)
         self.assertTrue(second_reused)
+
+    def test_connector_config_reads_extra_config_before_environment(self) -> None:
+        extra = {
+            "turbobus.target_gpu": "6",
+            "turbobus.relay_gpus": "5,7",
+            "turbobus.chunk_bytes": "4194304",
+            "turbobus.profile_bytes": "16777216",
+            "turbobus.mode": "auto",
+            "turbobus.min_pool_bytes": "12582912",
+            "turbobus.restore_block_limit": "8",
+            "turbobus.restore_enabled": "true",
+            "turbobus.session_id": "session-a",
+            "turbobus.max_saved_prefixes": "2",
+        }
+
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "TURBOBUS_TARGET_GPU": "0",
+                "TURBOBUS_RELAY_GPUS": "1",
+                "TURBOBUS_MODE": "direct",
+            },
+        ):
+            config = TurboBusConnectorConfig.from_vllm_config(FakeVllmConfig(extra))
+
+        self.assertEqual(config.target_gpu, 6)
+        self.assertEqual(config.relay_gpus, (5, 7))
+        self.assertEqual(config.chunk_bytes, 4194304)
+        self.assertEqual(config.profile_bytes, 16777216)
+        self.assertEqual(config.mode, "auto")
+        self.assertEqual(config.min_pool_bytes, 12582912)
+        self.assertEqual(config.restore_block_limit, 8)
+        self.assertTrue(config.restore_enabled)
+        self.assertEqual(config.session_id, "session-a")
+        self.assertEqual(config.max_saved_prefixes, 2)
+
+    def test_make_runtime_from_config_uses_connector_config(self) -> None:
+        extra = {
+            "turbobus.target_gpu": 6,
+            "turbobus.relay_gpus": [5],
+            "turbobus.chunk_bytes": 4194304,
+            "turbobus.profile_bytes": 16777216,
+            "turbobus.mode": "auto",
+            "turbobus.min_pool_bytes": 12582912,
+        }
+
+        with mock.patch("turbobus.vllm_kv_connector.Runtime") as runtime_class:
+            _make_runtime_from_config(FakeVllmConfig(extra))
+
+        _, kwargs = runtime_class.call_args
+        self.assertEqual(kwargs["target_gpu"], 6)
+        self.assertEqual(kwargs["relay_gpus"], [5])
+        self.assertEqual(kwargs["options"].chunk_bytes, 4194304)
+        self.assertEqual(kwargs["options"].profile_bytes, 16777216)
+        self.assertEqual(kwargs["options"].transfer_mode, "auto")
+        self.assertEqual(kwargs["options"].min_pool_bytes, 12582912)
 
     def test_reports_explicit_external_match(self) -> None:
         register_saved_prefix("default", [object()], block_count=8, matched_tokens=96)

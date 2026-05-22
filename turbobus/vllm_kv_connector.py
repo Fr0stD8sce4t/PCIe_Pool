@@ -212,6 +212,85 @@ class TurboBusKVConnectorState:
     events: list[dict[str, Any]] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class TurboBusConnectorConfig:
+    target_gpu: int
+    relay_gpus: tuple[int, ...]
+    chunk_bytes: int
+    profile_bytes: int
+    mode: str
+    min_pool_bytes: int
+    restore_block_limit: int
+    restore_enabled: bool
+    session_id: str
+    max_saved_prefixes: int
+
+    @classmethod
+    def from_vllm_config(cls, vllm_config) -> "TurboBusConnectorConfig":
+        return cls(
+            target_gpu=_extra_config_int(
+                vllm_config,
+                "turbobus.target_gpu",
+                int(os.environ.get("TURBOBUS_TARGET_GPU", "0") or 0),
+            ),
+            relay_gpus=_parse_relay_gpus(
+                _extra_config_value(
+                    vllm_config,
+                    "turbobus.relay_gpus",
+                    os.environ.get("TURBOBUS_RELAY_GPUS", ""),
+                )
+            ),
+            chunk_bytes=_extra_config_int(
+                vllm_config,
+                "turbobus.chunk_bytes",
+                int(os.environ.get("TURBOBUS_CHUNK_BYTES", 4 * 1024 * 1024)),
+            ),
+            profile_bytes=_extra_config_int(
+                vllm_config,
+                "turbobus.profile_bytes",
+                int(os.environ.get("TURBOBUS_PROFILE_BYTES", 16 * 1024 * 1024)),
+            ),
+            mode=_extra_config_str(
+                vllm_config,
+                "turbobus.mode",
+                os.environ.get("TURBOBUS_MODE", "pool"),
+            ),
+            min_pool_bytes=_extra_config_int(
+                vllm_config,
+                "turbobus.min_pool_bytes",
+                int(os.environ.get("TURBOBUS_MIN_POOL_BYTES", 12 * 1024 * 1024)),
+            ),
+            restore_block_limit=_extra_config_int(
+                vllm_config,
+                "turbobus.restore_block_limit",
+                int(os.environ.get("TURBOBUS_RESTORE_BLOCK_LIMIT", "0") or 0),
+            ),
+            restore_enabled=_extra_config_bool(
+                vllm_config,
+                "turbobus.restore_enabled",
+                os.environ.get("TURBOBUS_RESTORE_ENABLED", "0") == "1",
+            ),
+            session_id=_extra_config_str(
+                vllm_config,
+                "turbobus.session_id",
+                _kv_transfer_engine_id(vllm_config),
+            ),
+            max_saved_prefixes=_extra_config_int(
+                vllm_config,
+                "turbobus.max_saved_prefixes",
+                int(os.environ.get("TURBOBUS_MAX_SAVED_PREFIXES", "0") or 0),
+            ),
+        )
+
+    def runtime_options(self) -> RuntimeOptions:
+        return RuntimeOptions(
+            chunk_bytes=self.chunk_bytes,
+            profile_bytes=self.profile_bytes,
+            transfer_mode=self.mode,
+            min_pool_bytes=self.min_pool_bytes,
+        )
+
+
 _PREFIX_STORE = TurboBusPrefixStore()
 
 
@@ -320,26 +399,11 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             super().__init__(vllm_config=vllm_config, role=role)
         self.state = TurboBusKVConnectorState()
         self.vllm_block_size = int(getattr(vllm_config.cache_config, "block_size", 16))
-        self.restore_block_limit = _extra_config_int(
-            vllm_config,
-            "turbobus.restore_block_limit",
-            int(os.environ.get("TURBOBUS_RESTORE_BLOCK_LIMIT", "0") or 0),
-        )
-        self.restore_enabled = _extra_config_bool(
-            vllm_config,
-            "turbobus.restore_enabled",
-            os.environ.get("TURBOBUS_RESTORE_ENABLED", "0") == "1",
-        )
-        self.session_id = _extra_config_str(
-            vllm_config,
-            "turbobus.session_id",
-            _kv_transfer_engine_id(vllm_config),
-        )
-        self.max_saved_prefixes = _extra_config_int(
-            vllm_config,
-            "turbobus.max_saved_prefixes",
-            int(os.environ.get("TURBOBUS_MAX_SAVED_PREFIXES", "0") or 0),
-        )
+        self.config = TurboBusConnectorConfig.from_vllm_config(vllm_config)
+        self.restore_block_limit = self.config.restore_block_limit
+        self.restore_enabled = self.config.restore_enabled
+        self.session_id = self.config.session_id
+        self.max_saved_prefixes = self.config.max_saved_prefixes
         self.runtime = None
         self._adapters_by_prefix: dict[str, Any] = {}
         self._layer_save_contexts: dict[str, _LayerSaveContext] = {}
@@ -1307,11 +1371,23 @@ def _extra_config_bool(vllm_config, key: str, default: bool) -> bool:
 
 
 def _extra_config_str(vllm_config, key: str, default: str) -> str:
+    return str(_extra_config_value(vllm_config, key, default))
+
+
+def _extra_config_value(vllm_config, key: str, default):
     config = getattr(vllm_config, "kv_transfer_config", None)
     getter = getattr(config, "get_from_extra_config", None)
     if getter is None:
-        return str(default)
-    return str(getter(key, default))
+        return default
+    return getter(key, default)
+
+
+def _parse_relay_gpus(value) -> tuple[int, ...]:
+    if value is None:
+        return tuple()
+    if isinstance(value, str):
+        return tuple(int(item) for item in value.split(",") if item.strip())
+    return tuple(int(item) for item in value)
 
 
 def _kv_transfer_engine_id(vllm_config) -> str:
@@ -1323,24 +1399,12 @@ def _kv_transfer_engine_id(vllm_config) -> str:
 
 
 def _make_runtime_from_config(vllm_config) -> Runtime:
-    config = getattr(vllm_config, "kv_transfer_config", None)
-    getter = getattr(config, "get_from_extra_config", None)
-
-    def get(name: str, default):
-        if getter is None:
-            return default
-        return getter(name, default)
-
-    target_gpu = int(get("turbobus.target_gpu", os.environ.get("TURBOBUS_TARGET_GPU", "0")))
-    relay_value = str(get("turbobus.relay_gpus", os.environ.get("TURBOBUS_RELAY_GPUS", "")))
-    relay_gpus = [int(item) for item in relay_value.split(",") if item.strip()]
-    options = RuntimeOptions(
-        chunk_bytes=int(get("turbobus.chunk_bytes", os.environ.get("TURBOBUS_CHUNK_BYTES", 4 * 1024 * 1024))),
-        profile_bytes=int(get("turbobus.profile_bytes", os.environ.get("TURBOBUS_PROFILE_BYTES", 16 * 1024 * 1024))),
-        transfer_mode=str(get("turbobus.mode", os.environ.get("TURBOBUS_MODE", "pool"))),
-        min_pool_bytes=int(get("turbobus.min_pool_bytes", os.environ.get("TURBOBUS_MIN_POOL_BYTES", 12 * 1024 * 1024))),
+    config = TurboBusConnectorConfig.from_vllm_config(vllm_config)
+    return Runtime(
+        target_gpu=config.target_gpu,
+        relay_gpus=list(config.relay_gpus),
+        options=config.runtime_options(),
     )
-    return Runtime(target_gpu=target_gpu, relay_gpus=relay_gpus, options=options)
 
 
 def _max_lanes_per_layer(kv_caches: list[Any]) -> int:
@@ -1372,6 +1436,7 @@ def _emit_event(event: str, **fields) -> None:
 
 __all__ = [
     "TurboBusConnector",
+    "TurboBusConnectorConfig",
     "TurboBusConnectorMetadata",
     "TurboBusRequestMetadata",
     "TurboBusSavedPrefix",
