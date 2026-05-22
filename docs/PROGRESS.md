@@ -9,6 +9,17 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- Close remaining framework-specific integration gaps
+  - `benchmarks/paper_validation.py` now has a `--dry-run` mode so local
+    checks can validate command construction without reading stale outputs.
+  - Model-loading, training-offload, and vLLM connector summaries now expose
+    daemon profile age, reservation, and auto-selection fields for the paper
+    validation harness.
+  - The vLLM connector example and sweep now carry the new save-event fields
+    into summary and case rows, so harness metrics can report them.
+  - Added focused tests for the dry-run harness path and the new summary
+    fields across the model-loading, training-offload, and vLLM paths.
+
 - Build a paper-style validation harness
   - Added `benchmarks/paper_validation.py` as a single reproduction entry
     point for model loading, vLLM KV save/restore, and training offload.
@@ -246,6 +257,21 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
   - Connector configuration was consolidated around shared keys.
 
 ## Last Verified Checks
+
+For framework gap closure and summary-field updates:
+
+```text
+python -m unittest discover -s test\python -p "test_paper_validation.py" -v
+python -m unittest discover -s test\python -p "test_model_loading.py" -v
+python -m unittest discover -s test\python -p "test_training_offload.py" -v
+python -m unittest discover -s test\python -p "test_vllm_kv_connector.py" -v
+python -m unittest discover -s test\python -p "test_vllm_kv_connector_sweep.py" -v
+python -m unittest discover -s test\python -p "test_vllm_kv_connector_example.py" -v
+python -m compileall benchmarks\paper_validation.py benchmarks\model_loading.py benchmarks\training_offload.py examples\vllm_turbobus_kv_connector.py examples\vllm_turbobus_kv_connector_sweep.py turbobus\vllm_kv_connector.py test\python\test_paper_validation.py test\python\test_model_loading.py test\python\test_training_offload.py test\python\test_vllm_kv_connector.py test\python\test_vllm_kv_connector_sweep.py test\python\test_vllm_kv_connector_example.py -q
+git diff --check
+```
+
+Result: passed.
 
 For the paper validation harness:
 
@@ -636,7 +662,15 @@ rm -rf build build-test build-temp *.egg-info turbobus/_turbobus*.so
 pip install -e .
 ```
 
-Then run native and vLLM checks on target GPU 6 with relay GPU 5.
+Then run the paper validation harness on target GPU 6 with relay GPU 5:
+
+```bash
+python benchmarks/paper_validation.py --target-gpu 6 --relay-gpus 5 --workloads all --mode auto --force-profile --verify --output-dir benchmarks/results/paper_validation --json-output benchmarks/results/paper_validation/paper_validation.json --summary-output benchmarks/results/paper_validation/paper_validation.txt
+```
+
+Expected output: `PAPER_VALIDATION_SUMMARY_BEGIN` / `PAPER_VALIDATION_SUMMARY_END`,
+plus `paper_metric` lines for `model-loading`, `vllm-kv`, and
+`training-offload` with `status=ok` and `returncode=0`.
 
 ## Next Task
 

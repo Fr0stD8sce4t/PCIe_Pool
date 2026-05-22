@@ -6,24 +6,21 @@ from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
 
 ## Current
 
-### 18. Close remaining framework-specific integration gaps
-
-Use the paper validation harness to close any last model-loading, vLLM
-save/restore, or training bucket-hook gaps needed for the three workloads to
-behave like the paper system on the target server.
-
-Acceptance:
-
-- The validation harness runs all three workload paths on the target server
-  without workload-specific transfer policy bypasses.
-- vLLM save and restore remain on the official connector lifecycle and report
-  enough event data for the harness metrics.
-- Model loading and training offload expose any missing bucket-level metrics
-  or configuration hooks required by the harness.
-- Any server-only gaps are documented with exact follow-up commands and
-  expected outputs.
+- Run server-side paper validation and tighten measured behavior toward the
+  paper claims.
 
 ## Completed
+
+- 2026-05-22: Close remaining framework-specific integration gaps.
+  - `benchmarks/paper_validation.py` now supports `--dry-run` so local checks
+    can verify command construction without consuming stale output files.
+  - Model-loading, training-offload, and vLLM connector summaries now carry
+    daemon profile age, reservation, and auto-selection fields needed by the
+    paper harness metrics.
+  - The vLLM connector example and sweep now propagate the new save-event
+    fields into summary output for the harness.
+  - Added focused tests for the dry-run harness path and the new summary
+    fields.
 
 - 2026-05-22: Build a paper-style validation harness.
   - Added `benchmarks/paper_validation.py` to run model loading, vLLM KV
@@ -177,11 +174,6 @@ Acceptance:
   - Kept `turbobus.runtime` re-export imports working.
 
 - 2026-05-22: Document TurboBus roadmap workflow (`830d137`).
-
-## Upcoming
-
-- Run server-side paper validation and tighten measured behavior toward the
-  paper claims.
 
 ## Working Rules
 

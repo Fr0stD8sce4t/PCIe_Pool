@@ -866,10 +866,8 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         transfer_ms = (time.perf_counter() - transfer_start) * 1000.0
         total_ms = (time.perf_counter() - total_start) * 1000.0
         stats = _adapter_transfer_stats(adapter, refs, handles).as_dict()
-        auto_decision = self.runtime.last_auto_decision_dict() if self.runtime else {}
-        daemon_reservation = (
-            self.runtime.last_daemon_reservation_dict() if self.runtime else {}
-        )
+        auto_decision = _runtime_auto_decision(self.runtime)
+        daemon_reservation = _runtime_daemon_reservation(self.runtime)
         self.state.events.append(
             {
                 "event": "restore",
@@ -1060,6 +1058,8 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             direct_chunks=context.direct_chunks,
             relay_chunks=context.relay_chunks,
         ).as_dict()
+        auto_decision = _runtime_auto_decision(self.runtime)
+        daemon_reservation = _runtime_daemon_reservation(self.runtime)
         self.state.events.append(
             {
                 "event": "save",
@@ -1082,6 +1082,8 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                 "layers": len(context.kv_caches),
                 "ranges": context.ranges,
                 **stats,
+                **auto_decision,
+                **daemon_reservation,
             }
         )
         _emit_event(
@@ -1105,6 +1107,8 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             layers=len(context.kv_caches),
             ranges=context.ranges,
             **stats,
+            **auto_decision,
+            **daemon_reservation,
         )
 
     def _save_request(self, request: TurboBusRequestMetadata) -> None:
@@ -1188,6 +1192,8 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         if saved is not None:
             saved.register_ms = register_ms
             saved.total_ms = total_ms
+        auto_decision = _runtime_auto_decision(self.runtime)
+        daemon_reservation = _runtime_daemon_reservation(self.runtime)
         self.state.events.append(
             {
                 "event": "save",
@@ -1210,6 +1216,8 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                 "layers": len(kv_caches),
                 "ranges": len(refs),
                 **stats,
+                **auto_decision,
+                **daemon_reservation,
             }
         )
         _emit_event(
@@ -1233,6 +1241,8 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             layers=len(kv_caches),
             ranges=len(refs),
             **stats,
+            **auto_decision,
+            **daemon_reservation,
         )
 
     def _allocate_cpu_backings(self, block_count: int, kv_caches: list[Any]) -> list[Any]:
@@ -1288,6 +1298,20 @@ def _adapter_transfer_stats(adapter, refs, handles) -> TransferStats:
         direct_chunks=int(getattr(stats, "direct_chunks", 0) or 0),
         relay_chunks=int(getattr(stats, "relay_chunks", 0) or 0),
     )
+
+
+def _runtime_auto_decision(runtime) -> dict[str, Any]:
+    getter = getattr(runtime, "last_auto_decision_dict", None)
+    if not callable(getter):
+        return {}
+    return dict(getter() or {})
+
+
+def _runtime_daemon_reservation(runtime) -> dict[str, Any]:
+    getter = getattr(runtime, "last_daemon_reservation_dict", None)
+    if not callable(getter):
+        return {}
+    return dict(getter() or {})
 
 
 def _layer_index(layer_name: str, kv_layer, kv_items: list[tuple[str, Any]]) -> int:

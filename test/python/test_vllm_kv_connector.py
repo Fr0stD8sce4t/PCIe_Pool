@@ -523,6 +523,47 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertEqual(connector.get_finished({"req0"}), ({"req0"}, None))
         self.assertEqual(connector.get_finished(set()), (None, None))
 
+    def test_save_event_reports_auto_and_daemon_runtime_context(self) -> None:
+        connector = self.make_connector()
+        connector.state.kv_caches = {"0": mock.Mock()}
+        request = TurboBusRequestMetadata("req0", "saved", (1,), 16, 1)
+        metadata = TurboBusConnectorMetadata()
+        metadata.add_save_request(request)
+        connector._connector_metadata = metadata
+        runtime = mock.Mock(
+            last_auto_decision_dict=mock.Mock(
+                return_value={
+                    "auto_resolved_mode": "pool",
+                    "auto_reason": "pool_speedup_1.500",
+                }
+            ),
+            last_daemon_reservation_dict=mock.Mock(
+                return_value={
+                    "daemon_session_id": "daemon-session",
+                    "daemon_reservation_status": "granted",
+                    "daemon_reserved_relays": "5",
+                }
+            ),
+        )
+
+        with (
+            mock.patch("turbobus.vllm_kv_connector._make_runtime_from_config", return_value=runtime),
+            mock.patch.object(connector._backing_pool, "acquire", return_value=([object()], False)),
+            mock.patch("turbobus.vllm_kv_connector.make_vllm_layer_range_refs_from_ids", return_value=[object()]),
+            mock.patch("turbobus.vllm.make_vllm_layer_groups_from_kv_caches", return_value=[object()]),
+            mock.patch("turbobus.vllm.VllmKVSlotAdapter", return_value=FakeAdapter()),
+        ):
+            connector.wait_for_save()
+
+        event = connector.state.events[-1]
+        emitted = get_connector_events()[-1]
+        self.assertEqual(event["event"], "save")
+        self.assertEqual(event["auto_resolved_mode"], "pool")
+        self.assertEqual(event["auto_reason"], "pool_speedup_1.500")
+        self.assertEqual(event["daemon_session_id"], "daemon-session")
+        self.assertEqual(event["daemon_reservation_status"], "granted")
+        self.assertEqual(emitted["daemon_reserved_relays"], "5")
+
     def test_save_kv_layer_copies_layers_before_wait_for_save_registers_prefix(self) -> None:
         connector = self.make_connector()
         layer0 = FakeTensor()

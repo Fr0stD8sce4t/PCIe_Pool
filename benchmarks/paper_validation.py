@@ -398,7 +398,7 @@ def compact_summary(result: dict) -> str:
             "paper_validation_config "
             f"target={config['target_gpu']} relays={config['relay_gpus']} "
             f"workloads={','.join(config['workloads'])} mode={config['mode']} "
-            f"output_dir={config['output_dir']}"
+            f"dry_run={config.get('dry_run', False)} output_dir={config['output_dir']}"
         ),
     ]
     for workload in result["workloads"]:
@@ -438,6 +438,7 @@ def run_validation(args) -> dict:
             "workloads": workloads,
             "mode": args.mode,
             "output_dir": str(output_dir),
+            "dry_run": bool(args.dry_run),
             "daemon_socket_path": args.daemon_socket_path,
             "daemon_max_inflight_chunks": args.daemon_max_inflight_chunks,
             "daemon_profile_max_age_seconds": args.daemon_profile_max_age_seconds,
@@ -448,13 +449,30 @@ def run_validation(args) -> dict:
     for workload in workloads:
         paths = output_paths(output_dir, workload)
         command = build_workload_command(args, workload, paths)
-        print("paper_validation_run", f"workload={workload}", " ".join(command), flush=True)
-        completed = run_command(command)
-        data, metrics = collect_workload_metrics(workload, paths)
+        if args.dry_run:
+            print(
+                "paper_validation_dry_run",
+                f"workload={workload}",
+                " ".join(command),
+                flush=True,
+            )
+            completed = subprocess.CompletedProcess(command, 0, "", "")
+            data = [] if workload == "vllm-kv" else {}
+            metrics = []
+        else:
+            print("paper_validation_run", f"workload={workload}", " ".join(command), flush=True)
+            completed = run_command(command)
+            data, metrics = collect_workload_metrics(workload, paths)
         data_path = paths["cases_json"] if workload == "vllm-kv" else paths["json"]
         workload_result = {
             "workload": workload,
-            "status": "ok" if completed.returncode == 0 else "failed",
+            "status": (
+                "dry-run"
+                if args.dry_run
+                else "ok"
+                if completed.returncode == 0
+                else "failed"
+            ),
             "returncode": completed.returncode,
             "command": command,
             "stdout": completed.stdout,
@@ -496,6 +514,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vllm-no-map-physical-gpus", action="store_true")
     parser.add_argument("--force-profile", action="store_true")
     parser.add_argument("--verify", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--keep-going", action="store_true")
     parser.add_argument("--output-dir", default="benchmarks/results/paper_validation")
     parser.add_argument("--json-output")

@@ -210,6 +210,9 @@ def run(args) -> None:
         f"chunk_bytes={args.chunk_bytes}",
         f"min_pool_bytes={args.min_pool_bytes}",
         f"mode={args.mode}",
+        f"daemon_socket_path={args.daemon_socket_path}",
+        f"daemon_max_inflight_chunks={args.daemon_max_inflight_chunks}",
+        f"daemon_profile_max_age_seconds={args.daemon_profile_max_age_seconds}",
     )
     print(
         "vllm_kv_connector_scenario",
@@ -239,6 +242,12 @@ def run(args) -> None:
             f"relay_chunks={event_value(save_event, 'relay_chunks')}",
             f"save_layer_count={event_value(save_event, 'layers')}",
             f"save_layer_ranges={event_value(save_event, 'ranges')}",
+            f"auto_resolved_mode={event_value(save_event, 'auto_resolved_mode', 'NA')}",
+            f"auto_reason={event_value(save_event, 'auto_reason', 'NA')}",
+            f"daemon_session_id={event_value(save_event, 'daemon_session_id', '')}",
+            f"daemon_reservation_status={event_value(save_event, 'daemon_reservation_status', '')}",
+            f"daemon_reserved_relays={event_value(save_event, 'daemon_reserved_relays', '')}",
+            f"daemon_reserved_chunks_per_relay={event_value(save_event, 'daemon_reserved_chunks_per_relay', '')}",
         )
     if first_save_event is not None and first_save_event is not save_event:
         print(
@@ -275,6 +284,7 @@ def run(args) -> None:
             f"daemon_session_id={event_value(restore_event, 'daemon_session_id', '')}",
             f"daemon_reservation_status={event_value(restore_event, 'daemon_reservation_status', '')}",
             f"daemon_reserved_relays={event_value(restore_event, 'daemon_reserved_relays', '')}",
+            f"daemon_reserved_chunks_per_relay={event_value(restore_event, 'daemon_reserved_chunks_per_relay', '')}",
         )
     print(
         "vllm_kv_connector_result",

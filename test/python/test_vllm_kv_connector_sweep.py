@@ -74,6 +74,7 @@ class VllmKVConnectorSweepTest(unittest.TestCase):
             pool_log.write_text(
                 "\n".join(
                     [
+                        "turbobus_kv_connector_event event=save elapsed_ms=12 runtime_init_ms=3 transfer_ms=10 total_ms=13 auto_resolved_mode=pool auto_reason=pool_speedup_1.500 daemon_reservation_status=granted daemon_reserved_relays=5 daemon_reserved_chunks_per_relay=12",
                         "turbobus_kv_connector_event event=restore elapsed_ms=20 prepare_ms=1 transfer_ms=20 total_ms=21 layers=28 ranges=224 bytes=1073741824 direct_chunks=1 relay_chunks=1 auto_resolved_mode=pool auto_reason=pool_speedup_1.500 auto_direct_bw_gbps=7.500 auto_relay_bw_gbps=7.600",
                         "turbobus_kv_connector_event event=start_load_done requests=1 restore_enabled=True elapsed_ms=22",
                     ]
@@ -131,12 +132,15 @@ class VllmKVConnectorSweepTest(unittest.TestCase):
         self.assertTrue(any("mode=pool" in line and "restore_gib_s=50.000" in line for line in lines))
         self.assertEqual(rows[1]["mode"], "pool")
         self.assertEqual(rows[1]["restore_gib_s"], "50.000")
+        self.assertEqual(rows[1]["save_auto_resolved_mode"], "pool")
+        self.assertEqual(rows[1]["save_daemon_reservation_status"], "granted")
         self.assertTrue(any("mode=pool" in line and "restore_prepare_ms=1" in line for line in lines))
         self.assertTrue(any("mode=pool" in line and "start_load_ms=22" in line for line in lines))
         self.assertTrue(any("mode=pool" in line and "layers=28" in line for line in lines))
         self.assertTrue(any("mode=pool" in line and "ranges=224" in line for line in lines))
         self.assertTrue(any("mode=pool" in line and "auto_resolved_mode=pool" in line for line in lines))
         self.assertTrue(any("mode=pool" in line and "auto_reason=pool_speedup_1.500" in line for line in lines))
+        self.assertTrue(any("mode=pool" in line and "save_daemon_reserved_relays=5" in line for line in lines))
         self.assertTrue(any("mode=pool" in line and "auto_direct_bw_gbps=7.500" in line for line in lines))
         self.assertTrue(any("mode=pool" in line and "auto_relay_bw_gbps=7.600" in line for line in lines))
         self.assertTrue(any("mode=pool" in line and "save_layer_count=28" in line for line in lines))

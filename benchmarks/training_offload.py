@@ -375,7 +375,10 @@ def compact_summary(result: dict) -> str:
             f"bucket_bytes={config['bucket_bytes']} storage_layout={config['storage_layout']} "
             f"chunk_bytes={config['chunk_bytes']} iterations={config['iterations']} "
             f"compute_iterations={config['compute_iterations']} mode={config['mode']} "
-            f"dynamic_weights={config['dynamic_weights']}"
+            f"dynamic_weights={config['dynamic_weights']} "
+            f"daemon_socket_path={config['daemon_socket_path']} "
+            f"daemon_max_inflight_chunks={config['daemon_max_inflight_chunks']} "
+            f"daemon_profile_max_age_seconds={config['daemon_profile_max_age_seconds']}"
         ),
         (
             "profile "
@@ -519,6 +522,7 @@ def main() -> None:
             "dynamic_weight_alpha": args.dynamic_weight_alpha,
             "daemon_socket_path": args.daemon_socket_path,
             "daemon_max_inflight_chunks": args.daemon_max_inflight_chunks,
+            "daemon_profile_max_age_seconds": args.daemon_profile_max_age_seconds,
         },
         "profile": profile_to_dict(profile),
         "daemon_profile_initial": daemon_profile_initial,

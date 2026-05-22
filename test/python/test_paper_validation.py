@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 BENCHMARKS = Path(__file__).resolve().parents[2] / "benchmarks"
@@ -47,6 +48,8 @@ def make_args(**overrides):
         "daemon_socket_path": "/tmp/turbobusd.sock",
         "daemon_max_inflight_chunks": 12,
         "daemon_profile_max_age_seconds": 45.0,
+        "workloads": "all",
+        "dry_run": False,
     }
     values.update(overrides)
     return argparse.Namespace(**values)
@@ -193,6 +196,47 @@ class PaperValidationTest(unittest.TestCase):
 
         self.assertEqual(data[0]["mode"], "pool")
         self.assertEqual(metrics[0]["restore_latency_ms"], 20.0)
+
+    def test_dry_run_builds_commands_without_reading_stale_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            model_paths = paper_validation.output_paths(output_dir, "model-loading")
+            model_paths["json"].write_text(
+                json.dumps(
+                    {
+                        "modes": {
+                            "pool": {
+                                "summary": {
+                                    "median_load_ms": 1,
+                                    "median_gib_per_second": 2,
+                                }
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            vllm_paths = paper_validation.output_paths(output_dir, "vllm-kv")
+            vllm_paths["cases_json"].write_text(
+                json.dumps([{"mode": "pool", "restore_ms": "20"}]),
+                encoding="utf-8",
+            )
+            args = make_args(output_dir=tmpdir, dry_run=True)
+
+            with mock.patch.object(
+                paper_validation,
+                "run_command",
+                side_effect=AssertionError("dry-run must not execute child commands"),
+            ):
+                result = paper_validation.run_validation(args)
+
+        self.assertEqual([item["status"] for item in result["workloads"]], ["dry-run"] * 3)
+        self.assertTrue(all(item["returncode"] == 0 for item in result["workloads"]))
+        self.assertTrue(all(item["metrics"] == [] for item in result["workloads"]))
+        self.assertEqual(result["workloads"][0]["data"], {})
+        self.assertEqual(result["workloads"][1]["data"], [])
+        self.assertIn("--daemon-socket-path", result["workloads"][0]["command"])
+        self.assertIn("dry_run=True", paper_validation.compact_summary(result))
 
 
 if __name__ == "__main__":
