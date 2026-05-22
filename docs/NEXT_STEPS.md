@@ -100,15 +100,26 @@ Acceptance:
 - If C++/CUDA/pybind files change, remind the user to reinstall before server
   testing.
 
-## Suggested Server Checks
+## Verification Policy
 
-Use target GPU 6 and relay GPU 5 unless the user gives another topology.
+Do not run every available test after every change. Choose the smallest useful
+check set for the touched code path.
 
-```bash
-python -m unittest discover -s test/python -p "test_*.py" -v
-python -m compileall turbobus benchmarks examples test/python -q
-cmake -S test/cpp -B build-test
-cmake --build build-test --config Release
-TURBOBUS_TARGET_GPU=6 TURBOBUS_RELAY_GPU=5 TURBOBUS_PROFILE_BYTES=16777216 ./build-test/test_profiler
-TURBOBUS_TARGET_GPU=6 TURBOBUS_RELAY_GPU=5 TURBOBUS_TEST_BYTES=33554432 ./build-test/test_relay_h2d_p2p
-```
+Use this default split:
+
+- Documentation or roadmap-only edits: `git diff --check` is enough.
+- Narrow Python helper/API edits: run the directly related Python unit tests;
+  add `python -m compileall <touched package>` when import syntax could be
+  affected.
+- Runtime, planner, selector, stats, or daemon Python edits: run the related
+  Python test files for that area. Full `unittest discover` is optional and
+  should be reserved for cross-module changes.
+- C++/CUDA/pybind edits: run the relevant native build and native correctness
+  tests on the server.
+- vLLM connector or vLLM benchmark edits: run a small vLLM smoke or sweep on
+  the server.
+- Full native CUDA checks, profiler checks, and long vLLM sweeps are milestone
+  checks, not per-update defaults.
+
+Use target GPU 6 and relay GPU 5 for server checks unless the user gives
+another topology.

@@ -9,6 +9,11 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- Documentation update in progress
+  - Added the verification policy: future code updates should use targeted
+    checks based on the files changed instead of running full test, CUDA, and
+    vLLM suites by default.
+
 - `Split transfer selector from Runtime`
   - Added `turbobus/transfer_selector.py`.
   - Moved `TransferMode`, `AutoTransferDecision`, and

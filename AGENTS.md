@@ -88,6 +88,30 @@ After each coding turn:
 
 Tests are verification, not the main deliverable.
 
+### Verification Policy
+
+Do not run the same large test set after every code change. Pick the smallest
+checks that match the files and behavior changed in the current task.
+
+Default guidance:
+
+- Documentation, roadmap, comments, or formatting-only edits: usually run only
+  `git diff --check`.
+- Narrow Python helper or API edits: run the directly related Python unit tests
+  and, when useful, `python -m compileall` for the touched package.
+- Runtime, planner, selector, stats, or daemon Python edits: run the related
+  Python test files for that area; do not default to full discovery unless the
+  change crosses several modules.
+- C++/CUDA/pybind edits: run the relevant native build and native correctness
+  checks on a server.
+- vLLM connector or vLLM benchmark edits: run a small vLLM smoke or sweep on
+  the server.
+- Full Python discovery, native CUDA tests, profiler tests, and long vLLM
+  sweeps are milestone checks, not per-commit defaults.
+
+Each final report should say what was verified and why heavier checks were not
+run when they are not relevant.
+
 ### Project Direction
 
 Advance TurboBus from a working research prototype into a usable KV/tensor

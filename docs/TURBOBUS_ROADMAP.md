@@ -140,3 +140,9 @@ The repository already has:
 Tests are verification, not the main deliverable. A coding turn should not end
 with only tests, summaries, docs, or benchmark parsing unless that work directly
 unblocks the next roadmap code task.
+
+Verification should be proportional to the change. Do not run full Python
+discovery, native CUDA builds, profiler checks, or long vLLM sweeps after every
+small update. Use targeted Python tests for Python-only changes, native server
+checks for C++/CUDA/pybind changes, small vLLM checks for connector changes,
+and milestone sweeps only when a larger feature is ready to measure.
