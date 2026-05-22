@@ -6,15 +6,6 @@ from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
 
 ## Current
 
-### 7. Add Model Loading Workload API And Benchmark
-
-Add CPU pinned weight bucket movement through Runtime. Measure direct, relay,
-pool, and auto.
-
-Acceptance:
-
-- Benchmark reports load latency, path split, and speedup.
-
 ### 8. Add Training Offload Bucket API And Benchmark
 
 Add PyTorch tensor bucket movement suitable for parameter or optimizer state
@@ -25,6 +16,15 @@ Acceptance:
 - Benchmark reports iteration proxy time, transfer time, and path split.
 
 ## Completed
+
+- 2026-05-22: Add model loading workload API and benchmark.
+  - Added `ModelWeightLoader` / `ModelLoader` as a model-weight bucket API over
+    Runtime H2D transfers.
+  - Added packed CPU pinned weight bucket registration so model-loading
+    benchmarks can use one range-batched Runtime transfer.
+  - Added `benchmarks/model_loading.py` to measure direct, relay, pool, and
+    auto model-weight load latency, path split, and speedup.
+  - Added focused unit tests for the model-loading API with a fake Runtime.
 
 - 2026-05-22: Continue vLLM connector lifecycle cleanup.
   - Added a connector event stream API so examples can report connector

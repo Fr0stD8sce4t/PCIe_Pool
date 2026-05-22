@@ -9,6 +9,16 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- Add model loading workload API and benchmark
+  - Added `turbobus.model_loading.ModelWeightLoader` and `ModelLoader` for
+    model-weight bucket loading through the shared Runtime H2D path.
+  - The API supports separate buckets and packed CPU/GPU backing buffers, using
+    range-batched Runtime transfers for packed buckets.
+  - Added `benchmarks/model_loading.py` to compare direct, relay, pool, and
+    auto load modes with load latency, bandwidth, path split, and speedup
+    summary lines.
+  - Added focused unit tests for the model-loading API with a fake Runtime.
+
 - Continue vLLM connector lifecycle cleanup
   - Added `clear_connector_events()` and `get_connector_events()` so the real
     connector example can report lifecycle events without reading internal
@@ -230,6 +240,26 @@ git diff --check
 
 Result: passed.
 
+For model loading workload API and benchmark:
+
+```text
+python -m unittest discover -s test\python -p "test_model_loading.py" -v
+```
+
+Result: 5 tests passed.
+
+```text
+python -m unittest discover -s test\python -p "test_offload_store.py" -v
+```
+
+Result: 15 tests passed.
+
+```text
+python -m compileall turbobus\model_loading.py benchmarks\model_loading.py test\python\test_model_loading.py -q
+```
+
+Result: passed.
+
 ## Known Server Follow-Up
 
 After C++/CUDA/pybind edits, reinstall before server tests:
@@ -244,5 +274,5 @@ Then run native and vLLM checks on target GPU 6 with relay GPU 5.
 
 ## Next Task
 
-Start with the task under `## Current` in `docs/NEXT_STEPS.md`: add model
-loading workload API and benchmark.
+Start with the task under `## Current` in `docs/NEXT_STEPS.md`: add training
+offload bucket API and benchmark.

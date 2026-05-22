@@ -8,6 +8,7 @@ from .offload_store import (
     TransferStats,
     summarize_transfer_handles,
 )
+from .model_loading import ModelLoader, ModelWeightLoader
 from .inference import (
     FrameworkKVSlot,
     FrameworkKVSlotAdapter,
@@ -53,6 +54,8 @@ __all__ = [
     "InferenceKVSlot",
     "InferenceKVSlotAdapter",
     "KVBlockStore",
+    "ModelLoader",
+    "ModelWeightLoader",
     "OffloadBlock",
     "OffloadBlockInfo",
     "OffloadManager",
