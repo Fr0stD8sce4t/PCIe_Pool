@@ -9,7 +9,14 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
-- Documentation update in progress
+- Split Runtime plan trace helper from Runtime
+  - Added `turbobus/plan_trace.py`.
+  - Moved `transfer_plan_to_dict()` out of `turbobus/runtime.py`.
+  - Preserved `from turbobus.runtime import transfer_plan_to_dict`.
+  - Did not create `profile_cache.py`; the current Runtime profile helpers do
+    not justify a new layer yet.
+
+- `cbfdcc2 Document targeted verification policy`
   - Added the verification policy: future code updates should use targeted
     checks based on the files changed instead of running full test, CUDA, and
     vLLM suites by default.
@@ -73,6 +80,21 @@ from turbobus.transfer_selector import AutoTransferSelector, TransferMode
 
 Result: passed.
 
+For the plan trace split:
+
+```text
+python -m unittest discover -s test\python -p "test_runtime_handle.py" -v
+```
+
+Result: 21 tests passed, 2 skipped because PyTorch is not installed locally.
+
+```text
+python -m compileall turbobus test\python\test_runtime_handle.py -q
+git diff --check
+```
+
+Result: passed.
+
 Local C++/CUDA checks were not run because `cmake` is not installed in this
 environment.
 
@@ -90,5 +112,6 @@ Then run native and vLLM checks on target GPU 6 with relay GPU 5.
 
 ## Next Task
 
-Start with the task under `## Current` in `docs/NEXT_STEPS.md`: split Runtime
-plan/profile helpers while preserving public APIs and plan dict output.
+Start with the task under `## Current` in `docs/NEXT_STEPS.md`: add
+multi-relay planner coverage for two relay GPUs and direction-specific
+bandwidth fields.

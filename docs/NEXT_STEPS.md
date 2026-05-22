@@ -6,20 +6,6 @@ from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
 
 ## Current
 
-### 2. Split Runtime Plan/Profile Helpers
-
-Create `turbobus/plan_trace.py` for `transfer_plan_to_dict` and related
-conversion helpers. Create `turbobus/profile_cache.py` only if it removes real
-Runtime complexity; do not add a speculative cache layer.
-
-Acceptance:
-
-- Runtime public API stays stable.
-- Plan dict output is unchanged.
-- Tests cover old import paths.
-
-## Upcoming
-
 ### 3. Add Multi-Relay Planner Coverage
 
 Extend C++ planner tests for two relay GPUs with different effective
@@ -30,6 +16,8 @@ Acceptance:
 
 - Planner test passes.
 - No vLLM or Python policy enters the native planner.
+
+## Upcoming
 
 ### 4. Improve Multi-Relay Executor Behavior
 
@@ -83,6 +71,12 @@ Acceptance:
 - Benchmark reports iteration proxy time, transfer time, and path split.
 
 ## Completed
+
+- 2026-05-22: Split Runtime plan trace helpers out of `turbobus/runtime.py`.
+  - Added `turbobus/plan_trace.py` for `transfer_plan_to_dict`.
+  - Kept `turbobus.runtime.transfer_plan_to_dict` working.
+  - Did not add `profile_cache.py`; there was no real Runtime complexity to
+    remove yet.
 
 - 2026-05-22: Split transfer selection out of `turbobus/runtime.py`.
   - Added `turbobus/transfer_selector.py`.

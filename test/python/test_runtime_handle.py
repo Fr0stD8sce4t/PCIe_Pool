@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 
 from turbobus import runtime as runtime_module
+from turbobus.plan_trace import transfer_plan_to_dict as plan_trace_to_dict
 from turbobus.runtime import (
     AutoTransferSelector,
     RuntimeOptions,
     TransferHandle,
     TransferMode,
+    transfer_plan_to_dict as runtime_plan_to_dict,
 )
 
 try:
@@ -411,6 +414,62 @@ class RuntimeOptionsTest(unittest.TestCase):
         self.assertEqual(options.chunk_bytes, 8388608)
         self.assertEqual(options.profile_bytes, 16777216)
         self.assertEqual(options.staging_slots, 2)
+
+
+class PlanTraceTest(unittest.TestCase):
+    def test_transfer_plan_to_dict_keeps_runtime_import_path(self) -> None:
+        plan = SimpleNamespace(
+            total_bytes=32,
+            chunk_bytes=16,
+            assignments=[
+                SimpleNamespace(
+                    path=SimpleNamespace(
+                        kind="direct",
+                        direction="h2d",
+                        target_device=6,
+                        relay_device=-1,
+                        h2d_bw_gbps=7.5,
+                        d2h_bw_gbps=8.5,
+                        p2p_bw_gbps=0.0,
+                        effective_bw_gbps=7.5,
+                        enabled=True,
+                    ),
+                    chunks=[
+                        SimpleNamespace(src_offset=0, dst_offset=0, bytes=16),
+                        SimpleNamespace(src_offset=16, dst_offset=16, bytes=16),
+                    ],
+                )
+            ],
+        )
+
+        expected = {
+            "total_bytes": 32,
+            "chunk_bytes": 16,
+            "assignments": [
+                {
+                    "path": {
+                        "kind": "direct",
+                        "direction": "h2d",
+                        "target_device": 6,
+                        "relay_device": -1,
+                        "h2d_bw_gbps": 7.5,
+                        "d2h_bw_gbps": 8.5,
+                        "p2p_bw_gbps": 0.0,
+                        "effective_bw_gbps": 7.5,
+                        "enabled": True,
+                    },
+                    "chunks": [
+                        {"src_offset": 0, "dst_offset": 0, "bytes": 16},
+                        {"src_offset": 16, "dst_offset": 16, "bytes": 16},
+                    ],
+                    "bytes": 32,
+                    "chunk_count": 2,
+                }
+            ],
+        }
+
+        self.assertIs(runtime_plan_to_dict, plan_trace_to_dict)
+        self.assertEqual(runtime_plan_to_dict(plan), expected)
 
 
 class RangeValidationTest(unittest.TestCase):
