@@ -28,7 +28,7 @@ def smoke_socket_path(prefix: str = "turbobusd-smoke") -> str:
 
 
 def build_daemon_command(args, socket_path: str) -> list[str]:
-    return [
+    command = [
         sys.executable,
         "-m",
         "turbobus.daemon",
@@ -41,6 +41,13 @@ def build_daemon_command(args, socket_path: str) -> list[str]:
         "--max-inflight-chunks-per-relay",
         str(args.daemon_max_inflight_chunks_per_relay),
     ]
+    session_timeout = float(getattr(args, "daemon_session_timeout_seconds", 0.0) or 0.0)
+    profile_max_age = float(getattr(args, "daemon_profile_max_age_seconds", 0.0) or 0.0)
+    if session_timeout > 0.0:
+        command.extend(["--session-timeout-seconds", str(session_timeout)])
+    if profile_max_age > 0.0:
+        command.extend(["--profile-max-age-seconds", str(profile_max_age)])
+    return command
 
 
 def build_client_command(args, socket_path: str, workload: str, client_index: int) -> list[str]:
@@ -301,6 +308,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--force-profile-first", action="store_true")
     parser.add_argument("--daemon-max-sessions-per-relay", type=int, default=2)
     parser.add_argument("--daemon-max-inflight-chunks-per-relay", type=int, default=128)
+    parser.add_argument("--daemon-session-timeout-seconds", type=float, default=0.0)
+    parser.add_argument("--daemon-profile-max-age-seconds", type=float, default=0.0)
     add_daemon_options(parser)
     parser.set_defaults(daemon_max_inflight_chunks=128)
     return parser

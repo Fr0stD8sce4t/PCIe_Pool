@@ -96,46 +96,43 @@ class VllmKVSlotAdapter:
         return names
 
     def restore_prefix(self, refs: Iterable[VllmKVBlockRef]) -> list:
-        refs = list(refs)
-        names_by_group = self._register_and_group(refs)
-        handles = []
-        submitted = []
-        batch_bytes, batch_chunks = self._batch_size(refs)
-        with self._batch_transfer_mode(batch_bytes, "h2d", batch_chunks):
-            for group_id, names in names_by_group.items():
-                names, group_handles = self.adapters[group_id].submit_restore_prefix(names)
-                submitted.append((group_id, names))
-                handles.extend(group_handles)
-            for group_id, names in submitted:
-                self.adapters[group_id].wait_prefix(names)
-        return handles
+        return self._transfer_prefix(refs, "restore")
 
     def save_prefix(self, refs: Iterable[VllmKVBlockRef]) -> list:
-        refs = list(refs)
-        names_by_group = self._register_and_group(refs)
-        handles = []
-        submitted = []
-        batch_bytes, batch_chunks = self._batch_size(refs)
-        with self._batch_transfer_mode(batch_bytes, "d2h", batch_chunks):
-            for group_id, names in names_by_group.items():
-                names, group_handles = self.adapters[group_id].submit_save_prefix(names)
-                submitted.append((group_id, names))
-                handles.extend(group_handles)
-            for group_id, names in submitted:
-                self.adapters[group_id].wait_prefix(names)
-        return handles
+        return self._transfer_prefix(refs, "save")
 
     def transfer_stats(self, refs: Iterable[VllmKVBlockRef]) -> TransferStats:
         names_by_group = self._register_and_group(refs)
         total = TransferStats()
         for group_id, names in names_by_group.items():
-            stats = self.adapters[group_id].transfer_stats(names)
-            total = TransferStats(
-                bytes=total.bytes + stats.bytes,
-                direct_chunks=total.direct_chunks + stats.direct_chunks,
-                relay_chunks=total.relay_chunks + stats.relay_chunks,
-            )
+            total = self._sum_transfer_stats(total, self.adapters[group_id].transfer_stats(names))
         return total
+
+    def _transfer_prefix(self, refs: Iterable[VllmKVBlockRef], operation: str) -> list:
+        refs = list(refs)
+        names_by_group = self._register_and_group(refs)
+        handles = []
+        submitted = []
+        batch_bytes, batch_chunks = self._batch_size(refs)
+        direction = "h2d" if operation == "restore" else "d2h"
+        submit_method = "submit_restore_prefix" if operation == "restore" else "submit_save_prefix"
+        with self._batch_transfer_mode(batch_bytes, direction, batch_chunks):
+            for group_id, names in names_by_group.items():
+                submit = getattr(self.adapters[group_id], submit_method)
+                names, group_handles = submit(names)
+                submitted.append((group_id, names))
+                handles.extend(group_handles)
+            for group_id, names in submitted:
+                self.adapters[group_id].wait_prefix(names)
+        return handles
+
+    @staticmethod
+    def _sum_transfer_stats(total: TransferStats, stats: TransferStats) -> TransferStats:
+        return TransferStats(
+            bytes=total.bytes + stats.bytes,
+            direct_chunks=total.direct_chunks + stats.direct_chunks,
+            relay_chunks=total.relay_chunks + stats.relay_chunks,
+        )
 
     def _register_and_group(
         self,

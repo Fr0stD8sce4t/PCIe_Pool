@@ -482,14 +482,6 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertEqual(connector.get_finished(set()), (None, {"req0"}))
         self.assertEqual(connector.get_finished(set()), (None, None))
 
-    def test_request_finished_all_groups_flattens_groups(self) -> None:
-        connector = self.make_connector()
-
-        self.assertEqual(
-            connector.request_finished_all_groups(FakeRequest(), ([1, 2], [3])),
-            (False, None),
-        )
-
     def test_wait_for_save_registers_saved_prefix_and_reports_finished(self) -> None:
         connector = self.make_connector()
         connector.state.kv_caches = {

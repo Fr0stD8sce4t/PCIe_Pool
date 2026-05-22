@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from turbobus import BlockState, ModelLoader, ModelWeightLoader, OffloadBatch, TransferStats
+from turbobus import BlockState, ModelWeightLoader, OffloadBatch, TransferStats
 
 
 class FakeTensor:
@@ -154,9 +154,6 @@ class ModelWeightLoaderTest(unittest.TestCase):
         self.assertEqual(bucket.state, BlockState.CPU)
         self.assertIsNone(bucket.last_handle)
         self.assertIsNone(bucket.last_operation)
-
-    def test_model_loader_alias_points_to_weight_loader(self) -> None:
-        self.assertIs(ModelLoader, ModelWeightLoader)
 
 
 if __name__ == "__main__":

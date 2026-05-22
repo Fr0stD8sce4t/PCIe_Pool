@@ -32,11 +32,15 @@ class TurboBusDaemon:
         relay_gpus: Iterable[int],
         max_sessions_per_relay: int = 1,
         max_inflight_chunks_per_relay: int = 8,
+        session_timeout_seconds: float = 0.0,
+        profile_max_age_seconds: float = 0.0,
     ) -> None:
         self._lock = threading.Lock()
         self._sessions: dict[str, Session] = {}
         self._reservations: dict[str, TransferReservation] = {}
         self._profile_cache: dict[str, dict] = {}
+        self._session_timeout_seconds = max(0.0, float(session_timeout_seconds))
+        self._profile_max_age_seconds = max(0.0, float(profile_max_age_seconds))
         self._relay_quotas = {
             int(gpu): RelayQuota(
                 relay_gpu=int(gpu),
@@ -52,8 +56,13 @@ class TurboBusDaemon:
         requested_relays: Iterable[int],
         max_inflight_chunks: int = 8,
     ) -> DaemonResponse:
-        relays = [int(gpu) for gpu in requested_relays]
+        relays = self._normalize_relays(requested_relays)
+        max_inflight = int(max_inflight_chunks)
+        if max_inflight <= 0:
+            return DaemonResponse(ok=False, error="max_inflight_chunks must be positive")
+        now = time.time()
         with self._lock:
+            self._reap_stale_sessions_locked(now)
             unavailable = [
                 gpu
                 for gpu in relays
@@ -70,7 +79,9 @@ class TurboBusDaemon:
                 session_id=session_id,
                 target_gpu=int(target_gpu),
                 relay_gpus=relays,
-                max_inflight_chunks=int(max_inflight_chunks),
+                max_inflight_chunks=max_inflight,
+                created_at=now,
+                last_seen=now,
             )
             self._sessions[session_id] = session
             for gpu in relays:
@@ -79,17 +90,10 @@ class TurboBusDaemon:
 
     def close_session(self, session_id: str) -> DaemonResponse:
         with self._lock:
-            session = self._sessions.pop(session_id, None)
+            self._reap_stale_sessions_locked(time.time())
+            session = self._close_session_locked(session_id)
             if session is None:
                 return DaemonResponse(ok=False, error="unknown session")
-            for reservation_id, reservation in list(self._reservations.items()):
-                if reservation.session_id == session_id:
-                    self._release_reservation_locked(reservation_id)
-            for gpu in session.relay_gpus:
-                quota = self._relay_quotas.get(gpu)
-                if quota is not None:
-                    quota.sessions.discard(session_id)
-            session.active = False
             return DaemonResponse(ok=True, payload={"session_id": session_id})
 
     def reserve_transfer(
@@ -102,9 +106,17 @@ class TurboBusDaemon:
     ) -> DaemonResponse:
         chunks = int(chunks)
         relay_gpu = int(relay_gpu)
+        bytes_count = int(bytes_)
+        direction_value = str(direction).lower()
         if chunks <= 0:
             return DaemonResponse(ok=False, error="chunks must be positive")
+        if bytes_count < 0:
+            return DaemonResponse(ok=False, error="bytes must be non-negative")
+        if direction_value not in {"h2d", "d2h", "unknown"}:
+            return DaemonResponse(ok=False, error="direction must be h2d, d2h, or unknown")
+        now = time.time()
         with self._lock:
+            self._reap_stale_sessions_locked(now)
             session = self._sessions.get(session_id)
             if session is None or not session.active:
                 return DaemonResponse(ok=False, error="unknown session")
@@ -123,12 +135,13 @@ class TurboBusDaemon:
                 session_id=session_id,
                 relay_gpu=relay_gpu,
                 chunks=chunks,
-                bytes=int(bytes_),
-                direction=str(direction),
+                bytes=bytes_count,
+                direction=direction_value,
             )
             self._reservations[reservation.reservation_id] = reservation
             session.active_chunks += chunks
             quota.active_chunks += chunks
+            self._touch_session_locked(session_id, now)
             return DaemonResponse(ok=True, payload={"reservation": asdict(reservation)})
 
     def release_transfer(self, reservation_id: str) -> DaemonResponse:
@@ -141,6 +154,7 @@ class TurboBusDaemon:
     def get_profile(self, target_gpu: int, relay_gpus: Iterable[int]) -> DaemonResponse:
         key = self._profile_key(target_gpu, relay_gpus)
         with self._lock:
+            self._purge_stale_profiles_locked(time.time())
             entry = self._profile_cache.get(key)
             return DaemonResponse(ok=True, payload={"profile": dict(entry) if entry else None})
 
@@ -153,7 +167,7 @@ class TurboBusDaemon:
         updated_at: float | None = None,
     ) -> DaemonResponse:
         target = int(target_gpu)
-        relays = [int(gpu) for gpu in relay_gpus]
+        relays = self._normalize_relays(relay_gpus)
         normalized = self._normalize_profile(profile, target)
         entry = {
             "target_gpu": target,
@@ -164,8 +178,25 @@ class TurboBusDaemon:
         }
         key = self._profile_key(target, relays)
         with self._lock:
+            self._purge_stale_profiles_locked(time.time())
             self._profile_cache[key] = entry
         return DaemonResponse(ok=True, payload={"profile": dict(entry)})
+
+    def invalidate_profile(self, target_gpu: int, relay_gpus: Iterable[int]) -> DaemonResponse:
+        key = self._profile_key(target_gpu, relay_gpus)
+        with self._lock:
+            removed = self._profile_cache.pop(key, None)
+            return DaemonResponse(
+                ok=True,
+                payload={
+                    "profile_key": key,
+                    "removed": removed is not None,
+                },
+            )
+
+    def reap_stale_sessions(self, now: float | None = None) -> list[str]:
+        with self._lock:
+            return self._reap_stale_sessions_locked(time.time() if now is None else float(now))
 
     def _release_reservation_locked(self, reservation_id: str) -> TransferReservation | None:
         reservation = self._reservations.pop(reservation_id, None)
@@ -179,8 +210,56 @@ class TurboBusDaemon:
             quota.active_chunks = max(0, quota.active_chunks - reservation.chunks)
         return reservation
 
+    def _close_session_locked(self, session_id: str) -> Session | None:
+        session = self._sessions.pop(session_id, None)
+        if session is None:
+            return None
+        session.active = False
+        session.closed_at = time.time()
+        for reservation_id, reservation in list(self._reservations.items()):
+            if reservation.session_id == session_id:
+                self._release_reservation_locked(reservation_id)
+        for gpu in session.relay_gpus:
+            quota = self._relay_quotas.get(gpu)
+            if quota is not None:
+                quota.sessions.discard(session_id)
+        return session
+
+    def _touch_session_locked(self, session_id: str, now: float | None = None) -> None:
+        session = self._sessions.get(session_id)
+        if session is None:
+            return
+        session.last_seen = time.time() if now is None else float(now)
+
+    def _reap_stale_sessions_locked(self, now: float) -> list[str]:
+        if self._session_timeout_seconds <= 0.0:
+            return []
+        expired = [
+            session_id
+            for session_id, session in self._sessions.items()
+            if session.active and session.last_seen > 0.0 and now - session.last_seen > self._session_timeout_seconds
+        ]
+        for session_id in expired:
+            self._close_session_locked(session_id)
+        return expired
+
+    def _purge_stale_profiles_locked(self, now: float) -> list[str]:
+        if self._profile_max_age_seconds <= 0.0:
+            return []
+        expired = [
+            key
+            for key, entry in self._profile_cache.items()
+            if now - float(entry.get("updated_at", 0.0) or 0.0) > self._profile_max_age_seconds
+        ]
+        for key in expired:
+            self._profile_cache.pop(key, None)
+        return expired
+
     def describe(self) -> DaemonResponse:
         with self._lock:
+            now = time.time()
+            self._reap_stale_sessions_locked(now)
+            self._purge_stale_profiles_locked(now)
             return DaemonResponse(
                 ok=True,
                 payload={
@@ -205,6 +284,12 @@ class TurboBusDaemon:
             )
 
     def handle_request(self, request: DaemonRequest) -> DaemonResponse:
+        try:
+            return self._handle_request(request)
+        except (KeyError, TypeError, ValueError) as exc:
+            return DaemonResponse(ok=False, error=f"invalid request: {exc}")
+
+    def _handle_request(self, request: DaemonRequest) -> DaemonResponse:
         if request.request_type == RequestType.REGISTER_SESSION:
             payload = request.payload
             return self.register_session(
@@ -233,6 +318,12 @@ class TurboBusDaemon:
             if reservation_id is None:
                 return DaemonResponse(ok=False, error="reservation_id is required")
             return self.release_transfer(str(reservation_id))
+        if request.request_type == RequestType.INVALIDATE_PROFILE:
+            payload = request.payload
+            return self.invalidate_profile(
+                target_gpu=int(payload["target_gpu"]),
+                relay_gpus=payload.get("relay_gpus", []),
+            )
         if request.request_type == RequestType.GET_PROFILE:
             payload = request.payload
             return self.get_profile(
@@ -255,10 +346,32 @@ class TurboBusDaemon:
             return self.describe()
         return DaemonResponse(ok=False, error=f"unsupported request: {request.request_type}")
 
+    def handle_wire_message(self, data: bytes | str) -> DaemonResponse:
+        try:
+            text = data.decode("utf-8") if isinstance(data, bytes) else str(data)
+            request_data = json.loads(text)
+            if not isinstance(request_data, dict):
+                raise ValueError("request must be a JSON object")
+            payload = request_data.get("payload", {})
+            if not isinstance(payload, dict):
+                raise ValueError("payload must be a JSON object")
+            request = DaemonRequest(
+                request_type=RequestType(request_data["request_type"]),
+                session_id=request_data.get("session_id"),
+                payload=payload,
+            )
+        except Exception as exc:
+            return DaemonResponse(ok=False, error=f"invalid request: {exc}")
+        return self.handle_request(request)
+
     @staticmethod
     def _profile_key(target_gpu: int, relay_gpus: Iterable[int]) -> str:
-        relays = ",".join(str(gpu) for gpu in sorted(int(gpu) for gpu in relay_gpus))
+        relays = ",".join(str(gpu) for gpu in TurboBusDaemon._normalize_relays(relay_gpus))
         return f"target={int(target_gpu)};relays={relays}"
+
+    @staticmethod
+    def _normalize_relays(relay_gpus: Iterable[int]) -> list[int]:
+        return sorted({int(gpu) for gpu in relay_gpus})
 
     @staticmethod
     def _normalize_profile(profile: dict, target_gpu: int) -> dict:
@@ -318,13 +431,7 @@ class TurboBusDaemon:
                         continue
 
                     line, _, _ = data.partition(b"\n")
-                    request_data = json.loads(line.decode("utf-8"))
-                    request = DaemonRequest(
-                        request_type=RequestType(request_data["request_type"]),
-                        session_id=request_data.get("session_id"),
-                        payload=request_data.get("payload", {}),
-                    )
-                    response = self.handle_request(request)
+                    response = self.handle_wire_message(line)
                     conn.sendall((json.dumps(asdict(response)) + "\n").encode("utf-8"))
         finally:
             server.close()

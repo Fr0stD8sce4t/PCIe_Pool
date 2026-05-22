@@ -13,10 +13,14 @@ from turbobus.daemon.server import TurboBusDaemon
 
 
 def send_request(path: str, request: dict) -> dict:
+    return send_raw_request(path, (json.dumps(request) + "\n").encode("utf-8"))
+
+
+def send_raw_request(path: str, request: bytes) -> dict:
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         client.connect(path)
-        client.sendall((json.dumps(request) + "\n").encode("utf-8"))
+        client.sendall(request)
         data = b""
         while True:
             chunk = client.recv(65536)
@@ -71,6 +75,31 @@ class DaemonSocketTest(unittest.TestCase):
                 },
             )
             self.assertTrue(closed["ok"])
+
+    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
+    def test_invalid_socket_request_returns_error_and_keeps_daemon_alive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            socket_path = os.path.join(tmpdir, "turbobusd.sock")
+            daemon = TurboBusDaemon(relay_gpus=[1])
+            thread = threading.Thread(
+                target=daemon.serve_forever,
+                args=(socket_path,),
+                daemon=True,
+            )
+            thread.start()
+
+            for _ in range(100):
+                if os.path.exists(socket_path):
+                    break
+                time.sleep(0.01)
+            self.assertTrue(os.path.exists(socket_path))
+
+            invalid = send_raw_request(socket_path, b"{not-json\n")
+            self.assertFalse(invalid["ok"])
+            self.assertIn("invalid request", invalid["error"])
+
+            profile = send_request(socket_path, {"request_type": "PROFILE"})
+            self.assertTrue(profile["ok"])
 
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
     def test_client_reserve_and_release_transfer(self) -> None:
@@ -187,6 +216,14 @@ class DaemonSocketTest(unittest.TestCase):
             loaded = client.get_profile(target_gpu=0, relay_gpus=[1])
             self.assertTrue(loaded.ok)
             self.assertEqual(loaded.payload["profile"]["profile_bytes"], 4096)
+
+            invalidated = client.invalidate_profile(target_gpu=0, relay_gpus=[1])
+            self.assertTrue(invalidated.ok)
+            self.assertTrue(invalidated.payload["removed"])
+
+            missing_again = client.get_profile(target_gpu=0, relay_gpus=[1])
+            self.assertTrue(missing_again.ok)
+            self.assertIsNone(missing_again.payload["profile"])
 
 
 if __name__ == "__main__":

@@ -117,3 +117,14 @@ class TurboBusDaemonClient:
                 },
             )
         )
+
+    def invalidate_profile(self, target_gpu: int, relay_gpus: list[int]) -> DaemonResponse:
+        return self.send(
+            DaemonRequest(
+                request_type=RequestType.INVALIDATE_PROFILE,
+                payload={
+                    "target_gpu": int(target_gpu),
+                    "relay_gpus": [int(gpu) for gpu in relay_gpus],
+                },
+            )
+        )

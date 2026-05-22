@@ -8,7 +8,6 @@ from .offload_store import (
     OffloadBlock,
     OffloadBlockInfo,
     OffloadStore,
-    TransferStats,
 )
 
 
@@ -17,7 +16,6 @@ class TrainingOffloadManager(OffloadStore):
 
     def __init__(self, runtime) -> None:
         super().__init__(runtime)
-        self.store = self
 
     def add_bucket(
         self,
@@ -75,9 +73,6 @@ class TrainingOffloadManager(OffloadStore):
             )
         return blocks
 
-    def names(self) -> list[str]:
-        return super().names()
-
     def bucket(self, name: str) -> OffloadBlock:
         return self.get_block(name)
 
@@ -115,22 +110,10 @@ class TrainingOffloadManager(OffloadStore):
         return self.submit_offload_buckets(names)
 
     def offload_all(self) -> list:
-        return self.offload_buckets(self.names())
-
-    def wait(self, name: str) -> None:
-        super().wait(name)
-
-    def wait_many(self, names: Iterable[str]) -> None:
-        super().wait_many(names)
+        return self.evict_many(self.names())
 
     def wait_all(self) -> None:
         self.wait_many(self.names())
-
-    def transfer_stats(self, name: str) -> TransferStats | None:
-        return super().transfer_stats(name)
-
-    def transfer_stats_many(self, names: Iterable[str]) -> TransferStats:
-        return super().transfer_stats_many(names)
 
     def mark_on_cpu(self, names: Iterable[str] | None = None) -> None:
         selected = self.names() if names is None else list(names)

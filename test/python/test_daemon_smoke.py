@@ -26,6 +26,8 @@ class DaemonSmokeTest(unittest.TestCase):
             relay_gpus="5",
             daemon_max_sessions_per_relay=2,
             daemon_max_inflight_chunks_per_relay=128,
+            daemon_session_timeout_seconds=30.0,
+            daemon_profile_max_age_seconds=60.0,
         )
 
         command = build_daemon_command(args, "/tmp/turbobusd.sock")
@@ -37,6 +39,10 @@ class DaemonSmokeTest(unittest.TestCase):
         self.assertIn("5", command)
         self.assertIn("--max-inflight-chunks-per-relay", command)
         self.assertIn("128", command)
+        self.assertIn("--session-timeout-seconds", command)
+        self.assertIn("30.0", command)
+        self.assertIn("--profile-max-age-seconds", command)
+        self.assertIn("60.0", command)
 
     def test_build_parser_accepts_daemon_socket_and_quota_arguments(self) -> None:
         parser = build_parser()

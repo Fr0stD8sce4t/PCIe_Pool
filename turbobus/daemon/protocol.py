@@ -10,10 +10,9 @@ class RequestType(str, Enum):
     PROFILE = "PROFILE"
     GET_PROFILE = "GET_PROFILE"
     PUT_PROFILE = "PUT_PROFILE"
+    INVALIDATE_PROFILE = "INVALIDATE_PROFILE"
     RESERVE_TRANSFER = "RESERVE_TRANSFER"
     RELEASE_TRANSFER = "RELEASE_TRANSFER"
-    FETCH_TO_GPU = "FETCH_TO_GPU"
-    WAIT = "WAIT"
     CLOSE_SESSION = "CLOSE_SESSION"
 
 
@@ -25,6 +24,9 @@ class Session:
     max_inflight_chunks: int
     active_chunks: int = 0
     active: bool = True
+    created_at: float = 0.0
+    last_seen: float = 0.0
+    closed_at: float | None = None
 
 
 @dataclass

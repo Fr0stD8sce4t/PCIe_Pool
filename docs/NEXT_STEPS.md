@@ -6,21 +6,45 @@ from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
 
 ## Current
 
-### 15. Add production-shaped offload clients for the three paper workloads
+### 17. Build a paper-style validation harness
 
-Give model loading, KV offload, and training offload a small client-facing
-batch submit/wait API that sits on top of the shared Runtime-backed managers.
-Keep the shared Runtime and block-store layers underneath.
+Create one reproduction entry point that runs the three Runtime-backed
+workload paths and reports comparable paper metrics from a stable output
+format.
 
 Acceptance:
 
-- Each workload exposes a batch client entry point that returns a batch object
-  with `wait()` and `transfer_stats()`.
-- Existing list-based helper paths stay available for benchmarks and examples.
-- The shared Runtime path still owns transfer policy, statistics, and range
-  batching.
+- The harness can run model loading, vLLM KV save/restore, and training
+  offload individually or as one suite.
+- Output includes TTFT or TTFT proxy, restore latency, throughput, iteration
+  time, transfer bytes, path split, daemon reservation status, and fallback
+  reason when each metric is available.
+- The harness uses existing Runtime-backed workload clients and benchmark
+  scripts instead of duplicating transfer policy.
+- JSON output and compact summary lines are stable enough for paper-result
+  comparison and unit tests.
 
 ## Completed
+
+- 2026-05-22: Expand daemon work toward the paper architecture.
+  - Relay lists are normalized before ownership accounting, and invalid
+    session or reservation payloads are rejected before they mutate quota.
+  - Stale session reaping now releases active reservations and relay ownership,
+    and profile cache entries can be invalidated explicitly or purged by age.
+  - Socket request parsing now returns structured errors for malformed input
+    while keeping the daemon alive for later clients.
+  - The daemon smoke wrapper can pass session timeout and profile cache TTL
+    options through to the local daemon.
+
+- 2026-05-22: Add production-shaped offload clients for the three paper
+  workloads.
+  - `ModelWeightLoader`, `TrainingOffloadManager`, and
+    `InferenceKVSlotAdapter` now expose batch submit helpers that return
+    `OffloadBatch` objects with `wait()` and `transfer_stats()`.
+  - Existing list-based helper methods remain in place for benchmarks and
+    examples.
+  - The shared Runtime path still owns transfer policy, statistics, and range
+    batching.
 
 - 2026-05-22: Build the real vLLM KV offload integration path.
   - First-request save intent is now sent through `kv_transfer_params`
@@ -146,8 +170,9 @@ Acceptance:
 
 ## Upcoming
 
-- Add production-shaped offload clients for the three paper workloads.
-- Expand daemon work toward the paper architecture.
+- Close any remaining framework-specific save/restore or bucket-hook gaps
+  needed to make the three workloads behave like the paper system on the
+  target server.
 
 ## Working Rules
 

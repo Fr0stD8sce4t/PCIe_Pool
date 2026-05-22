@@ -286,41 +286,46 @@ class OffloadStore:
         return list(self.submit_prefetch_many(names).handles)
 
     def submit_prefetch_many(self, names: Iterable[str]) -> OffloadBatch:
-        blocks = [self.block(name) for name in names]
-        if not blocks:
-            return OffloadBatch("prefetch", (), (), self)
-        if self._can_use_range_batch(blocks):
-            ranges = self._ranges(blocks, "prefetch")
-            handle = self.runtime.fetch_ranges_to_gpu(
-                blocks[0].cpu_tensor,
-                blocks[0].gpu_tensor,
-                ranges,
-            )
-            self._record_many(blocks, handle, "prefetch", BlockState.PREFETCHING)
-            handles = tuple(handle for _ in blocks)
-        else:
-            handles = tuple(self.prefetch(block.name) for block in blocks)
-        return OffloadBatch("prefetch", tuple(block.name for block in blocks), handles, self)
+        return self._submit_many(names, "prefetch")
 
     def evict_many(self, names: Iterable[str]) -> list:
         return list(self.submit_evict_many(names).handles)
 
     def submit_evict_many(self, names: Iterable[str]) -> OffloadBatch:
+        return self._submit_many(names, "evict")
+
+    def _submit_many(self, names: Iterable[str], operation: str) -> OffloadBatch:
         blocks = [self.block(name) for name in names]
         if not blocks:
-            return OffloadBatch("evict", (), (), self)
+            return OffloadBatch(operation, (), (), self)
         if self._can_use_range_batch(blocks):
-            ranges = self._ranges(blocks, "evict")
-            handle = self.runtime.offload_ranges_to_cpu(
-                blocks[0].gpu_tensor,
-                blocks[0].cpu_tensor,
-                ranges,
-            )
-            self._record_many(blocks, handle, "evict", BlockState.EVICTING)
+            ranges = self._ranges(blocks, operation)
+            if operation == "prefetch":
+                handle = self.runtime.fetch_ranges_to_gpu(
+                    blocks[0].cpu_tensor,
+                    blocks[0].gpu_tensor,
+                    ranges,
+                )
+                state = BlockState.PREFETCHING
+            elif operation == "evict":
+                handle = self.runtime.offload_ranges_to_cpu(
+                    blocks[0].gpu_tensor,
+                    blocks[0].cpu_tensor,
+                    ranges,
+                )
+                state = BlockState.EVICTING
+            else:
+                raise ValueError(f"unknown offload operation: {operation}")
+            self._record_many(blocks, handle, operation, state)
             handles = tuple(handle for _ in blocks)
         else:
-            handles = tuple(self.evict(block.name) for block in blocks)
-        return OffloadBatch("evict", tuple(block.name for block in blocks), handles, self)
+            if operation == "prefetch":
+                handles = tuple(self.prefetch(block.name) for block in blocks)
+            elif operation == "evict":
+                handles = tuple(self.evict(block.name) for block in blocks)
+            else:
+                raise ValueError(f"unknown offload operation: {operation}")
+        return OffloadBatch(operation, tuple(block.name for block in blocks), handles, self)
 
     def wait(self, name: str) -> None:
         block = self.block(name)

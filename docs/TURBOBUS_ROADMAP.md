@@ -1,28 +1,21 @@
 # TurboBus Roadmap
 
-This roadmap pins the active project goal in the repository so future coding
-sessions continue the same main line instead of drifting into isolated test or
-benchmark cleanup.
+TurboBus should reproduce the paper system, not just expose a transfer API.
+The codebase already has a working transport engine; the remaining plan is to
+turn it into a full single-node PCIe bandwidth pooling system for real LLM
+workloads.
 
-## Paper Reproduction Goal
+## Paper Target
 
-TurboBus should reproduce the core system idea from "TurboBus: Pooling PCIe
-Bandwidth for LLM Workloads via Scale-Up Fabrics": use idle relay GPUs to lend
-their PCIe bandwidth to a target GPU, while GPU-to-GPU movement uses NVLink,
-NVSwitch, Infinity Fabric, or another local scale-up fabric.
-
-The system must improve CPU/GPU transfer throughput for real large-model
-workloads:
+The system must show that idle relay GPUs can lend their PCIe bandwidth to a
+target GPU through local scale-up fabrics such as NVLink, NVSwitch, or
+Infinity Fabric. The result should improve:
 
 - on-demand model loading;
 - vLLM KV cache save and restore;
-- training offload for parameter or optimizer-state buckets.
+- training offload for parameters or optimizer state.
 
-Microbenchmarks are useful for debugging, but they are not the final system.
-
-## Target Architecture
-
-Keep the code organized into four layers.
+## What The Code Must Deliver
 
 ### 1. Native Transfer Engine
 
@@ -51,7 +44,7 @@ Own the stable transfer API used by every workload:
 - range-batched transfer for KV blocks and buckets;
 - transfer stats and plan trace conversion.
 
-Benchmarks and framework integrations should call Runtime instead of
+Benchmarks and framework integrations should call `Runtime` instead of
 duplicating transfer policy.
 
 ### 3. Daemon Resource Manager
@@ -80,69 +73,37 @@ Own framework-specific adaptation:
 This layer should translate workload events into Runtime transfers and report
 clear metrics. It should not implement its own PCIe pooling logic.
 
-## Refactor Direction
+## Remaining Gaps To Reach The Paper
 
-The project needs refactoring, but only refactoring that directly supports the
-paper reproduction goal.
+- The workload managers need to stay thin, but their batch clients should be
+  exercised through one common paper-reproduction harness.
+- vLLM save and restore should remain on the official connector lifecycle, not
+  on example-side helper code.
+- Daemon policy needs to behave like a real shared resource manager under
+  contention and failure, not just a reservation stub.
+- The project needs benchmark/reporting paths that measure the same outcomes
+  the paper claims: TTFT, restore latency, throughput, iteration time,
+  transfer bytes, path split, and fallback reason.
 
-Required refactors:
+## Reproduction Order
 
-- split Runtime policy helpers out of the large `turbobus/runtime.py` module;
-- keep native path planning and execution independent from workload concepts;
-- make daemon reservation a first-class Runtime input before relay planning;
-- move vLLM save and restore into the connector lifecycle;
-- keep benchmarks thin and driven by Runtime/connector APIs.
+1. Finish the daemon and reservation behavior until relay sharing is clearly
+   controlled and explainable.
+2. Close the remaining workload integration gaps so model loading, KV offload,
+   and training offload all run through the same Runtime-backed client shape.
+3. Build a paper-style validation harness that can run the three workloads
+   end to end and report the paper metrics from one output format.
+4. Keep tightening correctness and performance until the measured behavior is
+   close to the paper claims on the target server.
 
-Avoid broad renames, formatting-only churn, or test-only work that does not
-unblock one of the items above.
+## Non-Goals
 
-## Reproduction Workloads
+Keep the project single-node and CUDA-focused unless a separate request asks
+for more:
 
-### On-Demand Model Loading
-
-Implement model weight bucket transfers from CPU pinned memory to GPU buffers.
-Measure load latency, TTFT proxy, direct/relay/pool speedups, path split, and
-relay pressure.
-
-### KV Cache Offloading
-
-Use the real vLLM `KVConnectorBase_V1` path. Save prefixes from vLLM-owned KV
-cache tensors into TurboBus CPU backing, then restore later requests through
-connector metadata and Runtime range transfers.
-
-Measure restore latency, save overhead, TTFT, throughput, transfer bytes,
-direct chunks, relay chunks, and auto fallback reason.
-
-### Training Offload
-
-Expose PyTorch bucket APIs suitable for ZeRO-Offload style parameter or
-optimizer-state movement. Measure iteration time, transfer time, path split,
-and overlap with computation.
-
-## Current Baseline
-
-The repository already has:
-
-- direct H2D and D2H transfers;
-- relay H2D and D2H transfers;
-- pooled direct plus relay transfers;
-- direction-aware direct/relay profiling;
-- chunk planning, path stats, and dynamic weights;
-- Python Runtime transfer modes and auto selection;
-- range-batched transfer APIs;
-- `OffloadStore` for named block movement;
-- vLLM KV connector save/restore lifecycle pieces;
-- daemon session, quota, and reservation foundations;
-- low-level and vLLM connector benchmarks.
-
-## Main Rule
-
-Tests are verification, not the main deliverable. A coding turn should not end
-with only tests, summaries, docs, or benchmark parsing unless that work directly
-unblocks the next roadmap code task.
-
-Verification should be proportional to the change. Do not run full Python
-discovery, native CUDA builds, profiler checks, or long vLLM sweeps after every
-small update. Use targeted Python tests for Python-only changes, native server
-checks for C++/CUDA/pybind changes, small vLLM checks for connector changes,
-and milestone sweeps only when a larger feature is ready to measure.
+- no RDMA;
+- no cross-node transfer;
+- no HMC integration;
+- no daemon-side data movement;
+- no broad vLLM scheduler rewrite;
+- no full KV cache state machine.

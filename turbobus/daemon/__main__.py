@@ -11,6 +11,8 @@ def main() -> None:
     parser.add_argument("--relay-gpus", default="1", help="Comma-separated relay GPU ids")
     parser.add_argument("--max-sessions-per-relay", type=int, default=1)
     parser.add_argument("--max-inflight-chunks-per-relay", type=int, default=8)
+    parser.add_argument("--session-timeout-seconds", type=float, default=0.0)
+    parser.add_argument("--profile-max-age-seconds", type=float, default=0.0)
     parser.add_argument(
         "--socket-path",
         default=None,
@@ -23,6 +25,8 @@ def main() -> None:
         relays,
         max_sessions_per_relay=args.max_sessions_per_relay,
         max_inflight_chunks_per_relay=args.max_inflight_chunks_per_relay,
+        session_timeout_seconds=args.session_timeout_seconds,
+        profile_max_age_seconds=args.profile_max_age_seconds,
     )
     if args.socket_path:
         daemon.serve_forever(args.socket_path)

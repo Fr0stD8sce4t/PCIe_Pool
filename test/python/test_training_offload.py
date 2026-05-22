@@ -6,7 +6,6 @@ from turbobus import (
     BlockState,
     OffloadBatch,
     TrainingOffloadManager,
-    TrainingOffloadStore,
     TransferStats,
 )
 
@@ -174,9 +173,6 @@ class TrainingOffloadManagerTest(unittest.TestCase):
         self.assertEqual(bucket.state, BlockState.CPU)
         self.assertIsNone(bucket.last_handle)
         self.assertIsNone(bucket.last_operation)
-
-    def test_training_offload_store_alias_points_to_manager(self) -> None:
-        self.assertIs(TrainingOffloadStore, TrainingOffloadManager)
 
 
 if __name__ == "__main__":

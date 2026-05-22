@@ -6,9 +6,7 @@ from types import SimpleNamespace
 
 from turbobus import (
     BlockState,
-    KVBlockStore,
     OffloadBatch,
-    OffloadManager,
     OffloadStore,
     OffloadBlockInfo,
     TransferStats,
@@ -28,10 +26,9 @@ class FakeTensor:
 
 
 class FakeHandle:
-    def __init__(self, label: str, stats=None) -> None:
-        self.label = label
+    def __init__(self, stats=None) -> None:
         self.wait_calls = 0
-        self.stats = {"label": label} if stats is None else stats
+        self.stats = stats
 
     def wait(self) -> None:
         self.wait_calls += 1
@@ -45,23 +42,21 @@ class FakeRuntime:
 
     def fetch_to_gpu(self, cpu_tensor, gpu_tensor):
         self.calls.append(("prefetch", cpu_tensor, gpu_tensor))
-        return FakeHandle("prefetch")
+        return FakeHandle({"label": "prefetch"})
 
     def offload_to_cpu(self, gpu_tensor, cpu_tensor):
         self.calls.append(("evict", gpu_tensor, cpu_tensor))
-        return FakeHandle("evict")
+        return FakeHandle({"label": "evict"})
 
     def fetch_ranges_to_gpu(self, cpu_tensor, gpu_tensor, ranges):
         self.calls.append(("prefetch_ranges", cpu_tensor, gpu_tensor, ranges))
         return FakeHandle(
-            "prefetch_ranges",
             {"bytes": sum(item["bytes"] for item in ranges), "direct_chunks": len(ranges)},
         )
 
     def offload_ranges_to_cpu(self, gpu_tensor, cpu_tensor, ranges):
         self.calls.append(("evict_ranges", gpu_tensor, cpu_tensor, ranges))
         return FakeHandle(
-            "evict_ranges",
             {"bytes": sum(item["bytes"] for item in ranges), "relay_chunks": len(ranges)},
         )
 
@@ -356,10 +351,6 @@ class OffloadStoreTest(unittest.TestCase):
             TransferStats(bytes=16, relay_chunks=2),
         )
 
-    def test_manager_aliases_point_to_store(self) -> None:
-        self.assertIs(OffloadManager, OffloadStore)
-        self.assertIs(KVBlockStore, OffloadStore)
-
     def test_wait_before_transfer_is_noop(self) -> None:
         store = OffloadStore(FakeRuntime())
         store.add("kv0", FakeTensor(1), object())
@@ -367,10 +358,7 @@ class OffloadStoreTest(unittest.TestCase):
         store.wait("kv0")
 
     def test_summarize_transfer_handles_deduplicates_handles(self) -> None:
-        handle = FakeHandle(
-            "transfer",
-            SimpleNamespace(bytes=128, direct_chunks=2, relay_chunks=1),
-        )
+        handle = FakeHandle(SimpleNamespace(bytes=128, direct_chunks=2, relay_chunks=1))
 
         stats = summarize_transfer_handles([handle, handle])
 
@@ -382,9 +370,9 @@ class OffloadStoreTest(unittest.TestCase):
 
     def test_summarize_transfer_handles_accepts_dict_stats(self) -> None:
         handles = [
-            FakeHandle("direct", {"bytes": 64, "direct_chunks": 1}),
-            FakeHandle("relay", {"bytes": 32, "relay_chunks": 1}),
-            FakeHandle("missing", None),
+            FakeHandle({"bytes": 64, "direct_chunks": 1}),
+            FakeHandle({"bytes": 32, "relay_chunks": 1}),
+            FakeHandle(None),
         ]
 
         stats = summarize_transfer_handles(handles)

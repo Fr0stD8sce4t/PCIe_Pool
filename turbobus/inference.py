@@ -30,7 +30,6 @@ class InferenceKVSlotAdapter(OffloadStore):
         gpu_kv_backing,
     ) -> None:
         super().__init__(runtime)
-        self.manager = self
         self.cpu_backing = cpu_backing
         self.gpu_kv_backing = gpu_kv_backing
 
@@ -49,14 +48,10 @@ class InferenceKVSlotAdapter(OffloadStore):
             )
 
     def restore_prefix(self, names: Iterable[str]) -> list:
-        names, handles = self.submit_restore_prefix(names)
-        self.wait_prefix(names)
-        return handles
+        return self._run_prefix_transfer(names, self.submit_restore_prefix)
 
     def save_prefix(self, names: Iterable[str]) -> list:
-        names, handles = self.submit_save_prefix(names)
-        self.wait_prefix(names)
-        return handles
+        return self._run_prefix_transfer(names, self.submit_save_prefix)
 
     def submit_restore_prefix(self, names: Iterable[str]) -> tuple[list[str], list]:
         names = list(names)
@@ -89,6 +84,11 @@ class InferenceKVSlotAdapter(OffloadStore):
 
     def transfer_stats(self, names: Iterable[str]) -> TransferStats:
         return self.transfer_stats_many(names)
+
+    def _run_prefix_transfer(self, names: Iterable[str], submit) -> list:
+        names, handles = submit(names)
+        self.wait_prefix(names)
+        return handles
 
 
 def make_contiguous_kv_slots(

@@ -9,6 +9,49 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- Expand daemon work toward the paper architecture
+  - Normalized relay lists before ownership accounting and rejected invalid
+    session or reservation payloads before they could mutate quota.
+  - Added stale-session reaping that releases reservations and relay
+    ownership, plus explicit profile-cache invalidation and age-based purge.
+  - Hardened socket request parsing so malformed input returns a structured
+    error without crashing the daemon.
+  - Extended the daemon smoke wrapper with timeout and profile cache TTL
+    options.
+
+- Trim legacy test-only wrappers and alias assertions
+  - Removed alias assertion tests for `ModelLoader`, `TrainingOffloadStore`,
+    `OffloadManager`, and `KVBlockStore`.
+  - Simplified the local `FakeHandle` helper in `test_offload_store.py`.
+  - Deleted the unused `request_finished_all_groups()` wrapper from
+    `turbobus.vllm_kv_connector`.
+  - Verification: `python -m unittest discover -s test\python -p "test_offload_store.py" -v`,
+    `python -m unittest discover -s test\python -p "test_model_loading.py" -v`,
+    `python -m unittest discover -s test\python -p "test_training_offload.py" -v`,
+    `python -m unittest discover -s test\python -p "test_vllm_kv_connector.py" -v`,
+    `python -m compileall turbobus\vllm_kv_connector.py test\python\test_offload_store.py test\python\test_model_loading.py test\python\test_training_offload.py test\python\test_vllm_kv_connector.py -q`.
+
+- Trim redundant block-store wrappers and shared restore/save loops
+  - Removed self-alias fields from the workload adapter classes.
+  - Dropped several pure pass-through methods that were already covered by
+    `OffloadStore`.
+  - Moved repeated batch submission branching into shared helpers in
+    `OffloadStore` and `VllmKVSlotAdapter`.
+  - Verification: `python -m unittest discover -s test\python -p "test_offload_store.py" -v`,
+    `python -m unittest discover -s test\python -p "test_model_loading.py" -v`,
+    `python -m unittest discover -s test\python -p "test_training_offload.py" -v`,
+    `python -m unittest discover -s test\python -p "test_inference_adapters.py" -v`,
+    `python -m compileall turbobus\offload_store.py turbobus\model_loading.py turbobus\training_offload.py turbobus\inference.py turbobus\vllm.py -q`.
+
+- Reframe the TurboBus plan around paper reproduction milestones
+  - Updated the roadmap to center the paper target, the four code layers, the
+    remaining gaps, and the reproduction order.
+  - Moved the completed workload client work out of `NEXT_STEPS.md`'s Current
+    section.
+  - Reordered the next steps so daemon control-plane work is the active focus
+    and the paper-style validation harness is the next follow-up.
+  - Verification: `git diff --check`.
+
 - Add batch client APIs to the offload workload managers
   - `ModelWeightLoader`, `TrainingOffloadManager`, and
     `InferenceKVSlotAdapter` now expose batch submit helpers that return
@@ -192,6 +235,57 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
   - Connector configuration was consolidated around shared keys.
 
 ## Last Verified Checks
+
+For daemon expansion and wrapper cleanup:
+
+```text
+python -m unittest discover -s test\python -p "test_daemon_state.py" -v
+python -m unittest discover -s test\python -p "test_daemon_socket.py" -v
+python -m unittest discover -s test\python -p "test_runtime_handle.py" -v
+python -m unittest discover -s test\python -p "test_daemon_smoke.py" -v
+python -m unittest discover -s test\python -p "test_benchmark_daemon_support.py" -v
+python -m unittest discover -s test\python -p "test_offload_store.py" -v
+python -m unittest discover -s test\python -p "test_model_loading.py" -v
+python -m unittest discover -s test\python -p "test_training_offload.py" -v
+python -m unittest discover -s test\python -p "test_inference_adapters.py" -v
+python -m unittest discover -s test\python -p "test_vllm_kv_connector.py" -v
+python -m compileall turbobus benchmarks examples test\python -q
+git diff --check
+```
+
+Result: passed.
+
+For legacy test-wrapper cleanup:
+
+```text
+python -m unittest discover -s test\python -p "test_offload_store.py" -v
+python -m unittest discover -s test\python -p "test_model_loading.py" -v
+python -m unittest discover -s test\python -p "test_training_offload.py" -v
+python -m unittest discover -s test\python -p "test_vllm_kv_connector.py" -v
+python -m compileall turbobus\vllm_kv_connector.py test\python\test_offload_store.py test\python\test_model_loading.py test\python\test_training_offload.py test\python\test_vllm_kv_connector.py -q
+```
+
+Result: passed.
+
+For redundant wrapper cleanup:
+
+```text
+python -m unittest discover -s test\python -p "test_offload_store.py" -v
+python -m unittest discover -s test\python -p "test_model_loading.py" -v
+python -m unittest discover -s test\python -p "test_training_offload.py" -v
+python -m unittest discover -s test\python -p "test_inference_adapters.py" -v
+python -m compileall turbobus\offload_store.py turbobus\model_loading.py turbobus\training_offload.py turbobus\inference.py turbobus\vllm.py -q
+```
+
+Result: passed.
+
+For the roadmap refocus:
+
+```text
+git diff --check
+```
+
+Result: passed.
 
 For workload batch client APIs:
 
@@ -519,5 +613,5 @@ Then run native and vLLM checks on target GPU 6 with relay GPU 5.
 
 ## Next Task
 
-Start with the task under `## Current` in `docs/NEXT_STEPS.md`: add
-production-shaped offload clients for the three paper workloads.
+Start with the task under `## Current` in `docs/NEXT_STEPS.md`: build a
+paper-style validation harness.

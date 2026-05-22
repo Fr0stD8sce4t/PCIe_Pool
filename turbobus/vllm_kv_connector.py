@@ -692,14 +692,6 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             "turbobus.matched_tokens": matched_tokens,
         }
 
-    def request_finished_all_groups(self, request, block_ids):
-        flat_block_ids = [
-            block_id
-            for group_block_ids in block_ids
-            for block_id in group_block_ids
-        ]
-        return self.request_finished(request, flat_block_ids)
-
     def _get_connector_metadata(self):
         return getattr(self, "_connector_metadata", None)
 
