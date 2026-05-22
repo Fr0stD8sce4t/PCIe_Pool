@@ -14,6 +14,28 @@ std::size_t AssignedBytes(const turbobus::PathAssignment& assignment) {
   return bytes;
 }
 
+std::size_t AssignedChunks(const turbobus::TransferPlan& plan,
+                           turbobus::PathKind kind, int relay_device) {
+  for (const auto& assignment : plan.assignments) {
+    if (assignment.path.kind == kind &&
+        assignment.path.relay_device == relay_device) {
+      return assignment.chunks.size();
+    }
+  }
+  return 0;
+}
+
+double EffectiveBandwidth(const turbobus::TransferPlan& plan,
+                          turbobus::PathKind kind, int relay_device) {
+  for (const auto& assignment : plan.assignments) {
+    if (assignment.path.kind == kind &&
+        assignment.path.relay_device == relay_device) {
+      return assignment.path.effective_bw_gbps;
+    }
+  }
+  return 0.0;
+}
+
 }  // namespace
 
 int main() {
@@ -114,6 +136,68 @@ int main() {
   }
   assert(has_direct_d2h);
   assert(has_relay_d2h);
+
+  turbobus::ProfileResult multi_relay_profile;
+  multi_relay_profile.target_device = 0;
+  multi_relay_profile.direct_h2d_bw_gbps = 20.0;
+  multi_relay_profile.direct_d2h_bw_gbps = 10.0;
+
+  turbobus::RelayProfile fast_h2d_relay;
+  fast_h2d_relay.relay_device = 1;
+  fast_h2d_relay.target_device = 0;
+  fast_h2d_relay.h2d_bw_gbps = 40.0;
+  fast_h2d_relay.d2h_bw_gbps = 20.0;
+  fast_h2d_relay.p2p_bw_gbps = 100.0;
+  fast_h2d_relay.effective_bw_gbps = 40.0;
+  fast_h2d_relay.effective_d2h_bw_gbps = 20.0;
+  fast_h2d_relay.p2p_enabled = true;
+  multi_relay_profile.relays.push_back(fast_h2d_relay);
+
+  turbobus::RelayProfile fast_d2h_relay;
+  fast_d2h_relay.relay_device = 2;
+  fast_d2h_relay.target_device = 0;
+  fast_d2h_relay.h2d_bw_gbps = 10.0;
+  fast_d2h_relay.d2h_bw_gbps = 30.0;
+  fast_d2h_relay.p2p_bw_gbps = 100.0;
+  fast_d2h_relay.effective_bw_gbps = 10.0;
+  fast_d2h_relay.effective_d2h_bw_gbps = 30.0;
+  fast_d2h_relay.p2p_enabled = true;
+  multi_relay_profile.relays.push_back(fast_d2h_relay);
+
+  const auto multi_h2d_plan =
+      planner.Plan(224ull * 1024ull * 1024ull, chunk_bytes,
+                   multi_relay_profile, turbobus::TransferMode::Pool);
+  assert(multi_h2d_plan.assignments.size() == 3);
+  assert(AssignedChunks(multi_h2d_plan, turbobus::PathKind::DirectH2D,
+                        turbobus::kHostDevice) == 4);
+  assert(AssignedChunks(multi_h2d_plan, turbobus::PathKind::RelayH2DThenP2P,
+                        1) == 8);
+  assert(AssignedChunks(multi_h2d_plan, turbobus::PathKind::RelayH2DThenP2P,
+                        2) == 2);
+  assert(EffectiveBandwidth(multi_h2d_plan, turbobus::PathKind::DirectH2D,
+                            turbobus::kHostDevice) == 20.0);
+  assert(EffectiveBandwidth(multi_h2d_plan,
+                            turbobus::PathKind::RelayH2DThenP2P, 1) == 40.0);
+  assert(EffectiveBandwidth(multi_h2d_plan,
+                            turbobus::PathKind::RelayH2DThenP2P, 2) == 10.0);
+
+  const auto multi_d2h_plan =
+      planner.Plan(192ull * 1024ull * 1024ull, chunk_bytes,
+                   multi_relay_profile, turbobus::TransferMode::Pool, 2, 0.0,
+                   0.0, turbobus::TransferDirection::D2H);
+  assert(multi_d2h_plan.assignments.size() == 3);
+  assert(AssignedChunks(multi_d2h_plan, turbobus::PathKind::DirectD2H,
+                        turbobus::kHostDevice) == 2);
+  assert(AssignedChunks(multi_d2h_plan, turbobus::PathKind::RelayP2PThenD2H,
+                        1) == 4);
+  assert(AssignedChunks(multi_d2h_plan, turbobus::PathKind::RelayP2PThenD2H,
+                        2) == 6);
+  assert(EffectiveBandwidth(multi_d2h_plan, turbobus::PathKind::DirectD2H,
+                            turbobus::kHostDevice) == 10.0);
+  assert(EffectiveBandwidth(multi_d2h_plan,
+                            turbobus::PathKind::RelayP2PThenD2H, 1) == 20.0);
+  assert(EffectiveBandwidth(multi_d2h_plan,
+                            turbobus::PathKind::RelayP2PThenD2H, 2) == 30.0);
 
   std::vector<turbobus::TransferRange> ranges;
   ranges.push_back({0, 64, 10});

@@ -9,9 +9,12 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
-- Documentation update in progress
-  - Added the rule that every future code-advancement final report should
-    include related test commands tailored to the files and behavior changed.
+- Multi-relay planner coverage in progress
+  - Extended the C++ planner test with two relay paths.
+  - H2D asserts direct/relay chunk assignment follows 20/40/10 effective
+    bandwidth.
+  - D2H asserts direct/relay chunk assignment follows 10/20/30
+    direction-specific effective bandwidth.
 
 - Split Runtime plan trace helper from Runtime
   - Added `turbobus/plan_trace.py`.
@@ -99,6 +102,38 @@ git diff --check
 
 Result: passed.
 
+For the multi-relay planner coverage:
+
+```text
+git diff --check
+```
+
+Result: passed.
+
+```text
+cmake -S test/cpp -B build-test
+```
+
+Result: not run locally because `cmake` is not installed in this Windows
+environment.
+
+```text
+python - <<'PY'
+def counts(bws, chunks):
+    scores = [0 for _ in bws]
+    out = [0 for _ in bws]
+    for _ in range(chunks):
+        i = min(range(len(bws)), key=lambda j: scores[j] / bws[j])
+        out[i] += 1
+        scores[i] += 1
+    return out
+print("h2d", counts([20, 40, 10], 14))
+print("d2h", counts([10, 20, 30], 12))
+PY
+```
+
+Result: `h2d [4, 8, 2]`, `d2h [2, 4, 6]`.
+
 Local C++/CUDA checks were not run because `cmake` is not installed in this
 environment.
 
@@ -116,6 +151,6 @@ Then run native and vLLM checks on target GPU 6 with relay GPU 5.
 
 ## Next Task
 
-Start with the task under `## Current` in `docs/NEXT_STEPS.md`: add
-multi-relay planner coverage for two relay GPUs and direction-specific
-bandwidth fields.
+Start with the task under `## Current` in `docs/NEXT_STEPS.md`: improve
+multi-relay executor behavior so relay staging slots and stats are isolated per
+relay.

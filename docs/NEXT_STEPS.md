@@ -6,19 +6,6 @@ from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
 
 ## Current
 
-### 3. Add Multi-Relay Planner Coverage
-
-Extend C++ planner tests for two relay GPUs with different effective
-bandwidths. Verify chunk assignment roughly follows path bandwidth. Verify H2D
-and D2H both use direction-specific bandwidth fields.
-
-Acceptance:
-
-- Planner test passes.
-- No vLLM or Python policy enters the native planner.
-
-## Upcoming
-
 ### 4. Improve Multi-Relay Executor Behavior
 
 Ensure relay staging slots and streams are isolated per relay. Verify pool
@@ -29,6 +16,8 @@ Acceptance:
 
 - CUDA correctness tests pass on a multi-GPU server.
 - Path stats show all used relays.
+
+## Upcoming
 
 ### 5. Wire Daemon Transfer Reservations Into Runtime Planning
 
@@ -71,6 +60,12 @@ Acceptance:
 - Benchmark reports iteration proxy time, transfer time, and path split.
 
 ## Completed
+
+- 2026-05-22: Add multi-relay planner coverage.
+  - Extended `test/cpp/test_planner.cpp` with two relay GPUs.
+  - Covered H2D and D2H direction-specific effective bandwidth fields.
+  - Verified expected chunk assignment against the planner's bandwidth-weighted
+    greedy selection.
 
 - 2026-05-22: Split Runtime plan trace helpers out of `turbobus/runtime.py`.
   - Added `turbobus/plan_trace.py` for `transfer_plan_to_dict`.
