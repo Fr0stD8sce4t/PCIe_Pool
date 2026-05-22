@@ -117,3 +117,18 @@ Use this default split:
 
 Use target GPU 6 and relay GPU 5 for server checks unless the user gives
 another topology.
+
+## After Each Code Step
+
+When a roadmap item is advanced, the final response must include related test
+commands for that exact change.
+
+Include:
+
+- commands that were actually run;
+- commands the user can run next on the server, when server validation is
+  relevant;
+- a short note when no CUDA/vLLM/server check is needed.
+
+Do not paste the full benchmark suite by default. Keep the commands targeted to
+the code touched by the current step.

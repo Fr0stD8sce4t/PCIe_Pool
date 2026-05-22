@@ -9,6 +9,10 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- Documentation update in progress
+  - Added the rule that every future code-advancement final report should
+    include related test commands tailored to the files and behavior changed.
+
 - Split Runtime plan trace helper from Runtime
   - Added `turbobus/plan_trace.py`.
   - Moved `transfer_plan_to_dict()` out of `turbobus/runtime.py`.

@@ -112,6 +112,14 @@ Default guidance:
 Each final report should say what was verified and why heavier checks were not
 run when they are not relevant.
 
+After each code-advancement turn, include a small "related test commands"
+section in the final response. The commands must match the current change:
+
+- list the checks already run;
+- list the next useful local or server commands the user can run, if any;
+- avoid dumping the full CUDA/vLLM suite unless the change needs it;
+- include reinstall commands only after C++/CUDA/pybind changes.
+
 ### Project Direction
 
 Advance TurboBus from a working research prototype into a usable KV/tensor
