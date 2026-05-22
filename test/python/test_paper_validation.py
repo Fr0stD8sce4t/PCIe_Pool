@@ -184,6 +184,125 @@ class PaperValidationTest(unittest.TestCase):
         self.assertIn("restore_latency_ms=20.000", summary)
         self.assertIn("fallback_reason=pool_speedup_1.500", summary)
 
+    def test_model_loading_speedup_summary_line(self) -> None:
+        metrics = [
+            {
+                "workload": "model-loading",
+                "mode": "direct",
+                "ttft_proxy_ms": 20.0,
+                "throughput_gib_s": 4.0,
+            },
+            {
+                "workload": "model-loading",
+                "mode": "relay",
+                "ttft_proxy_ms": 18.0,
+                "throughput_gib_s": 5.0,
+            },
+            {
+                "workload": "model-loading",
+                "mode": "pool",
+                "ttft_proxy_ms": 10.0,
+                "throughput_gib_s": 8.0,
+            },
+            {
+                "workload": "model-loading",
+                "mode": "auto",
+                "ttft_proxy_ms": 12.5,
+                "throughput_gib_s": 7.5,
+            },
+        ]
+        result = self._summary_result("model-loading", metrics)
+
+        summary = paper_validation.compact_summary(result)
+
+        self.assertIn("paper_metric workload=model-loading mode=direct", summary)
+        self.assertIn("paper_speedup workload=model-loading", summary)
+        self.assertIn("direct_over_pool_ttft_proxy=2.000", summary)
+        self.assertIn("relay_over_auto_ttft_proxy=1.440", summary)
+        self.assertIn("pool_over_direct_throughput=2.000", summary)
+        self.assertIn("auto_over_relay_throughput=1.500", summary)
+
+    def test_vllm_speedup_summary_line_groups_restore_blocks(self) -> None:
+        metrics = [
+            {
+                "workload": "vllm-kv",
+                "mode": "direct",
+                "restore_blocks": 8,
+                "matched_tokens": 128,
+                "restore_latency_ms": 30.0,
+                "restore_transfer_ms": 24.0,
+                "throughput_gib_s": 3.0,
+            },
+            {
+                "workload": "vllm-kv",
+                "mode": "relay",
+                "restore_blocks": 8,
+                "matched_tokens": 128,
+                "restore_latency_ms": 27.0,
+                "restore_transfer_ms": 21.0,
+                "throughput_gib_s": 4.0,
+            },
+            {
+                "workload": "vllm-kv",
+                "mode": "pool",
+                "restore_blocks": 8,
+                "matched_tokens": 128,
+                "restore_latency_ms": 15.0,
+                "restore_transfer_ms": 12.0,
+                "throughput_gib_s": 6.0,
+            },
+            {
+                "workload": "vllm-kv",
+                "mode": "auto",
+                "restore_blocks": 8,
+                "matched_tokens": 128,
+                "restore_latency_ms": 18.0,
+                "restore_transfer_ms": 14.0,
+                "throughput_gib_s": 5.0,
+            },
+        ]
+        result = self._summary_result("vllm-kv", metrics)
+
+        summary = paper_validation.compact_summary(result)
+
+        self.assertIn(
+            "paper_speedup workload=vllm-kv restore_blocks=8 matched_tokens=128",
+            summary,
+        )
+        self.assertIn("direct_over_pool_restore_latency=2.000", summary)
+        self.assertIn("relay_over_auto_restore_latency=1.500", summary)
+        self.assertIn("direct_over_pool_restore_transfer=2.000", summary)
+        self.assertIn("pool_over_relay_throughput=1.500", summary)
+
+    def test_training_speedup_summary_line_and_missing_modes_are_na(self) -> None:
+        metrics = [
+            {
+                "workload": "training-offload",
+                "mode": "direct",
+                "iteration_ms": 40.0,
+                "transfer_ms": 36.0,
+                "throughput_gib_s": 4.0,
+            },
+            {
+                "workload": "training-offload",
+                "mode": "pool",
+                "iteration_ms": 20.0,
+                "transfer_ms": 18.0,
+                "throughput_gib_s": 8.0,
+            },
+        ]
+        result = self._summary_result("training-offload", metrics)
+
+        summary = paper_validation.compact_summary(result)
+
+        self.assertIn("paper_metric workload=training-offload mode=direct", summary)
+        self.assertIn("direct_over_pool_iteration=2.000", summary)
+        self.assertIn("direct_over_pool_transfer=2.000", summary)
+        self.assertIn("pool_over_direct_throughput=2.000", summary)
+        self.assertIn("relay_over_pool_iteration=NA", summary)
+        self.assertIn("direct_over_auto_transfer=NA", summary)
+        self.assertIn("auto_over_relay_throughput=NA", summary)
+
     def test_collect_workload_metrics_reads_json_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             paths = paper_validation.output_paths(Path(tmpdir), "vllm-kv")
@@ -294,6 +413,28 @@ class PaperValidationTest(unittest.TestCase):
             ["model-loading", "training-offload"],
         )
         self.assertEqual([item["status"] for item in result["workloads"]], ["missing-output"] * 2)
+
+    def _summary_result(self, workload: str, metrics: list[dict]) -> dict:
+        return {
+            "config": {
+                "target_gpu": 6,
+                "relay_gpus": "5",
+                "workloads": [workload],
+                "mode": "all",
+                "output_dir": "out",
+            },
+            "workloads": [
+                {
+                    "workload": workload,
+                    "status": "ok",
+                    "returncode": 0,
+                    "summary_path": "summary.txt",
+                    "data_path": "data.json",
+                    "validation_errors": [],
+                    "metrics": metrics,
+                }
+            ],
+        }
 
 
 if __name__ == "__main__":

@@ -9,6 +9,19 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- Add explicit paper speedup summaries
+  - `benchmarks/paper_validation.py` now emits `paper_speedup` lines after the
+    existing `paper_metric` lines for each workload.
+  - Model-loading summaries compare direct and relay `ttft_proxy_ms` against
+    pool and auto, plus pool or auto throughput against direct and relay.
+  - vLLM KV summaries compare restore latency, restore transfer time, and
+    throughput per `restore_blocks` value.
+  - Training-offload summaries compare iteration time, transfer time, and
+    throughput.
+  - Missing comparison modes report `NA` instead of failing summary generation.
+  - Next focus: run all-mode server validation and use the new speedup lines
+    to pick the next measured pooling bottleneck.
+
 - Record successful server paper validation
   - Target-server validation completed on GPU 6 with relay GPU 5.
   - `paper_validation.py` reported `status=ok`, `returncode=0`, and empty
@@ -290,6 +303,18 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
   - Connector configuration was consolidated around shared keys.
 
 ## Last Verified Checks
+
+For explicit paper speedup summaries:
+
+```text
+python -m unittest discover -s test\python -p "test_paper_validation.py" -v
+python -m compileall benchmarks\paper_validation.py test\python\test_paper_validation.py -q
+python benchmarks\paper_validation.py --target-gpu 6 --relay-gpus 5 --workloads model-loading --mode pool --dry-run --no-copy-summary
+git diff --check
+```
+
+Result: passed. `git diff --check` only reported Windows LF-to-CRLF working
+copy warnings.
 
 For the target-server paper validation:
 
@@ -745,5 +770,5 @@ python examples/vllm_turbobus_kv_connector_sweep.py --model Qwen/Qwen3-0.6B --ta
 
 ## Next Task
 
-Start with the task under `## Current` in `docs/NEXT_STEPS.md`: add explicit
-paper speedup summaries.
+Start with the task under `## Current` in `docs/NEXT_STEPS.md`: validate
+all-mode paper speedup summaries on the target server.

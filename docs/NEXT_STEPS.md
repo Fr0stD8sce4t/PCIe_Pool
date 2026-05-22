@@ -6,21 +6,35 @@ from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
 
 ## Current
 
-### 19. Add explicit paper speedup summaries
+### 20. Validate all-mode paper speedup summaries on the target server
 
-Use the server-side paper validation outputs to add first-class speedup summary
-lines to `benchmarks/paper_validation.py`.
+Run the paper validation harness in `--mode all` on the target server and use
+the reported `paper_speedup` lines to identify the next measured bottleneck in
+the pooled PCIe path.
 
 Acceptance:
 
-- The paper validation summary reports direct/relay versus pool or auto
-  speedups for model loading, vLLM KV restore, and training offload when the
-  required modes are present.
-- Missing comparison modes produce `NA` values instead of failing the run.
-- The summary keeps the existing per-workload `paper_metric` lines.
-- Focused tests cover model-loading, vLLM, and training speedup summaries.
+- The target-server run includes `paper_metric` and `paper_speedup` lines for
+  model loading, vLLM KV restore, and training offload.
+- The result confirms whether pool or auto beats direct and relay for latency
+  and throughput on GPU 6 with relay GPU 5.
+- Any weak comparison is turned into a concrete follow-up code task rather
+  than a docs-only note.
 
 ## Completed
+
+- 2026-05-22: Add explicit paper speedup summaries.
+  - `benchmarks/paper_validation.py` now emits `paper_speedup` lines next to
+    the existing per-workload `paper_metric` lines.
+  - Model-loading summaries compare direct and relay latency against pool and
+    auto using `ttft_proxy_ms`, and compare pool or auto throughput against
+    direct and relay.
+  - vLLM KV summaries compare restore latency, restore transfer time, and
+    throughput per `restore_blocks` value.
+  - Training-offload summaries compare iteration time, transfer time, and
+    throughput.
+  - Missing comparison modes now report `NA` values instead of failing the
+    paper validation summary.
 
 - 2026-05-22: Run server-side paper validation and tighten measured behavior
   toward the paper claims.

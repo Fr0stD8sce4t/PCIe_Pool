@@ -244,6 +244,14 @@ def as_int(value, default: int = 0) -> int:
         return default
 
 
+def speedup_value(numerator, denominator) -> str:
+    numerator_value = as_float(numerator)
+    denominator_value = as_float(denominator)
+    if numerator_value <= 0.0 or denominator_value <= 0.0:
+        return "NA"
+    return f"{numerator_value / denominator_value:.3f}"
+
+
 def first_status(*items: dict) -> str:
     for item in items:
         status = item.get("daemon_reservation_status") if item else None
@@ -429,6 +437,150 @@ def metric_line(metric: dict) -> str:
     return " ".join(fields)
 
 
+def metrics_by_mode(metrics: list[dict]) -> dict[str, dict]:
+    return {str(metric.get("mode", "")): metric for metric in metrics}
+
+
+def latency_speedups(
+    by_mode: dict[str, dict],
+    metric_key: str,
+    output_key: str,
+) -> dict[str, str]:
+    fields = {}
+    for baseline in ("direct", "relay"):
+        for candidate in ("pool", "auto"):
+            baseline_metric = by_mode.get(baseline, {})
+            candidate_metric = by_mode.get(candidate, {})
+            fields[f"{baseline}_over_{candidate}_{output_key}"] = speedup_value(
+                baseline_metric.get(metric_key),
+                candidate_metric.get(metric_key),
+            )
+    return fields
+
+
+def throughput_speedups(by_mode: dict[str, dict]) -> dict[str, str]:
+    fields = {}
+    for candidate in ("pool", "auto"):
+        for baseline in ("direct", "relay"):
+            baseline_metric = by_mode.get(baseline, {})
+            candidate_metric = by_mode.get(candidate, {})
+            fields[f"{candidate}_over_{baseline}_throughput"] = speedup_value(
+                candidate_metric.get("throughput_gib_s"),
+                baseline_metric.get("throughput_gib_s"),
+            )
+    return fields
+
+
+def speedup_line(fields: dict[str, object]) -> str:
+    ordered = [
+        "workload",
+        "restore_blocks",
+        "matched_tokens",
+        "direct_over_pool_ttft_proxy",
+        "relay_over_pool_ttft_proxy",
+        "direct_over_auto_ttft_proxy",
+        "relay_over_auto_ttft_proxy",
+        "direct_over_pool_restore_latency",
+        "relay_over_pool_restore_latency",
+        "direct_over_auto_restore_latency",
+        "relay_over_auto_restore_latency",
+        "direct_over_pool_restore_transfer",
+        "relay_over_pool_restore_transfer",
+        "direct_over_auto_restore_transfer",
+        "relay_over_auto_restore_transfer",
+        "direct_over_pool_iteration",
+        "relay_over_pool_iteration",
+        "direct_over_auto_iteration",
+        "relay_over_auto_iteration",
+        "direct_over_pool_transfer",
+        "relay_over_pool_transfer",
+        "direct_over_auto_transfer",
+        "relay_over_auto_transfer",
+        "pool_over_direct_throughput",
+        "pool_over_relay_throughput",
+        "auto_over_direct_throughput",
+        "auto_over_relay_throughput",
+    ]
+    parts = ["paper_speedup"]
+    for name in ordered:
+        value = fields.get(name)
+        if value in (None, ""):
+            continue
+        parts.append(f"{name}={value}")
+    return " ".join(parts)
+
+
+def model_speedup_lines(metrics: list[dict]) -> list[str]:
+    if not metrics:
+        return []
+    by_mode = metrics_by_mode(metrics)
+    fields: dict[str, object] = {"workload": "model-loading"}
+    fields.update(latency_speedups(by_mode, "ttft_proxy_ms", "ttft_proxy"))
+    fields.update(throughput_speedups(by_mode))
+    return [speedup_line(fields)]
+
+
+def training_speedup_lines(metrics: list[dict]) -> list[str]:
+    if not metrics:
+        return []
+    by_mode = metrics_by_mode(metrics)
+    fields: dict[str, object] = {"workload": "training-offload"}
+    fields.update(latency_speedups(by_mode, "iteration_ms", "iteration"))
+    fields.update(latency_speedups(by_mode, "transfer_ms", "transfer"))
+    fields.update(throughput_speedups(by_mode))
+    return [speedup_line(fields)]
+
+
+def vllm_speedup_lines(metrics: list[dict]) -> list[str]:
+    by_blocks: dict[int, list[dict]] = {}
+    for metric in metrics:
+        by_blocks.setdefault(as_int(metric.get("restore_blocks")), []).append(metric)
+
+    lines = []
+    for restore_blocks, block_metrics in sorted(by_blocks.items()):
+        by_mode = metrics_by_mode(block_metrics)
+        matched_tokens = next(
+            (
+                metric.get("matched_tokens")
+                for metric in block_metrics
+                if metric.get("matched_tokens") not in (None, "")
+            ),
+            None,
+        )
+        fields: dict[str, object] = {
+            "workload": "vllm-kv",
+            "restore_blocks": restore_blocks,
+            "matched_tokens": matched_tokens,
+        }
+        fields.update(
+            latency_speedups(
+                by_mode,
+                "restore_latency_ms",
+                "restore_latency",
+            )
+        )
+        fields.update(
+            latency_speedups(
+                by_mode,
+                "restore_transfer_ms",
+                "restore_transfer",
+            )
+        )
+        fields.update(throughput_speedups(by_mode))
+        lines.append(speedup_line(fields))
+    return lines
+
+
+def speedup_lines_for_workload(workload: str, metrics: list[dict]) -> list[str]:
+    if workload == "model-loading":
+        return model_speedup_lines(metrics)
+    if workload == "training-offload":
+        return training_speedup_lines(metrics)
+    if workload == "vllm-kv":
+        return vllm_speedup_lines(metrics)
+    return []
+
+
 def compact_summary(result: dict) -> str:
     config = result["config"]
     lines = [
@@ -450,6 +602,12 @@ def compact_summary(result: dict) -> str:
         )
         for metric in workload["metrics"]:
             lines.append(metric_line(metric))
+        lines.extend(
+            speedup_lines_for_workload(
+                workload["workload"],
+                workload["metrics"],
+            )
+        )
     lines.append("PAPER_VALIDATION_SUMMARY_END")
     return "\n".join(lines)
 
