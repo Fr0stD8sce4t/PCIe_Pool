@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
-from .offload_store import OffloadStore, TransferStats
+from .offload_store import OffloadBatch, OffloadStore, TransferStats
 from .runtime import Runtime
 
 
@@ -62,9 +62,27 @@ class InferenceKVSlotAdapter(OffloadStore):
         names = list(names)
         return names, self.prefetch_many(names)
 
+    def restore_batch(self, names: Iterable[str]) -> OffloadBatch:
+        names = list(names)
+        return OffloadBatch(
+            "restore",
+            tuple(names),
+            tuple(self.prefetch_many(names)),
+            self,
+        )
+
     def submit_save_prefix(self, names: Iterable[str]) -> tuple[list[str], list]:
         names = list(names)
         return names, self.evict_many(names)
+
+    def save_batch(self, names: Iterable[str]) -> OffloadBatch:
+        names = list(names)
+        return OffloadBatch(
+            "save",
+            tuple(names),
+            tuple(self.evict_many(names)),
+            self,
+        )
 
     def wait_prefix(self, names: Iterable[str]) -> None:
         self.wait_many(names)

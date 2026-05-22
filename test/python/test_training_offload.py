@@ -4,6 +4,7 @@ import unittest
 
 from turbobus import (
     BlockState,
+    OffloadBatch,
     TrainingOffloadManager,
     TrainingOffloadStore,
     TransferStats,
@@ -132,6 +133,34 @@ class TrainingOffloadManagerTest(unittest.TestCase):
             manager.transfer_stats_many(manager.names()),
             TransferStats(bytes=64, relay_chunks=2),
         )
+
+    def test_batch_methods_return_batch_objects(self) -> None:
+        runtime = FakeRuntime()
+        manager = TrainingOffloadManager(runtime)
+        cpu = FakeTensor(256)
+        gpu = object()
+        manager.add_packed_buckets(
+            "bucket",
+            cpu,
+            gpu,
+            bucket_bytes=32,
+            bucket_count=2,
+            start_offset=16,
+        )
+
+        prefetch_batch = manager.prefetch_batch(manager.names())
+        prefetch_batch.wait()
+        self.assertEqual(prefetch_batch.transfer_stats(), TransferStats(bytes=64, direct_chunks=2))
+        offload_batch = manager.offload_batch(manager.names())
+        offload_batch.wait()
+
+        self.assertIsInstance(prefetch_batch, OffloadBatch)
+        self.assertIsInstance(offload_batch, OffloadBatch)
+        self.assertEqual(prefetch_batch.operation, "prefetch")
+        self.assertEqual(offload_batch.operation, "evict")
+        self.assertEqual(offload_batch.transfer_stats(), TransferStats(bytes=64, relay_chunks=2))
+        self.assertEqual(manager.bucket("bucket0").state, BlockState.CPU)
+        self.assertEqual(manager.bucket("bucket1").state, BlockState.CPU)
 
     def test_mark_helpers_reset_state_without_copying(self) -> None:
         manager = TrainingOffloadManager(FakeRuntime())

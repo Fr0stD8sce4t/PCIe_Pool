@@ -4,6 +4,7 @@ from typing import Iterable
 
 from .offload_store import (
     BlockState,
+    OffloadBatch,
     OffloadBlock,
     OffloadBlockInfo,
     OffloadStore,
@@ -92,6 +93,12 @@ class TrainingOffloadManager(OffloadStore):
     def prefetch_buckets(self, names: Iterable[str]) -> list:
         return self.prefetch_many(names)
 
+    def submit_prefetch_buckets(self, names: Iterable[str]) -> OffloadBatch:
+        return self.submit_prefetch_many(names)
+
+    def prefetch_batch(self, names: Iterable[str]) -> OffloadBatch:
+        return self.submit_prefetch_buckets(names)
+
     def prefetch_all(self) -> list:
         return self.prefetch_buckets(self.names())
 
@@ -100,6 +107,12 @@ class TrainingOffloadManager(OffloadStore):
 
     def offload_buckets(self, names: Iterable[str]) -> list:
         return self.evict_many(names)
+
+    def submit_offload_buckets(self, names: Iterable[str]) -> OffloadBatch:
+        return self.submit_evict_many(names)
+
+    def offload_batch(self, names: Iterable[str]) -> OffloadBatch:
+        return self.submit_offload_buckets(names)
 
     def offload_all(self) -> list:
         return self.offload_buckets(self.names())

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from turbobus import BlockState, ModelLoader, ModelWeightLoader, TransferStats
+from turbobus import BlockState, ModelLoader, ModelWeightLoader, OffloadBatch, TransferStats
 
 
 class FakeTensor:
@@ -116,6 +116,31 @@ class ModelWeightLoaderTest(unittest.TestCase):
             [info.state for info in loader.bucket_infos()],
             [BlockState.GPU, BlockState.GPU, BlockState.GPU],
         )
+
+    def test_load_batch_returns_batch_object(self) -> None:
+        runtime = FakeRuntime()
+        loader = ModelWeightLoader(runtime)
+        cpu = FakeTensor(256)
+        gpu = object()
+        loader.add_packed_buckets(
+            "bucket",
+            cpu,
+            gpu,
+            bucket_bytes=32,
+            bucket_count=2,
+            start_offset=16,
+        )
+
+        batch = loader.load_batch(loader.names())
+        batch.wait()
+
+        self.assertIsInstance(batch, OffloadBatch)
+        self.assertEqual(batch.operation, "prefetch")
+        self.assertEqual(batch.names, ("bucket0", "bucket1"))
+        self.assertEqual(batch.transfer_stats(), TransferStats(64, 2, 1))
+        self.assertEqual(batch.as_dict()["transfer_stats"]["bytes"], 64)
+        self.assertEqual(loader.bucket("bucket0").state, BlockState.GPU)
+        self.assertEqual(loader.bucket("bucket1").state, BlockState.GPU)
 
     def test_mark_unloaded_resets_transfer_state_without_copying(self) -> None:
         loader = ModelWeightLoader(FakeRuntime())

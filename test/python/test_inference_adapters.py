@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 import unittest
 
+from turbobus import OffloadBatch, TransferStats
 from turbobus.inference import InferenceKVSlotAdapter, make_contiguous_kv_slots
 from turbobus.vllm import (
     VllmKVGroup,
@@ -148,6 +149,25 @@ class InferenceKVSlotAdapterTest(unittest.TestCase):
 
         self.assertEqual(adapter.transfer_stats(["prefix0", "prefix1"]).bytes, 64)
         self.assertEqual(adapter.transfer_stats(["prefix0", "prefix1"]).direct_chunks, 2)
+
+    def test_restore_and_save_batches_return_batch_objects(self) -> None:
+        runtime = FakeRuntime()
+        cpu = FakeTensor(128)
+        gpu = object()
+        adapter = InferenceKVSlotAdapter(runtime, cpu, gpu)
+        adapter.register_slots(make_contiguous_kv_slots("prefix", 2, 32))
+
+        restore_batch = adapter.restore_batch(["prefix0", "prefix1"])
+        restore_batch.wait()
+        self.assertEqual(restore_batch.transfer_stats(), TransferStats(bytes=64, direct_chunks=2))
+        save_batch = adapter.save_batch(["prefix0", "prefix1"])
+        save_batch.wait()
+
+        self.assertIsInstance(restore_batch, OffloadBatch)
+        self.assertIsInstance(save_batch, OffloadBatch)
+        self.assertEqual(restore_batch.operation, "restore")
+        self.assertEqual(save_batch.operation, "save")
+        self.assertEqual(save_batch.transfer_stats(), TransferStats(bytes=64, relay_chunks=2))
 
 
 class VllmKVSlotAdapterTest(unittest.TestCase):

@@ -9,6 +9,15 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- Add batch client APIs to the offload workload managers
+  - `ModelWeightLoader`, `TrainingOffloadManager`, and
+    `InferenceKVSlotAdapter` now expose batch submit helpers that return
+    `OffloadBatch` objects with `wait()` and `transfer_stats()`.
+  - Existing list-based helper methods remain in place for benchmarks and
+    examples.
+  - Added focused tests to cover the new batch client entry points across the
+    three workload adapters.
+
 - Broaden vLLM block-id extraction for version differences
   - `extract_vllm_block_ids()` now accepts `block_ids` attributes and raw
     list/tuple shapes in addition to `get_block_ids()`.
@@ -183,6 +192,17 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
   - Connector configuration was consolidated around shared keys.
 
 ## Last Verified Checks
+
+For workload batch client APIs:
+
+```text
+python -m unittest discover -s test\python -p "test_model_loading.py" -v
+python -m unittest discover -s test\python -p "test_training_offload.py" -v
+python -m unittest discover -s test\python -p "test_inference_adapters.py" -v
+python -m compileall turbobus\model_loading.py turbobus\training_offload.py turbobus\inference.py test\python\test_model_loading.py test\python\test_training_offload.py test\python\test_inference_adapters.py -q
+```
+
+Result: passed.
 
 For vLLM block-id normalization:
 
@@ -499,5 +519,5 @@ Then run native and vLLM checks on target GPU 6 with relay GPU 5.
 
 ## Next Task
 
-Start with the task under `## Current` in `docs/NEXT_STEPS.md`: build the real
-vLLM KV offload integration path.
+Start with the task under `## Current` in `docs/NEXT_STEPS.md`: add
+production-shaped offload clients for the three paper workloads.

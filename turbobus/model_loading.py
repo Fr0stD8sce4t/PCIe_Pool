@@ -4,6 +4,7 @@ from typing import Iterable
 
 from .offload_store import (
     BlockState,
+    OffloadBatch,
     OffloadBlock,
     OffloadBlockInfo,
     OffloadStore,
@@ -91,6 +92,12 @@ class ModelWeightLoader(OffloadStore):
 
     def load_buckets(self, names: Iterable[str]) -> list:
         return self.prefetch_many(names)
+
+    def submit_load_buckets(self, names: Iterable[str]) -> OffloadBatch:
+        return self.submit_prefetch_many(names)
+
+    def load_batch(self, names: Iterable[str]) -> OffloadBatch:
+        return self.submit_load_buckets(names)
 
     def load_all(self) -> list:
         return self.load_buckets(self.names())

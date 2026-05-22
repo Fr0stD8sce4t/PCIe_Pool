@@ -6,28 +6,31 @@ from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
 
 ## Current
 
-### 14. Build the real vLLM KV offload integration path
+### 15. Add production-shaped offload clients for the three paper workloads
 
-Move vLLM prefix save and restore farther into the real connector lifecycle.
-Keep using vLLM-owned KV cache tensors and block ids, and keep the example from
-driving save through private prefix-store calls.
+Give model loading, KV offload, and training offload a small client-facing
+batch submit/wait API that sits on top of the shared Runtime-backed managers.
+Keep the shared Runtime and block-store layers underneath.
 
 Acceptance:
 
-- Restore and save continue to flow through `KVConnectorBase_V1` metadata.
-- The example reports connector events without mutating connector internals.
-- Connector changes stay version-aware for the current server vLLM build.
-
-Progress:
-
-- 2026-05-22: Decoupled the example's save request from
-  `--restore-enabled`. The first request now asks the connector to save by
-  default, while restore remains an explicit opt-in for the second request.
-- 2026-05-22: Broadened vLLM block-id extraction to accept `block_ids`
-  attributes and raw list/tuple shapes, which helps the connector tolerate
-  version-specific allocation return forms.
+- Each workload exposes a batch client entry point that returns a batch object
+  with `wait()` and `transfer_stats()`.
+- Existing list-based helper paths stay available for benchmarks and examples.
+- The shared Runtime path still owns transfer policy, statistics, and range
+  batching.
 
 ## Completed
+
+- 2026-05-22: Build the real vLLM KV offload integration path.
+  - First-request save intent is now sent through `kv_transfer_params`
+    independently from restore.
+  - The official vLLM connector example reports save and restore from emitted
+    connector events, not from private prefix-store state.
+  - `extract_vllm_block_ids()` now tolerates the vLLM block-id shapes seen in
+    the current server build.
+  - Server validation confirmed real save, restore, and connector event flow
+    on the current Qwen3-0.6B path.
 
 - 2026-05-22: Add batch block operations on top of the existing transfer APIs.
   - Added `OffloadBatch` plus `submit_prefetch_many()` and
