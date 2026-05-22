@@ -9,6 +9,14 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- Add daemon multi-process benchmark smoke
+  - Added `benchmarks/daemon_smoke.py` to start a local daemon, run two
+    benchmark clients, and surface shared profile cache and reservation state.
+  - The smoke wrapper keeps CUDA movement inside the benchmark clients and
+    only orchestrates daemon lifecycle around them.
+  - Added focused unit tests for daemon smoke command construction and summary
+    parsing helpers.
+
 - Add daemon-aware benchmark options
   - Added `benchmarks/daemon_support.py` for shared daemon benchmark argument
     and summary helpers.
@@ -132,6 +140,21 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
   - Connector configuration was consolidated around shared keys.
 
 ## Last Verified Checks
+
+Additional local checks on the Windows development environment:
+
+```text
+python -m unittest discover -s test\python -p "test_daemon_smoke.py" -v
+```
+
+Result: 4 tests passed.
+
+```text
+python -m compileall benchmarks\daemon_smoke.py test\python\test_daemon_smoke.py -q
+git diff --check
+```
+
+Result: passed.
 
 On the local Windows development environment:
 

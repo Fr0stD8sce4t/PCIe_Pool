@@ -6,21 +6,28 @@ from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
 
 ## Current
 
-### 11. Add Daemon Multi-Process Benchmark Smoke
+### 12. Make the Python offload object layer reusable by future connectors
 
-Add a small benchmark wrapper that starts a local daemon and runs two benchmark
-clients against it, so shared profile cache hits and relay reservation behavior
-can be checked without hand-running several shells.
+Keep the Python offload and block-management layer moving toward
+connector-shaped block ids, CPU backings, GPU slots, async handles, and
+per-block stats, while keeping the native runtime as a transfer engine only.
 
 Acceptance:
 
-- The wrapper can run a short bandwidth or model-loading smoke with target GPU
-  and relay GPU arguments.
-- Output reports first-client profile publish, second-client profile hit, and
-  reservation status.
-- The wrapper keeps CUDA data movement in benchmark clients, not the daemon.
+- `OffloadStore` stays backward compatible while it evolves toward a
+  block-store style API.
+- Shared block concepts are reusable by future connector and benchmark code.
+- Workload policy stays out of native transfer execution.
 
 ## Completed
+
+- 2026-05-22: Add daemon multi-process benchmark smoke.
+  - Added `benchmarks/daemon_smoke.py` to start a local daemon, run two
+    benchmark clients, and report shared profile cache and reservation status.
+  - The wrapper keeps CUDA transfer work inside the benchmark clients and only
+    coordinates daemon lifecycle from the outside.
+  - Added focused unit tests for the daemon smoke command construction and
+    summary parsing helpers.
 
 - 2026-05-22: Add daemon-aware benchmark options.
   - Added shared daemon benchmark option helpers.
@@ -42,20 +49,23 @@ Acceptance:
 
 - 2026-05-22: Add training offload bucket API and benchmark.
   - Added `TrainingOffloadManager` / `TrainingOffloadStore` for parameter or
-    optimizer bucket prefetch and offload through Runtime.
-  - Added packed CPU/GPU bucket registration so training offload can use
-    range-batched H2D and D2H transfers.
-  - Added `benchmarks/training_offload.py` to measure iteration proxy time,
-    transfer time, compute proxy time, and H2D/D2H path split.
-  - Added focused unit tests for the training offload API with a fake Runtime.
+    optimizer bucket movement through Runtime.
+  - The API supports prefetch from CPU pinned memory to the target GPU and
+    offload back to CPU pinned memory through the shared Runtime path.
+  - Packed CPU/GPU backing buffers use range-batched Runtime transfers in both
+    H2D and D2H directions.
+  - Added `benchmarks/training_offload.py` to report iteration proxy time,
+    transfer time, compute proxy time, H2D/D2H path split, and speedup summary
+    lines.
 
 - 2026-05-22: Add model loading workload API and benchmark.
-  - Added `ModelWeightLoader` / `ModelLoader` as a model-weight bucket API over
-    Runtime H2D transfers.
-  - Added packed CPU pinned weight bucket registration so model-loading
-    benchmarks can use one range-batched Runtime transfer.
-  - Added `benchmarks/model_loading.py` to measure direct, relay, pool, and
-    auto model-weight load latency, path split, and speedup.
+  - Added `ModelWeightLoader` / `ModelLoader` for model-weight bucket loading
+    through the shared Runtime H2D path.
+  - The API supports separate buckets and packed CPU/GPU backing buffers, using
+    range-batched Runtime transfers for packed buckets.
+  - Added `benchmarks/model_loading.py` to compare direct, relay, pool, and
+    auto load modes with load latency, bandwidth, path split, and speedup
+    summary lines.
   - Added focused unit tests for the model-loading API with a fake Runtime.
 
 - 2026-05-22: Continue vLLM connector lifecycle cleanup.
@@ -65,8 +75,8 @@ Acceptance:
     summaries from connector events emitted by `TurboBusConnector`.
   - The official connector example now reports restore bytes, layers, ranges,
     chunks, timing, and auto-selection fields from connector events.
-  - Unit tests now construct `TurboBusConnector` with `kv_cache_config`, matching
-    the current vLLM base-class lifecycle.
+  - Unit tests now construct `TurboBusConnector` with `kv_cache_config`,
+    matching the current vLLM base-class lifecycle.
 
 - 2026-05-22: Wire daemon transfer reservations into Runtime planning.
   - Added a daemon socket client and Runtime daemon session registration.
@@ -79,8 +89,8 @@ Acceptance:
     `turbobus.daemon_max_inflight_chunks` into Runtime.
 
 - 2026-05-22: Improve multi-relay executor behavior.
-  - Added a CUDA correctness test for a pool transfer that uses direct plus two
-    relay paths.
+  - Added a CUDA correctness test for a pool transfer that uses direct plus
+    two relay paths.
   - The test verifies per-relay bytes/chunks and path stats for all used paths.
   - Native benchmark output now prints direct/relay chunk counts, per-relay
     bytes/chunks, and path stats.
@@ -88,8 +98,8 @@ Acceptance:
 - 2026-05-22: Add multi-relay planner coverage.
   - Extended `test/cpp/test_planner.cpp` with two relay GPUs.
   - Covered H2D and D2H direction-specific effective bandwidth fields.
-  - Verified expected chunk assignment against the planner's bandwidth-weighted
-    greedy selection.
+  - Verified expected chunk assignment against the planner's
+    bandwidth-weighted greedy selection.
 
 - 2026-05-22: Split Runtime plan trace helpers out of `turbobus/runtime.py`.
   - Added `turbobus/plan_trace.py` for `transfer_plan_to_dict`.
@@ -102,6 +112,13 @@ Acceptance:
   - Kept `turbobus.runtime` re-export imports working.
 
 - 2026-05-22: Document TurboBus roadmap workflow (`830d137`).
+
+## Upcoming
+
+- Add batch block operations on top of the existing transfer APIs.
+- Build the real vLLM KV offload integration path.
+- Add production-shaped offload clients for the three paper workloads.
+- Expand daemon work toward the paper architecture.
 
 ## Working Rules
 
