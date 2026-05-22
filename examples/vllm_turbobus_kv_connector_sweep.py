@@ -112,6 +112,16 @@ def run_case(args, mode: str, restore_blocks: int, matched_tokens: int, log_path
         "--log-output",
         str(log_path),
     ]
+    if args.daemon_socket_path:
+        command.extend(["--daemon-socket-path", args.daemon_socket_path])
+    command.extend(
+        [
+            "--daemon-max-inflight-chunks",
+            str(args.daemon_max_inflight_chunks),
+            "--daemon-profile-max-age-seconds",
+            str(args.daemon_profile_max_age_seconds),
+        ]
+    )
     if args.enforce_eager:
         command.append("--enforce-eager")
     if args.enable_multiproc_executor:
@@ -192,6 +202,12 @@ def build_case_rows(args, results) -> list[dict[str, object]]:
             "auto_direct_bw_gbps": restore.get("auto_direct_bw_gbps", "NA"),
             "auto_relay_bw_gbps": restore.get("auto_relay_bw_gbps", "NA"),
             "auto_eligible_relays": restore.get("auto_eligible_relays", "NA"),
+            "daemon_reservation_status": restore.get("daemon_reservation_status", "NA"),
+            "daemon_reserved_relays": restore.get("daemon_reserved_relays", "NA"),
+            "daemon_reserved_chunks_per_relay": restore.get(
+                "daemon_reserved_chunks_per_relay",
+                "NA",
+            ),
             "layers": restore.get("layers", "NA"),
             "ranges": restore.get("ranges", "NA"),
             "prompt_tokens": output.get("prompt_tokens", "NA"),
@@ -246,6 +262,9 @@ def _config_line(args) -> str:
             f"chunk_bytes={args.chunk_bytes}",
             f"profile_bytes={args.profile_bytes}",
             f"min_pool_bytes={min_pool_bytes}",
+            f"daemon_socket_path={getattr(args, 'daemon_socket_path', '')}",
+            f"daemon_max_inflight_chunks={getattr(args, 'daemon_max_inflight_chunks', 8)}",
+            f"daemon_profile_max_age_seconds={getattr(args, 'daemon_profile_max_age_seconds', 3600.0)}",
         ]
     )
 
@@ -283,6 +302,9 @@ def _case_line(row) -> str:
         "auto_direct_bw_gbps",
         "auto_relay_bw_gbps",
         "auto_eligible_relays",
+        "daemon_reservation_status",
+        "daemon_reserved_relays",
+        "daemon_reserved_chunks_per_relay",
         "layers",
         "ranges",
         "prompt_tokens",
@@ -361,6 +383,9 @@ def parse_args():
     parser.add_argument("--chunk-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument("--profile-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--min-pool-bytes", type=int, default=12 * 1024 * 1024)
+    parser.add_argument("--daemon-socket-path", default="")
+    parser.add_argument("--daemon-max-inflight-chunks", type=int, default=8)
+    parser.add_argument("--daemon-profile-max-age-seconds", type=float, default=3600.0)
     parser.add_argument("--enforce-eager", action="store_true")
     parser.add_argument("--enable-multiproc-executor", action="store_true")
     parser.add_argument("--no-map-physical-gpus", action="store_true")

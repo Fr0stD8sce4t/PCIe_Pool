@@ -37,6 +37,7 @@ class BenchmarkDaemonSupportTest(unittest.TestCase):
             {
                 "daemon_socket_path": "/tmp/turbobusd.sock",
                 "daemon_max_inflight_chunks": 3,
+                "daemon_profile_max_age_seconds": 3600.0,
             },
         )
 

@@ -9,6 +9,17 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- Build a paper-style validation harness
+  - Added `benchmarks/paper_validation.py` as a single reproduction entry
+    point for model loading, vLLM KV save/restore, and training offload.
+  - The harness runs existing Runtime-backed workload scripts and normalizes
+    their JSON or case outputs into `paper_metric` summary lines.
+  - Reported metrics include TTFT or TTFT proxy, restore latency, throughput,
+    iteration time, transfer bytes, path split, daemon reservation status, and
+    fallback reason when available.
+  - vLLM connector example and sweep paths now accept daemon options and carry
+    daemon reservation fields into sweep rows.
+
 - Expand daemon work toward the paper architecture
   - Normalized relay lists before ownership accounting and rejected invalid
     session or reservation payloads before they could mutate quota.
@@ -235,6 +246,22 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
   - Connector configuration was consolidated around shared keys.
 
 ## Last Verified Checks
+
+For the paper validation harness:
+
+```text
+python -m unittest discover -s test\python -p "test_paper_validation.py" -v
+python -m unittest discover -s test\python -p "test_benchmark_daemon_support.py" -v
+python -m unittest discover -s test\python -p "test_daemon_smoke.py" -v
+python -m unittest discover -s test\python -p "test_vllm_kv_connector_example.py" -v
+python -m unittest discover -s test\python -p "test_vllm_kv_connector.py" -v
+python -m unittest discover -s test\python -p "test_vllm_kv_connector_sweep.py" -v
+python -m compileall benchmarks\paper_validation.py benchmarks\daemon_support.py benchmarks\daemon_smoke.py examples\vllm_turbobus_kv_connector.py examples\vllm_turbobus_kv_connector_sweep.py turbobus\vllm_kv_connector.py test\python\test_paper_validation.py -q
+python benchmarks\paper_validation.py --help
+git diff --check
+```
+
+Result: passed.
 
 For daemon expansion and wrapper cleanup:
 
@@ -613,5 +640,5 @@ Then run native and vLLM checks on target GPU 6 with relay GPU 5.
 
 ## Next Task
 
-Start with the task under `## Current` in `docs/NEXT_STEPS.md`: build a
-paper-style validation harness.
+Start with the task under `## Current` in `docs/NEXT_STEPS.md`: close
+remaining framework-specific integration gaps.

@@ -6,6 +6,7 @@ from collections.abc import Iterable
 def add_daemon_options(parser):
     parser.add_argument("--daemon-socket-path")
     parser.add_argument("--daemon-max-inflight-chunks", type=int, default=8)
+    parser.add_argument("--daemon-profile-max-age-seconds", type=float, default=3600.0)
     return parser
 
 
@@ -14,6 +15,9 @@ def runtime_options_kwargs(args) -> dict[str, object]:
         "daemon_socket_path": getattr(args, "daemon_socket_path", None),
         "daemon_max_inflight_chunks": int(
             getattr(args, "daemon_max_inflight_chunks", 8) or 8
+        ),
+        "daemon_profile_max_age_seconds": float(
+            getattr(args, "daemon_profile_max_age_seconds", 3600.0) or 3600.0
         ),
     }
 

@@ -190,6 +190,7 @@ class TurboBusConnectorTest(unittest.TestCase):
             "turbobus.min_pool_bytes": "12582912",
             "turbobus.daemon_socket_path": "/tmp/turbobusd.sock",
             "turbobus.daemon_max_inflight_chunks": "6",
+            "turbobus.daemon_profile_max_age_seconds": "45",
             "turbobus.restore_block_limit": "8",
             "turbobus.restore_enabled": "true",
             "turbobus.session_id": "session-a",
@@ -214,6 +215,7 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertEqual(config.min_pool_bytes, 12582912)
         self.assertEqual(config.daemon_socket_path, "/tmp/turbobusd.sock")
         self.assertEqual(config.daemon_max_inflight_chunks, 6)
+        self.assertEqual(config.daemon_profile_max_age_seconds, 45.0)
         self.assertEqual(config.restore_block_limit, 8)
         self.assertTrue(config.restore_enabled)
         self.assertEqual(config.session_id, "session-a")
@@ -229,6 +231,7 @@ class TurboBusConnectorTest(unittest.TestCase):
             "turbobus.min_pool_bytes": 12582912,
             "turbobus.daemon_socket_path": "/tmp/turbobusd.sock",
             "turbobus.daemon_max_inflight_chunks": 6,
+            "turbobus.daemon_profile_max_age_seconds": 45.0,
         }
 
         with mock.patch("turbobus.vllm_kv_connector.Runtime") as runtime_class:
@@ -243,6 +246,7 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertEqual(kwargs["options"].min_pool_bytes, 12582912)
         self.assertEqual(kwargs["options"].daemon_socket_path, "/tmp/turbobusd.sock")
         self.assertEqual(kwargs["options"].daemon_max_inflight_chunks, 6)
+        self.assertEqual(kwargs["options"].daemon_profile_max_age_seconds, 45.0)
 
     def test_reports_explicit_external_match(self) -> None:
         register_saved_prefix("default", [object()], block_count=8, matched_tokens=96)

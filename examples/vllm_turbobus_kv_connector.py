@@ -92,6 +92,9 @@ def run(args) -> None:
             "turbobus.profile_bytes": args.profile_bytes,
             "turbobus.mode": args.mode,
             "turbobus.min_pool_bytes": args.min_pool_bytes,
+            "turbobus.daemon_socket_path": args.daemon_socket_path,
+            "turbobus.daemon_max_inflight_chunks": args.daemon_max_inflight_chunks,
+            "turbobus.daemon_profile_max_age_seconds": args.daemon_profile_max_age_seconds,
             "turbobus.restore_block_limit": args.restore_blocks,
             "turbobus.restore_enabled": args.restore_enabled,
             "turbobus.max_saved_prefixes": args.max_saved_prefixes,
@@ -269,6 +272,9 @@ def run(args) -> None:
             f"ranges={event_value(restore_event, 'ranges')}",
             f"auto_resolved_mode={event_value(restore_event, 'auto_resolved_mode', 'NA')}",
             f"auto_reason={event_value(restore_event, 'auto_reason', 'NA')}",
+            f"daemon_session_id={event_value(restore_event, 'daemon_session_id', '')}",
+            f"daemon_reservation_status={event_value(restore_event, 'daemon_reservation_status', '')}",
+            f"daemon_reserved_relays={event_value(restore_event, 'daemon_reserved_relays', '')}",
         )
     print(
         "vllm_kv_connector_result",
@@ -328,6 +334,9 @@ def parse_args():
     parser.add_argument("--profile-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--min-pool-bytes", type=int, default=12 * 1024 * 1024)
     parser.add_argument("--mode", choices=["auto", "direct", "relay", "pool"], default="pool")
+    parser.add_argument("--daemon-socket-path", default="")
+    parser.add_argument("--daemon-max-inflight-chunks", type=int, default=8)
+    parser.add_argument("--daemon-profile-max-age-seconds", type=float, default=3600.0)
     parser.add_argument("--log-output", default=None)
     parser.add_argument(
         "--no-map-physical-gpus",

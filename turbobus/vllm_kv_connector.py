@@ -223,6 +223,7 @@ class TurboBusConnectorConfig:
     min_pool_bytes: int
     daemon_socket_path: str
     daemon_max_inflight_chunks: int
+    daemon_profile_max_age_seconds: float
     restore_block_limit: int
     restore_enabled: bool
     session_id: str
@@ -273,6 +274,11 @@ class TurboBusConnectorConfig:
                 "turbobus.daemon_max_inflight_chunks",
                 int(os.environ.get("TURBOBUS_DAEMON_MAX_INFLIGHT_CHUNKS", "8") or 8),
             ),
+            daemon_profile_max_age_seconds=_extra_config_float(
+                vllm_config,
+                "turbobus.daemon_profile_max_age_seconds",
+                float(os.environ.get("TURBOBUS_DAEMON_PROFILE_MAX_AGE_SECONDS", 3600.0) or 3600.0),
+            ),
             restore_block_limit=_extra_config_int(
                 vllm_config,
                 "turbobus.restore_block_limit",
@@ -303,6 +309,7 @@ class TurboBusConnectorConfig:
             min_pool_bytes=self.min_pool_bytes,
             daemon_socket_path=self.daemon_socket_path or None,
             daemon_max_inflight_chunks=self.daemon_max_inflight_chunks,
+            daemon_profile_max_age_seconds=self.daemon_profile_max_age_seconds,
         )
 
 
@@ -1399,6 +1406,15 @@ def _extra_config_int(vllm_config, key: str, default: int) -> int:
         return default
     value = getter(key, default)
     return int(value)
+
+
+def _extra_config_float(vllm_config, key: str, default: float) -> float:
+    config = getattr(vllm_config, "kv_transfer_config", None)
+    getter = getattr(config, "get_from_extra_config", None)
+    if getter is None:
+        return default
+    value = getter(key, default)
+    return float(value)
 
 
 def _extra_config_bool(vllm_config, key: str, default: bool) -> bool:

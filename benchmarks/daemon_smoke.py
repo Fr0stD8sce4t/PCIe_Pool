@@ -138,7 +138,9 @@ def build_client_command(args, socket_path: str, workload: str, client_index: in
             "--daemon-socket-path",
             socket_path,
             "--daemon-max-inflight-chunks",
-            str(args.daemon_max_inflight_chunks),
+            str(getattr(args, "daemon_max_inflight_chunks", 128)),
+            "--daemon-profile-max-age-seconds",
+            str(getattr(args, "daemon_profile_max_age_seconds", 3600.0)),
         ]
     )
     if args.verify:
@@ -309,7 +311,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--daemon-max-sessions-per-relay", type=int, default=2)
     parser.add_argument("--daemon-max-inflight-chunks-per-relay", type=int, default=128)
     parser.add_argument("--daemon-session-timeout-seconds", type=float, default=0.0)
-    parser.add_argument("--daemon-profile-max-age-seconds", type=float, default=0.0)
     add_daemon_options(parser)
     parser.set_defaults(daemon_max_inflight_chunks=128)
     return parser

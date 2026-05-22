@@ -31,12 +31,21 @@ class VllmKVConnectorExampleTest(unittest.TestCase):
                 "model",
                 "--target-gpu",
                 "6",
+                "--daemon-socket-path",
+                "/tmp/turbobusd.sock",
+                "--daemon-max-inflight-chunks",
+                "12",
+                "--daemon-profile-max-age-seconds",
+                "45",
             ],
         ):
             args = example.parse_args()
 
         self.assertTrue(args.save_enabled)
         self.assertFalse(args.restore_enabled)
+        self.assertEqual(args.daemon_socket_path, "/tmp/turbobusd.sock")
+        self.assertEqual(args.daemon_max_inflight_chunks, 12)
+        self.assertEqual(args.daemon_profile_max_age_seconds, 45.0)
 
     def test_no_save_disables_first_request_save_intent(self) -> None:
         with mock.patch.object(

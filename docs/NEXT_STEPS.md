@@ -6,25 +6,35 @@ from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
 
 ## Current
 
-### 17. Build a paper-style validation harness
+### 18. Close remaining framework-specific integration gaps
 
-Create one reproduction entry point that runs the three Runtime-backed
-workload paths and reports comparable paper metrics from a stable output
-format.
+Use the paper validation harness to close any last model-loading, vLLM
+save/restore, or training bucket-hook gaps needed for the three workloads to
+behave like the paper system on the target server.
 
 Acceptance:
 
-- The harness can run model loading, vLLM KV save/restore, and training
-  offload individually or as one suite.
-- Output includes TTFT or TTFT proxy, restore latency, throughput, iteration
-  time, transfer bytes, path split, daemon reservation status, and fallback
-  reason when each metric is available.
-- The harness uses existing Runtime-backed workload clients and benchmark
-  scripts instead of duplicating transfer policy.
-- JSON output and compact summary lines are stable enough for paper-result
-  comparison and unit tests.
+- The validation harness runs all three workload paths on the target server
+  without workload-specific transfer policy bypasses.
+- vLLM save and restore remain on the official connector lifecycle and report
+  enough event data for the harness metrics.
+- Model loading and training offload expose any missing bucket-level metrics
+  or configuration hooks required by the harness.
+- Any server-only gaps are documented with exact follow-up commands and
+  expected outputs.
 
 ## Completed
+
+- 2026-05-22: Build a paper-style validation harness.
+  - Added `benchmarks/paper_validation.py` to run model loading, vLLM KV
+    save/restore, and training offload individually or as one suite.
+  - The harness calls existing Runtime-backed benchmark and connector scripts
+    and normalizes their JSON/case outputs into `paper_metric` summary lines.
+  - Unified output covers TTFT or TTFT proxy, restore latency, throughput,
+    iteration time, transfer bytes, path split, daemon reservation status, and
+    fallback reason when available.
+  - vLLM connector sweep and example paths now accept daemon options and carry
+    daemon reservation fields into sweep case rows.
 
 - 2026-05-22: Expand daemon work toward the paper architecture.
   - Relay lists are normalized before ownership accounting, and invalid
@@ -170,9 +180,8 @@ Acceptance:
 
 ## Upcoming
 
-- Close any remaining framework-specific save/restore or bucket-hook gaps
-  needed to make the three workloads behave like the paper system on the
-  target server.
+- Run server-side paper validation and tighten measured behavior toward the
+  paper claims.
 
 ## Working Rules
 
