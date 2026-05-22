@@ -9,6 +9,18 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- Continue vLLM connector lifecycle cleanup
+  - Added `clear_connector_events()` and `get_connector_events()` so the real
+    connector example can report lifecycle events without reading internal
+    prefix-store objects.
+  - `examples/vllm_turbobus_kv_connector.py` now sends save/restore intent
+    through `kv_transfer_params` and builds save/restore summaries from
+    `TurboBusConnector` events.
+  - Restore summaries now include bytes, layers, ranges, direct/relay chunks,
+    timing, and auto-selection fields from connector events.
+  - vLLM connector unit tests instantiate `TurboBusConnector` with
+    `kv_cache_config`, matching the current vLLM base-class lifecycle.
+
 - Wire daemon transfer reservations into Runtime planning
   - Added `TurboBusDaemonClient` for the local daemon socket protocol.
   - `RuntimeOptions.daemon_socket_path` now makes Runtime register a daemon
@@ -197,6 +209,27 @@ git diff --check
 
 Result: passed.
 
+For vLLM connector lifecycle cleanup:
+
+```text
+python -m unittest discover -s test\python -p "test_vllm_kv_connector.py" -v
+```
+
+Result: 32 tests passed.
+
+```text
+python -m unittest discover -s test\python -p "test_vllm_kv_connector_sweep.py" -v
+```
+
+Result: 6 tests passed.
+
+```text
+python -m compileall turbobus\vllm_kv_connector.py examples\vllm_turbobus_kv_connector.py test\python\test_vllm_kv_connector.py -q
+git diff --check
+```
+
+Result: passed.
+
 ## Known Server Follow-Up
 
 After C++/CUDA/pybind edits, reinstall before server tests:
@@ -211,5 +244,5 @@ Then run native and vLLM checks on target GPU 6 with relay GPU 5.
 
 ## Next Task
 
-Start with the task under `## Current` in `docs/NEXT_STEPS.md`: continue vLLM
-connector lifecycle cleanup.
+Start with the task under `## Current` in `docs/NEXT_STEPS.md`: add model
+loading workload API and benchmark.

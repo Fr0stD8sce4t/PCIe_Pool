@@ -12,7 +12,9 @@ from turbobus.vllm_kv_connector import (
     TurboBusPrefixStore,
     TurboBusRequestMetadata,
     TurboBusSavedPrefix,
+    clear_connector_events,
     clear_saved_prefixes,
+    get_connector_events,
     get_saved_prefix,
     _make_runtime_from_config,
     register_saved_prefix,
@@ -83,11 +85,16 @@ class FakeAdapter:
 
 class TurboBusConnectorTest(unittest.TestCase):
     def setUp(self) -> None:
+        clear_connector_events()
         clear_saved_prefixes()
 
     def make_connector(self, extra=None):
         with mock.patch("turbobus.vllm_kv_connector._make_runtime_from_config", return_value=object()):
-            return TurboBusConnector(FakeVllmConfig(extra), role="scheduler")
+            return TurboBusConnector(
+                FakeVllmConfig(extra),
+                role="scheduler",
+                kv_cache_config=object(),
+            )
 
     def test_prefix_store_replaces_saved_prefix_by_key(self) -> None:
         store = TurboBusPrefixStore()
@@ -140,6 +147,16 @@ class TurboBusConnectorTest(unittest.TestCase):
 
         self.assertIsNone(get_saved_prefix("key", "a"))
         self.assertEqual(get_saved_prefix("key", "b").block_count, 2)
+
+    def test_connector_events_are_readable_and_clearable(self) -> None:
+        register_saved_prefix("key", [object()], block_count=1, matched_tokens=16)
+
+        events = get_connector_events()
+        self.assertEqual(events[-1]["event"], "register_saved_prefix")
+        self.assertEqual(events[-1]["prefix_key"], "key")
+
+        clear_connector_events()
+        self.assertEqual(get_connector_events(), [])
 
     def test_cpu_backing_pool_reuses_released_backings(self) -> None:
         pool = TurboBusCPUBackingPool()

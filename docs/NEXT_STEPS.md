@@ -6,19 +6,6 @@ from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
 
 ## Current
 
-### 6. Continue vLLM Connector Lifecycle Cleanup
-
-Keep save intent, block ids, metadata, worker save, prefix registration, and
-completion inside `TurboBusConnector`. Example scripts should send
-`kv_transfer_params` and report events only.
-
-Acceptance:
-
-- No example-side manual prefix registration in the real connector path.
-- Save and restore events report bytes, layers, ranges, chunks, and timing.
-
-## Upcoming
-
 ### 7. Add Model Loading Workload API And Benchmark
 
 Add CPU pinned weight bucket movement through Runtime. Measure direct, relay,
@@ -38,6 +25,16 @@ Acceptance:
 - Benchmark reports iteration proxy time, transfer time, and path split.
 
 ## Completed
+
+- 2026-05-22: Continue vLLM connector lifecycle cleanup.
+  - Added a connector event stream API so examples can report connector
+    lifecycle outcomes without reading internal prefix-store objects.
+  - Updated `examples/vllm_turbobus_kv_connector.py` to derive save/restore
+    summaries from connector events emitted by `TurboBusConnector`.
+  - The official connector example now reports restore bytes, layers, ranges,
+    chunks, timing, and auto-selection fields from connector events.
+  - Unit tests now construct `TurboBusConnector` with `kv_cache_config`, matching
+    the current vLLM base-class lifecycle.
 
 - 2026-05-22: Wire daemon transfer reservations into Runtime planning.
   - Added a daemon socket client and Runtime daemon session registration.

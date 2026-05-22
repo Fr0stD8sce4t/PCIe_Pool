@@ -307,6 +307,7 @@ class TurboBusConnectorConfig:
 
 
 _PREFIX_STORE = TurboBusPrefixStore()
+_CONNECTOR_EVENTS: list[dict[str, Any]] = []
 
 
 def register_saved_prefix(
@@ -376,6 +377,14 @@ def clear_saved_prefixes(session_id: str | None = None) -> None:
 
 def get_saved_prefix(key: str, session_id: str = "default") -> TurboBusSavedPrefix | None:
     return _PREFIX_STORE.get(str(key), str(session_id))
+
+
+def clear_connector_events() -> None:
+    _CONNECTOR_EVENTS.clear()
+
+
+def get_connector_events() -> list[dict[str, Any]]:
+    return list(_CONNECTOR_EVENTS)
 
 
 def _store_saved_prefix(prefix: TurboBusSavedPrefix) -> list[TurboBusSavedPrefix]:
@@ -1469,6 +1478,7 @@ def _backing_signature(block_count: int, kv_caches: list[Any]) -> tuple[tuple[in
 
 
 def _emit_event(event: str, **fields) -> None:
+    _CONNECTOR_EVENTS.append({"event": event, **fields})
     parts = ["turbobus_kv_connector_event", f"event={event}"]
     for key, value in fields.items():
         parts.append(f"{key}={value}")
@@ -1481,7 +1491,9 @@ __all__ = [
     "TurboBusConnectorMetadata",
     "TurboBusRequestMetadata",
     "TurboBusSavedPrefix",
+    "clear_connector_events",
     "clear_saved_prefixes",
+    "get_connector_events",
     "get_saved_prefix",
     "register_saved_prefix",
 ]

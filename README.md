@@ -315,9 +315,11 @@ ask vLLM to skip prefill unless `--restore-enabled` is passed. Keep that flag
 off until the saved prefix/session CPU backing is connected.
 
 To run the two-request official connector restore path, add
-`--restore-enabled`. The script first saves KV from a real request, registers
-that CPU backing under `--prefix-key`, then sends a second shared-prefix request
-whose `kv_transfer_params` trigger TurboBus restore from `start_load_kv()`:
+`--restore-enabled`. The script sends save intent through
+`kv_transfer_params`; `TurboBusConnector` saves KV from the first real request
+and registers the CPU backing under `--prefix-key`. The script then sends a
+second shared-prefix request whose `kv_transfer_params` trigger TurboBus
+restore from `start_load_kv()`:
 
 ```bash
 python examples/vllm_turbobus_kv_connector.py \
@@ -353,6 +355,10 @@ fallback:
 | `turbobus.restore_enabled` | `TURBOBUS_RESTORE_ENABLED` | `0` |
 | `turbobus.session_id` | vLLM engine id | `default` |
 | `turbobus.max_saved_prefixes` | `TURBOBUS_MAX_SAVED_PREFIXES` | `0` |
+
+The connector example reports save and restore summaries from connector events,
+including bytes, layers, ranges, direct chunks, relay chunks, and timing. The
+example does not manually register prefixes in the real connector path.
 
 To compare direct, relay, and pooled transfer on the same official connector
 path, run the sweep wrapper. Each case starts a fresh vLLM process and writes

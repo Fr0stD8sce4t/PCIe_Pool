@@ -38,6 +38,29 @@ def second_prompt_text(args, first_prompt: str) -> str:
     return first_prompt + args.second_prompt_suffix
 
 
+def last_event(events: list[dict], event: str, **matches):
+    for item in reversed(events):
+        if item.get("event") != event:
+            continue
+        if all(item.get(key) == value for key, value in matches.items()):
+            return item
+    return None
+
+
+def event_value(event: dict | None, key: str, default=0):
+    if event is None:
+        return default
+    return event.get(key, default)
+
+
+def format_ms(event: dict | None, key: str) -> str:
+    value = event_value(event, key, 0.0)
+    try:
+        return f"{float(value):.3f}"
+    except (TypeError, ValueError):
+        return "0.000"
+
+
 def run(args) -> None:
     configure_cuda_devices(args)
     if args.disable_multiproc_executor:
@@ -47,9 +70,14 @@ def run(args) -> None:
     from vllm import LLM, SamplingParams
     from vllm.config import KVTransferConfig
 
-    from turbobus.vllm_kv_connector import clear_saved_prefixes, get_saved_prefix
+    from turbobus.vllm_kv_connector import (
+        clear_connector_events,
+        clear_saved_prefixes,
+        get_connector_events,
+    )
 
     torch.cuda.set_device(args.runtime_target_gpu)
+    clear_connector_events()
     clear_saved_prefixes(args.session_id)
 
     relay_gpus = ",".join(str(gpu) for gpu in args.runtime_relay_gpus)
@@ -96,11 +124,12 @@ def run(args) -> None:
     )
     first_outputs = llm.generate([first_prompt], base_sampling)
 
-    first_saved = get_saved_prefix(args.prefix_key, args.session_id)
+    events = get_connector_events()
+    first_save_event = last_event(events, "save", prefix_key=args.prefix_key)
     restore_prefix_key = args.prefix_key
     restore_base_prompt = first_prompt
-    saved = first_saved
-    second_saved = None
+    save_event = first_save_event
+    second_save_event = None
     if args.second_save_prefix_key:
         second_save_prompt = prompt_text(args.second_save_prompt, args.prompt_repeat)
         second_save_sampling = SamplingParams(
@@ -116,20 +145,21 @@ def run(args) -> None:
             },
         )
         llm.generate([second_save_prompt], second_save_sampling)
-        second_saved = get_saved_prefix(args.second_save_prefix_key, args.session_id)
+        events = get_connector_events()
+        second_save_event = last_event(events, "save", prefix_key=args.second_save_prefix_key)
         restore_prefix_key = args.second_save_prefix_key
         restore_base_prompt = second_save_prompt
-        saved = second_saved
+        save_event = second_save_event
 
-    source_request_id = saved.source_request_id if saved is not None else "unknown"
-    source_blocks = saved.block_count if saved is not None else 0
+    source_request_id = str(event_value(save_event, "request_id", "unknown"))
+    source_blocks = int(event_value(save_event, "block_count", 0) or 0)
     if args.restore_enabled:
-        if saved is None:
+        if save_event is None:
             raise RuntimeError(
                 f"connector did not save prefix {restore_prefix_key!r}; "
                 "check turbobus.do_save and vLLM wait_for_save"
             )
-        if saved.block_count < args.restore_blocks:
+        if source_blocks < args.restore_blocks:
             raise RuntimeError(
                 f"source request has {source_blocks} blocks, need {args.restore_blocks}; "
                 "increase --prompt-repeat or lower --restore-blocks"
@@ -149,6 +179,8 @@ def run(args) -> None:
         },
     )
     outputs = llm.generate([second_prompt], sampling)
+    events = get_connector_events()
+    restore_event = last_event(events, "restore", prefix_key=restore_prefix_key)
     generated_text = outputs[0].outputs[0].text if outputs and outputs[0].outputs else ""
 
     print("COPY_SUMMARY_BEGIN")
@@ -182,43 +214,60 @@ def run(args) -> None:
         "entry=start_load_kv",
         "note=official_vllm_external_kv_path",
     )
-    if saved is not None:
+    if save_event is not None:
         print(
             "vllm_kv_connector_save",
             f"source_request={source_request_id}",
             f"source_blocks={source_blocks}",
-            f"blocks={saved.block_count}",
-            f"bytes={saved.bytes}",
-            f"elapsed_ms={saved.elapsed_ms:.3f}",
-            f"runtime_init_ms={saved.runtime_init_ms:.3f}",
-            f"prepare_ms={saved.prepare_ms:.3f}",
-            f"cpu_alloc_ms={saved.cpu_alloc_ms:.3f}",
-            f"group_ms={saved.group_ms:.3f}",
-            f"adapter_ms={saved.adapter_ms:.3f}",
-            f"refs_ms={saved.refs_ms:.3f}",
-            f"transfer_ms={saved.transfer_ms:.3f}",
-            f"register_ms={saved.register_ms:.3f}",
-            f"total_ms={saved.total_ms:.3f}",
-            f"direct_chunks={saved.direct_chunks}",
-            f"relay_chunks={saved.relay_chunks}",
-            f"save_layer_count={saved.save_layer_count}",
-            f"save_layer_ranges={saved.save_layer_ranges}",
+            f"blocks={event_value(save_event, 'block_count')}",
+            f"bytes={event_value(save_event, 'bytes')}",
+            f"elapsed_ms={format_ms(save_event, 'elapsed_ms')}",
+            f"runtime_init_ms={format_ms(save_event, 'runtime_init_ms')}",
+            f"prepare_ms={format_ms(save_event, 'prepare_ms')}",
+            f"cpu_alloc_ms={format_ms(save_event, 'cpu_alloc_ms')}",
+            f"group_ms={format_ms(save_event, 'group_ms')}",
+            f"adapter_ms={format_ms(save_event, 'adapter_ms')}",
+            f"refs_ms={format_ms(save_event, 'refs_ms')}",
+            f"transfer_ms={format_ms(save_event, 'transfer_ms')}",
+            f"register_ms={format_ms(save_event, 'register_ms')}",
+            f"total_ms={format_ms(save_event, 'total_ms')}",
+            f"direct_chunks={event_value(save_event, 'direct_chunks')}",
+            f"relay_chunks={event_value(save_event, 'relay_chunks')}",
+            f"save_layer_count={event_value(save_event, 'layers')}",
+            f"save_layer_ranges={event_value(save_event, 'ranges')}",
         )
-    if first_saved is not None and first_saved is not saved:
+    if first_save_event is not None and first_save_event is not save_event:
         print(
             "vllm_kv_connector_first_save",
-            f"source_request={first_saved.source_request_id}",
-            f"blocks={first_saved.block_count}",
-            f"bytes={first_saved.bytes}",
-            f"elapsed_ms={first_saved.elapsed_ms:.3f}",
+            f"source_request={event_value(first_save_event, 'request_id', 'unknown')}",
+            f"blocks={event_value(first_save_event, 'block_count')}",
+            f"bytes={event_value(first_save_event, 'bytes')}",
+            f"elapsed_ms={format_ms(first_save_event, 'elapsed_ms')}",
         )
-    if second_saved is not None and second_saved is not saved:
+    if second_save_event is not None and second_save_event is not save_event:
         print(
             "vllm_kv_connector_second_save",
-            f"source_request={second_saved.source_request_id}",
-            f"blocks={second_saved.block_count}",
-            f"bytes={second_saved.bytes}",
-            f"elapsed_ms={second_saved.elapsed_ms:.3f}",
+            f"source_request={event_value(second_save_event, 'request_id', 'unknown')}",
+            f"blocks={event_value(second_save_event, 'block_count')}",
+            f"bytes={event_value(second_save_event, 'bytes')}",
+            f"elapsed_ms={format_ms(second_save_event, 'elapsed_ms')}",
+        )
+    if restore_event is not None:
+        print(
+            "vllm_kv_connector_restore",
+            f"request_id={event_value(restore_event, 'request_id', 'unknown')}",
+            f"prefix_key={event_value(restore_event, 'prefix_key', restore_prefix_key)}",
+            f"bytes={event_value(restore_event, 'bytes')}",
+            f"elapsed_ms={format_ms(restore_event, 'elapsed_ms')}",
+            f"prepare_ms={format_ms(restore_event, 'prepare_ms')}",
+            f"transfer_ms={format_ms(restore_event, 'transfer_ms')}",
+            f"total_ms={format_ms(restore_event, 'total_ms')}",
+            f"direct_chunks={event_value(restore_event, 'direct_chunks')}",
+            f"relay_chunks={event_value(restore_event, 'relay_chunks')}",
+            f"layers={event_value(restore_event, 'layers')}",
+            f"ranges={event_value(restore_event, 'ranges')}",
+            f"auto_resolved_mode={event_value(restore_event, 'auto_resolved_mode', 'NA')}",
+            f"auto_reason={event_value(restore_event, 'auto_reason', 'NA')}",
         )
     print(
         "vllm_kv_connector_result",

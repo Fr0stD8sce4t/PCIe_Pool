@@ -286,7 +286,7 @@ two-request path in one vLLM process:
 
 1. first request allocates real vLLM KV slots;
 2. TurboBus saves selected prefix blocks into pinned CPU backing;
-3. the saved backing is registered under `--prefix-key`;
+3. `TurboBusConnector` registers the saved backing under `--prefix-key`;
 4. second request shares the first prompt as a prefix;
 5. `kv_transfer_params` names the same prefix key and matched-token count;
 6. vLLM calls the TurboBus KV connector, which restores into the second
@@ -333,6 +333,10 @@ and `start_load_kv`. Copy the final `SWEEP_SUMMARY_BEGIN` /
 `SWEEP_SUMMARY_END` block when sharing results. The same block is also written
 to `sweep_summary.txt` under the run log directory by default; use
 `--summary-output <path>` to choose a different file.
+
+The official connector example builds its summary from connector events emitted
+by `TurboBusConnector`; it does not call `register_saved_prefix()` directly in
+the real connector path.
 
 ## Success Criteria
 
