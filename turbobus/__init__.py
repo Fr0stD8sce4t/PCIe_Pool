@@ -1,5 +1,6 @@
 from .offload_store import (
     BlockState,
+    OffloadBatch,
     KVBlockStore,
     OffloadBlock,
     OffloadBlockInfo,
@@ -58,6 +59,7 @@ __all__ = [
     "ModelLoader",
     "ModelWeightLoader",
     "OffloadBlock",
+    "OffloadBatch",
     "OffloadBlockInfo",
     "OffloadManager",
     "OffloadStore",

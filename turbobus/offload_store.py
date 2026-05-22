@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Iterable
 
@@ -61,6 +61,31 @@ class OffloadBlockInfo:
                 if self.transfer_stats is not None
                 else None
             ),
+        }
+
+
+@dataclass(frozen=True)
+class OffloadBatch:
+    operation: str
+    names: tuple[str, ...]
+    handles: tuple[object, ...]
+    store: "OffloadStore" = field(repr=False, compare=False)
+
+    def wait(self) -> None:
+        self.store.wait_many(self.names)
+
+    def transfer_stats(self) -> TransferStats:
+        return self.store.transfer_stats_many(self.names)
+
+    def block_infos(self) -> list[OffloadBlockInfo]:
+        return self.store.block_infos(self.names)
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "operation": self.operation,
+            "names": list(self.names),
+            "transfer_stats": self.transfer_stats().as_dict(),
+            "blocks": [info.as_dict() for info in self.block_infos()],
         }
 
 
@@ -258,9 +283,12 @@ class OffloadStore:
         return handle
 
     def prefetch_many(self, names: Iterable[str]) -> list:
+        return list(self.submit_prefetch_many(names).handles)
+
+    def submit_prefetch_many(self, names: Iterable[str]) -> OffloadBatch:
         blocks = [self.block(name) for name in names]
         if not blocks:
-            return []
+            return OffloadBatch("prefetch", (), (), self)
         if self._can_use_range_batch(blocks):
             ranges = self._ranges(blocks, "prefetch")
             handle = self.runtime.fetch_ranges_to_gpu(
@@ -269,13 +297,18 @@ class OffloadStore:
                 ranges,
             )
             self._record_many(blocks, handle, "prefetch", BlockState.PREFETCHING)
-            return [handle for _ in blocks]
-        return [self.prefetch(block.name) for block in blocks]
+            handles = tuple(handle for _ in blocks)
+        else:
+            handles = tuple(self.prefetch(block.name) for block in blocks)
+        return OffloadBatch("prefetch", tuple(block.name for block in blocks), handles, self)
 
     def evict_many(self, names: Iterable[str]) -> list:
+        return list(self.submit_evict_many(names).handles)
+
+    def submit_evict_many(self, names: Iterable[str]) -> OffloadBatch:
         blocks = [self.block(name) for name in names]
         if not blocks:
-            return []
+            return OffloadBatch("evict", (), (), self)
         if self._can_use_range_batch(blocks):
             ranges = self._ranges(blocks, "evict")
             handle = self.runtime.offload_ranges_to_cpu(
@@ -284,8 +317,10 @@ class OffloadStore:
                 ranges,
             )
             self._record_many(blocks, handle, "evict", BlockState.EVICTING)
-            return [handle for _ in blocks]
-        return [self.evict(block.name) for block in blocks]
+            handles = tuple(handle for _ in blocks)
+        else:
+            handles = tuple(self.evict(block.name) for block in blocks)
+        return OffloadBatch("evict", tuple(block.name for block in blocks), handles, self)
 
     def wait(self, name: str) -> None:
         block = self.block(name)

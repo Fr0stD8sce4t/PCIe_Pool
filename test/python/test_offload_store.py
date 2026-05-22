@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from turbobus import (
     BlockState,
     KVBlockStore,
+    OffloadBatch,
     OffloadManager,
     OffloadStore,
     OffloadBlockInfo,
@@ -287,6 +288,43 @@ class OffloadStoreTest(unittest.TestCase):
             store.transfer_stats_many(["kv0", "kv1"]),
             TransferStats(bytes=16, direct_chunks=2),
         )
+
+    def test_submit_prefetch_many_returns_batch_object(self) -> None:
+        runtime = FakeRuntime()
+        store = OffloadStore(runtime)
+        cpu = FakeTensor(128)
+        gpu = object()
+        store.add("kv0", cpu, gpu, cpu_offset=0, gpu_offset=16, byte_count=8)
+        store.add("kv1", cpu, gpu, cpu_offset=32, gpu_offset=48, byte_count=8)
+
+        batch = store.submit_prefetch_many(["kv0", "kv1"])
+
+        self.assertIsInstance(batch, OffloadBatch)
+        self.assertEqual(batch.operation, "prefetch")
+        self.assertEqual(batch.names, ("kv0", "kv1"))
+        self.assertEqual(batch.handles[0], batch.handles[1])
+        self.assertEqual(runtime.calls[0][0], "prefetch_ranges")
+
+        batch.wait()
+
+        self.assertEqual(batch.handles[0].wait_calls, 1)
+        self.assertEqual(batch.transfer_stats(), TransferStats(bytes=16, direct_chunks=2))
+        self.assertEqual(
+            [info.state for info in batch.block_infos()],
+            [BlockState.GPU, BlockState.GPU],
+        )
+        self.assertEqual(batch.as_dict()["transfer_stats"]["bytes"], 16)
+
+    def test_empty_batch_object_is_noop(self) -> None:
+        store = OffloadStore(FakeRuntime())
+
+        batch = store.submit_evict_many([])
+        batch.wait()
+
+        self.assertEqual(batch.operation, "evict")
+        self.assertEqual(batch.names, ())
+        self.assertEqual(batch.handles, ())
+        self.assertEqual(batch.transfer_stats(), TransferStats())
 
     def test_evict_many_uses_reversed_ranges_for_packed_blocks(self) -> None:
         runtime = FakeRuntime()

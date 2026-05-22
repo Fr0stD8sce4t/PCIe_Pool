@@ -6,20 +6,29 @@ from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
 
 ## Current
 
-### 13. Add batch block operations on top of the existing transfer APIs
+### 14. Build the real vLLM KV offload integration path
 
-`prefetch_many(names)` and `evict_many(names)` are the stable benchmark and
-future connector entry points. Keep the simple per-block path as the fallback
-for non-packed tensors, and keep the shared Runtime transfer policy underneath
-the block layer.
+Move vLLM prefix save and restore farther into the real connector lifecycle.
+Keep using vLLM-owned KV cache tensors and block ids, and keep the example from
+driving save through private prefix-store calls.
 
 Acceptance:
 
-- Batch block operations stay available through the reusable block-store API.
-- Packed CPU/GPU backing buffers keep using range-batched Runtime transfers.
-- The block layer stays thin and does not absorb workload policy.
+- Restore and save continue to flow through `KVConnectorBase_V1` metadata.
+- The example reports connector events without mutating connector internals.
+- Connector changes stay version-aware for the current server vLLM build.
 
 ## Completed
+
+- 2026-05-22: Add batch block operations on top of the existing transfer APIs.
+  - Added `OffloadBatch` plus `submit_prefetch_many()` and
+    `submit_evict_many()` to the reusable `OffloadStore` API.
+  - Kept `prefetch_many(names)` and `evict_many(names)` returning handle lists
+    for existing benchmarks and adapters.
+  - Packed blocks still submit one range-batched Runtime transfer, while
+    non-packed blocks keep the per-block fallback path.
+  - Added focused tests for batch wait, stats, block snapshots, empty batches,
+    and range-batched handle reuse.
 
 - 2026-05-22: Make the Python offload object layer reusable by future
   connectors.
@@ -125,7 +134,6 @@ Acceptance:
 
 ## Upcoming
 
-- Build the real vLLM KV offload integration path.
 - Add production-shaped offload clients for the three paper workloads.
 - Expand daemon work toward the paper architecture.
 

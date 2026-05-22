@@ -9,6 +9,14 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- Add batch block operations on top of Runtime transfers
+  - Added `OffloadBatch` to carry batch operation names, handles, block
+    snapshots, and transfer stats for future connector use.
+  - Added `submit_prefetch_many()` and `submit_evict_many()` while preserving
+    the existing `prefetch_many()` and `evict_many()` handle-list API.
+  - Packed block batches still use one range-batched Runtime transfer; separate
+    tensors keep the simple per-block fallback path.
+
 - Make the Python offload object layer reusable by future connectors
   - Added block-store style aliases and helpers to `OffloadStore` for
     `add_block`, `get_block`, `block_ids`, and block state cleanup.
@@ -161,6 +169,23 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
   - Connector configuration was consolidated around shared keys.
 
 ## Last Verified Checks
+
+For batch block operations:
+
+```text
+python -m unittest discover -s test\python -p "test_offload_store.py" -v
+```
+
+Result: 18 tests passed.
+
+```text
+python -m unittest discover -s test\python -p "test_model_loading.py" -v
+python -m unittest discover -s test\python -p "test_training_offload.py" -v
+python -m unittest discover -s test\python -p "test_inference_adapters.py" -v
+python -m compileall turbobus\offload_store.py turbobus\__init__.py test\python\test_offload_store.py -q
+```
+
+Result: passed.
 
 For reusable offload block-store aliases:
 
@@ -439,5 +464,5 @@ Then run native and vLLM checks on target GPU 6 with relay GPU 5.
 
 ## Next Task
 
-Start with the task under `## Current` in `docs/NEXT_STEPS.md`: add a daemon
-multi-process benchmark smoke wrapper.
+Start with the task under `## Current` in `docs/NEXT_STEPS.md`: build the real
+vLLM KV offload integration path.
