@@ -325,6 +325,69 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertEqual(metadata.save_requests[0].prefix_key, "scheduled")
         self.assertEqual(metadata.save_requests[0].block_ids, (4, 5))
 
+    def test_build_connector_meta_remembers_save_params_until_blocks_arrive(self) -> None:
+        connector = self.make_connector()
+        first_output = SimpleNamespace(
+            scheduled_new_reqs=[
+                SimpleNamespace(
+                    req_id="req1",
+                    new_block_ids=[4],
+                    kv_transfer_params={
+                        "turbobus.do_save": True,
+                        "turbobus.prefix_key": "scheduled",
+                        "turbobus.save_blocks": 2,
+                        "turbobus.matched_tokens": 32,
+                    },
+                )
+            ]
+        )
+
+        first_metadata = connector.build_connector_meta(first_output)
+
+        self.assertEqual(len(first_metadata.save_requests), 0)
+        self.assertIn("req1", connector.state.save_params_by_request_id)
+
+        second_output = SimpleNamespace(
+            scheduled_cached_reqs=SimpleNamespace(
+                req_ids=["req1"],
+                new_block_ids=[[4, 5]],
+                requests={},
+            )
+        )
+        second_metadata = connector.build_connector_meta(second_output)
+
+        self.assertEqual(len(second_metadata.save_requests), 1)
+        self.assertEqual(second_metadata.save_requests[0].request_id, "req1")
+        self.assertEqual(second_metadata.save_requests[0].prefix_key, "scheduled")
+        self.assertEqual(second_metadata.save_requests[0].block_ids, (4, 5))
+        self.assertNotIn("req1", connector.state.save_params_by_request_id)
+
+    def test_update_state_after_alloc_remembers_save_params_until_blocks_arrive(self) -> None:
+        connector = self.make_connector()
+        request = FakeRequest(
+            {
+                "turbobus.do_save": True,
+                "turbobus.prefix_key": "saved",
+                "turbobus.save_blocks": 2,
+                "turbobus.matched_tokens": 32,
+            }
+        )
+
+        connector.update_state_after_alloc(request, FakeBlocks(([1],)), 0)
+        metadata = connector.build_connector_meta(
+            SimpleNamespace(
+                scheduled_cached_reqs=SimpleNamespace(
+                    req_ids=["req0"],
+                    new_block_ids=[[1, 2]],
+                    requests={},
+                )
+            )
+        )
+
+        self.assertEqual(len(metadata.save_requests), 1)
+        self.assertEqual(metadata.save_requests[0].prefix_key, "saved")
+        self.assertEqual(metadata.save_requests[0].block_ids, (1, 2))
+
     def test_request_finished_delays_free_for_saved_request(self) -> None:
         connector = self.make_connector()
         request = FakeRequest(

@@ -205,6 +205,7 @@ class TurboBusKVConnectorState:
     kv_caches: dict[str, Any] = field(default_factory=dict)
     pending_loads: dict[str, TurboBusRequestMetadata] = field(default_factory=dict)
     pending_saves: dict[str, TurboBusRequestMetadata] = field(default_factory=dict)
+    save_params_by_request_id: dict[str, dict[str, Any]] = field(default_factory=dict)
     save_request_ids: set[str] = field(default_factory=set)
     saved_request_ids: set[str] = field(default_factory=set)
     finished_sending: set[str] = field(default_factory=set)
@@ -688,6 +689,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         request_id = str(getattr(request, "request_id", "unknown"))
         if request_id in self.state.save_request_ids:
             return
+        self.state.save_params_by_request_id[request_id] = dict(params)
         block_ids = _flatten_block_ids(extract_vllm_block_ids(blocks))
         if not block_ids:
             return
@@ -720,6 +722,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         )
         self.state.pending_saves[request_id] = meta
         self.state.save_request_ids.add(request_id)
+        self.state.save_params_by_request_id.pop(request_id, None)
         self.state.events.append(
             {
                 "event": "save_alloc",
@@ -740,9 +743,13 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
     def _collect_save_requests_from_scheduler_output(self, scheduler_output) -> None:
         for request in _iter_scheduled_requests(scheduler_output):
             params = _request_params(request)
+            request_id = _scheduled_request_id(request)
+            if params.get("turbobus.do_save"):
+                self.state.save_params_by_request_id[request_id] = dict(params)
+            else:
+                params = self.state.save_params_by_request_id.get(request_id, {})
             if not params.get("turbobus.do_save"):
                 continue
-            request_id = _scheduled_request_id(request)
             if request_id in self.state.save_request_ids:
                 continue
             block_ids = _scheduled_request_block_ids(request)
@@ -752,6 +759,20 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             if requested_blocks <= 0:
                 requested_blocks = len(block_ids)
             if len(block_ids) < requested_blocks:
+                self.state.events.append(
+                    {
+                        "event": "save_waiting",
+                        "request_id": request_id,
+                        "available_blocks": len(block_ids),
+                        "requested_blocks": requested_blocks,
+                    }
+                )
+                _emit_event(
+                    "save_waiting",
+                    request_id=request_id,
+                    available_blocks=len(block_ids),
+                    requested_blocks=requested_blocks,
+                )
                 continue
             block_ids = block_ids[:requested_blocks]
             meta = TurboBusRequestMetadata(
@@ -763,6 +784,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             )
             self.state.pending_saves[request_id] = meta
             self.state.save_request_ids.add(request_id)
+            self.state.save_params_by_request_id.pop(request_id, None)
             self.state.events.append(
                 {
                     "event": "save_schedule",
