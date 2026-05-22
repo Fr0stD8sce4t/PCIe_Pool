@@ -9,6 +9,13 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- Fix daemon smoke parser conflict
+  - Split the daemon smoke parser construction into a helper so the wrapper can
+    accept both daemon-launch quotas and client daemon options without
+    duplicate argparse flags.
+  - Added a regression test that parses daemon socket and inflight chunk
+    options successfully.
+
 - Add daemon multi-process benchmark smoke
   - Added `benchmarks/daemon_smoke.py` to start a local daemon, run two
     benchmark clients, and surface shared profile cache and reservation state.

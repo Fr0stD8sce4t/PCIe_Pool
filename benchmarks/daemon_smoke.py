@@ -249,7 +249,7 @@ def print_smoke_summary(result: dict[str, object]) -> None:
     print("DAEMON_SMOKE_SUMMARY_END")
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="TurboBus daemon benchmark smoke")
     parser.add_argument(
         "--workload",
@@ -271,12 +271,15 @@ def main() -> None:
     parser.add_argument("--verify", action="store_true", default=True)
     parser.add_argument("--no-verify", action="store_false", dest="verify")
     parser.add_argument("--force-profile-first", action="store_true")
-    parser.add_argument("--daemon-socket-path")
     parser.add_argument("--daemon-max-sessions-per-relay", type=int, default=2)
     parser.add_argument("--daemon-max-inflight-chunks-per-relay", type=int, default=128)
     add_daemon_options(parser)
     parser.set_defaults(daemon_max_inflight_chunks=128)
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
 
     socket_path = args.daemon_socket_path or smoke_socket_path()
     daemon_command = build_daemon_command(args, socket_path)

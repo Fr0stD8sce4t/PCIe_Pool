@@ -11,6 +11,7 @@ BENCHMARKS = Path(__file__).resolve().parents[2] / "benchmarks"
 sys.path.insert(0, str(BENCHMARKS))
 
 from daemon_smoke import (  # noqa: E402
+    build_parser,
     build_client_command,
     build_daemon_command,
     build_smoke_result,
@@ -36,6 +37,25 @@ class DaemonSmokeTest(unittest.TestCase):
         self.assertIn("5", command)
         self.assertIn("--max-inflight-chunks-per-relay", command)
         self.assertIn("128", command)
+
+    def test_build_parser_accepts_daemon_socket_and_quota_arguments(self) -> None:
+        parser = build_parser()
+
+        args = parser.parse_args(
+            [
+                "--target-gpu",
+                "6",
+                "--relay-gpus",
+                "5",
+                "--daemon-socket-path",
+                "/tmp/turbobusd.sock",
+                "--daemon-max-inflight-chunks",
+                "128",
+            ]
+        )
+
+        self.assertEqual(args.daemon_socket_path, "/tmp/turbobusd.sock")
+        self.assertEqual(args.daemon_max_inflight_chunks, 128)
 
     def test_build_client_command_uses_bandwidth_client_options(self) -> None:
         args = argparse.Namespace(
