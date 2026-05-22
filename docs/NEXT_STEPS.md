@@ -6,27 +6,6 @@ from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
 
 ## Current
 
-### 1. Split Transfer Selection Out Of Runtime
-
-Move transfer mode and auto-selection policy out of `turbobus/runtime.py`
-without changing the public Runtime API.
-
-Implementation:
-
-- Create `turbobus/transfer_selector.py`.
-- Move `TransferMode`, `AutoTransferDecision`, and `AutoTransferSelector`.
-- Re-export those names from `turbobus.runtime` so existing imports keep
-  working.
-- Keep Runtime behavior unchanged.
-
-Acceptance:
-
-- Existing Python tests pass.
-- `from turbobus.runtime import AutoTransferSelector, TransferMode` still works.
-- Benchmarks can still import and use `turbobus.Runtime`.
-
-## Upcoming
-
 ### 2. Split Runtime Plan/Profile Helpers
 
 Create `turbobus/plan_trace.py` for `transfer_plan_to_dict` and related
@@ -38,6 +17,8 @@ Acceptance:
 - Runtime public API stays stable.
 - Plan dict output is unchanged.
 - Tests cover old import paths.
+
+## Upcoming
 
 ### 3. Add Multi-Relay Planner Coverage
 
@@ -102,6 +83,10 @@ Acceptance:
 - Benchmark reports iteration proxy time, transfer time, and path split.
 
 ## Completed
+
+- 2026-05-22: Split transfer selection out of `turbobus/runtime.py`.
+  - Added `turbobus/transfer_selector.py`.
+  - Kept `turbobus.runtime` re-export imports working.
 
 - 2026-05-22: Document TurboBus roadmap workflow (`830d137`).
 

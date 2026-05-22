@@ -9,6 +9,12 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- `Split transfer selector from Runtime`
+  - Added `turbobus/transfer_selector.py`.
+  - Moved `TransferMode`, `AutoTransferDecision`, and
+    `AutoTransferSelector` out of `turbobus/runtime.py`.
+  - Preserved public imports from `turbobus.runtime` and `turbobus`.
+
 - `830d137 Document TurboBus roadmap workflow`
   - Added repository roadmap files and AGENTS rules for keeping future coding
     turns on the TurboBus paper reproduction main line.
@@ -53,6 +59,15 @@ git diff --check
 
 Result: passed.
 
+Additional import check:
+
+```text
+from turbobus.runtime import AutoTransferSelector, TransferMode
+from turbobus.transfer_selector import AutoTransferSelector, TransferMode
+```
+
+Result: passed.
+
 Local C++/CUDA checks were not run because `cmake` is not installed in this
 environment.
 
@@ -70,6 +85,5 @@ Then run native and vLLM checks on target GPU 6 with relay GPU 5.
 
 ## Next Task
 
-Start with the task under `## Current` in `docs/NEXT_STEPS.md`: split transfer
-selection out of `turbobus/runtime.py` while preserving public imports and
-behavior.
+Start with the task under `## Current` in `docs/NEXT_STEPS.md`: split Runtime
+plan/profile helpers while preserving public APIs and plan dict output.
