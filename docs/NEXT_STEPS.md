@@ -6,19 +6,29 @@ from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
 
 ## Current
 
-### 9. Add Daemon Shared Profile Cache
+### 10. Add Daemon-Aware Benchmark Options
 
-Let Runtime read and publish measured direct/relay profile data through the
-daemon so multiple processes do not each need to profile the same target/relay
-pair.
+Expose daemon socket options in the main Runtime-driven benchmarks so model
+loading, training offload, and bandwidth checks can run through the same daemon
+session/profile/reservation path as framework integrations.
 
 Acceptance:
 
-- Runtime can use daemon-provided profile data before local profiling.
-- Runtime publishes a fresh profile back to the daemon after local profiling.
-- Unit tests cover cache hit, cache miss, and stale or invalid daemon data.
+- `bandwidth_pool.py`, `model_loading.py`, and `training_offload.py` accept a
+  daemon socket path.
+- Benchmark output reports daemon profile and reservation status when enabled.
+- Unit tests or parser checks cover the new benchmark option plumbing.
 
 ## Completed
+
+- 2026-05-22: Add daemon shared profile cache.
+  - Added daemon `GET_PROFILE` and `PUT_PROFILE` requests with validation and
+    per target/relay cache keys.
+  - Runtime now reads daemon profile data during daemon session setup and
+    injects cache hits into the native Runtime profile cache.
+  - Runtime publishes freshly measured local profiles back to the daemon.
+  - Added Runtime and daemon tests for cache hit, miss, stale, invalid, and
+    socket client paths.
 
 - 2026-05-22: Add training offload bucket API and benchmark.
   - Added `TrainingOffloadManager` / `TrainingOffloadStore` for parameter or

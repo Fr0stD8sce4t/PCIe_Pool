@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import unittest
 
 from turbobus.daemon.protocol import DaemonRequest, RequestType
@@ -47,6 +48,64 @@ class DaemonStateTest(unittest.TestCase):
             )
         )
         self.assertTrue(closed.ok)
+
+    def test_profile_cache_get_put_round_trip(self) -> None:
+        daemon = TurboBusDaemon(relay_gpus=[1])
+        profile = {
+            "target_device": 0,
+            "direct_h2d_bw_gbps": 7.5,
+            "direct_d2h_bw_gbps": 8.5,
+            "relays": [
+                {
+                    "relay_device": 1,
+                    "target_device": 0,
+                    "h2d_bw_gbps": 7.6,
+                    "d2h_bw_gbps": 8.6,
+                    "p2p_bw_gbps": 40.0,
+                    "effective_bw_gbps": 7.6,
+                    "effective_d2h_bw_gbps": 8.6,
+                    "p2p_enabled": True,
+                }
+            ],
+        }
+
+        missing = daemon.get_profile(target_gpu=0, relay_gpus=[1])
+        self.assertTrue(missing.ok)
+        self.assertIsNone(missing.payload["profile"])
+
+        stored = daemon.put_profile(
+            target_gpu=0,
+            relay_gpus=[1],
+            profile=profile,
+            profile_bytes=1234,
+            updated_at=time.time(),
+        )
+        self.assertTrue(stored.ok)
+
+        loaded = daemon.get_profile(target_gpu=0, relay_gpus=[1])
+        self.assertTrue(loaded.ok)
+        self.assertEqual(loaded.payload["profile"]["profile_bytes"], 1234)
+        self.assertEqual(
+            loaded.payload["profile"]["profile"]["relays"][0]["relay_device"],
+            1,
+        )
+
+    def test_handle_request_rejects_invalid_profile_cache_update(self) -> None:
+        daemon = TurboBusDaemon(relay_gpus=[1])
+
+        response = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.PUT_PROFILE,
+                payload={
+                    "target_gpu": 0,
+                    "relay_gpus": [1],
+                    "profile": {"direct_h2d_bw_gbps": 0.0},
+                },
+            )
+        )
+
+        self.assertFalse(response.ok)
+        self.assertIn("direct_h2d", response.error)
 
     def test_transfer_reservation_uses_relay_chunk_quota(self) -> None:
         daemon = TurboBusDaemon(

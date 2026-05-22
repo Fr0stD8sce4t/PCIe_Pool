@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
+import time
 
 from turbobus import runtime as runtime_module
 from turbobus.daemon.protocol import DaemonResponse
@@ -615,6 +616,177 @@ class RuntimeDaemonReservationTest(unittest.TestCase):
             self.assertIsNone(runtime._daemon_session_id)
         finally:
             runtime_module.TurboBusDaemonClient = old_client
+
+
+class RuntimeDaemonProfileCacheTest(unittest.TestCase):
+    class Relay:
+        relay_device = 1
+        target_device = 0
+        h2d_bw_gbps = 7.6
+        d2h_bw_gbps = 8.6
+        p2p_bw_gbps = 40.0
+        effective_bw_gbps = 7.6
+        effective_d2h_bw_gbps = 8.6
+        p2p_enabled = True
+
+    class Profile:
+        target_device = 0
+        direct_h2d_bw_gbps = 7.5
+        direct_d2h_bw_gbps = 8.5
+        relays = []
+
+    class EmptyProfile:
+        target_device = 0
+        direct_h2d_bw_gbps = 0.0
+        direct_d2h_bw_gbps = 0.0
+        relays = []
+
+    class FakeNativeRuntime:
+        def __init__(self) -> None:
+            self.mode = None
+            self.profile_calls = 0
+            self.cached_profiles = []
+
+        def profile(self, bytes: int, force: bool = False):
+            self.profile_calls += 1
+            return RuntimeDaemonProfileCacheTest.Profile()
+
+        def cached_profile(self):
+            if self.cached_profiles:
+                return self.cached_profiles[-1]
+            return RuntimeDaemonProfileCacheTest.EmptyProfile()
+
+        def planner_profile(self):
+            return self.cached_profile()
+
+        def set_cached_profile(self, profile):
+            self.cached_profiles.append(profile)
+
+        def set_transfer_mode(self, mode):
+            self.mode = mode
+
+    class FakeDaemonClient:
+        def __init__(self, entry=None) -> None:
+            self.entry = entry
+            self.get_calls = []
+            self.put_calls = []
+            self.register_calls = []
+
+        def register_session(self, target_gpu, relay_gpus, max_inflight_chunks=8):
+            self.register_calls.append((target_gpu, relay_gpus, max_inflight_chunks))
+            return DaemonResponse(ok=True, payload={"session": {"session_id": "session-1"}})
+
+        def get_profile(self, target_gpu, relay_gpus):
+            self.get_calls.append((target_gpu, relay_gpus))
+            return DaemonResponse(ok=True, payload={"profile": self.entry})
+
+        def put_profile(self, target_gpu, relay_gpus, profile, profile_bytes=0):
+            self.put_calls.append(
+                {
+                    "target_gpu": target_gpu,
+                    "relay_gpus": relay_gpus,
+                    "profile": profile,
+                    "profile_bytes": profile_bytes,
+                }
+            )
+            return DaemonResponse(ok=True, payload={"profile": {"profile": profile}})
+
+    def setUp(self) -> None:
+        self.Profile.relays = [self.Relay()]
+
+    @staticmethod
+    def daemon_entry(*, updated_at=None, direct_h2d=7.5):
+        return {
+            "target_gpu": 0,
+            "relay_gpus": [1],
+            "profile_bytes": 4096,
+            "updated_at": time.time() if updated_at is None else updated_at,
+            "profile": {
+                "target_device": 0,
+                "direct_h2d_bw_gbps": direct_h2d,
+                "direct_d2h_bw_gbps": 8.5,
+                "relays": [
+                    {
+                        "relay_device": 1,
+                        "target_device": 0,
+                        "h2d_bw_gbps": 7.6,
+                        "d2h_bw_gbps": 8.6,
+                        "p2p_bw_gbps": 40.0,
+                        "effective_bw_gbps": 7.6,
+                        "effective_d2h_bw_gbps": 8.6,
+                        "p2p_enabled": True,
+                    }
+                ],
+            },
+        }
+
+    def make_runtime(self, client):
+        runtime = object.__new__(runtime_module.Runtime)
+        runtime.target_gpu = 0
+        runtime.relay_gpus = [1]
+        runtime.options = RuntimeOptions(
+            transfer_mode="auto",
+            chunk_bytes=4 * 1024 * 1024,
+            daemon_socket_path="/tmp/turbobusd-test.sock",
+            daemon_profile_max_age_seconds=60.0,
+        )
+        runtime._daemon_client = client
+        runtime._daemon_session_id = "session-1"
+        runtime._runtime = self.FakeNativeRuntime()
+        runtime._daemon_profile = None
+        runtime._last_daemon_profile = {}
+        runtime._last_resolved_transfer_mode = TransferMode.AUTO
+        runtime._last_auto_decision = None
+        runtime._forced_transfer_mode = None
+        return runtime
+
+    def test_daemon_profile_cache_hit_feeds_auto_selector_and_native_runtime(self) -> None:
+        client = self.FakeDaemonClient(self.daemon_entry())
+        runtime = self.make_runtime(client)
+
+        runtime._load_daemon_profile()
+        decision = runtime.resolve_transfer_mode(32 * 1024 * 1024, direction="h2d")
+
+        self.assertEqual(runtime.last_daemon_profile_dict()["daemon_profile_status"], "hit")
+        self.assertEqual(runtime._runtime.profile_calls, 0)
+        self.assertEqual(len(runtime._runtime.cached_profiles), 1)
+        self.assertEqual(decision.resolved_mode, TransferMode.POOL)
+        self.assertEqual(decision.eligible_relay_devices, (1,))
+
+    def test_daemon_profile_cache_miss_profiles_and_publishes(self) -> None:
+        client = self.FakeDaemonClient(None)
+        runtime = self.make_runtime(client)
+
+        runtime._load_daemon_profile()
+        decision = runtime.resolve_transfer_mode(32 * 1024 * 1024, direction="h2d")
+
+        self.assertEqual(runtime._runtime.profile_calls, 1)
+        self.assertEqual(client.put_calls[0]["profile_bytes"], runtime.options.profile_bytes)
+        self.assertEqual(
+            client.put_calls[0]["profile"]["direct_h2d_bw_gbps"],
+            7.5,
+        )
+        self.assertEqual(decision.resolved_mode, TransferMode.POOL)
+
+    def test_stale_daemon_profile_is_ignored(self) -> None:
+        client = self.FakeDaemonClient(self.daemon_entry(updated_at=time.time() - 3600.0))
+        runtime = self.make_runtime(client)
+
+        runtime._load_daemon_profile()
+
+        self.assertEqual(runtime.last_daemon_profile_dict()["daemon_profile_status"], "stale")
+        self.assertIsNone(runtime._daemon_profile)
+        self.assertEqual(runtime._runtime.cached_profiles, [])
+
+    def test_invalid_daemon_profile_is_ignored(self) -> None:
+        client = self.FakeDaemonClient(self.daemon_entry(direct_h2d=0.0))
+        runtime = self.make_runtime(client)
+
+        runtime._load_daemon_profile()
+
+        self.assertEqual(runtime.last_daemon_profile_dict()["daemon_profile_status"], "invalid")
+        self.assertIn("direct_h2d", runtime.last_daemon_profile_dict()["daemon_profile_error"])
+        self.assertIsNone(runtime._daemon_profile)
 
 
 class PlanTraceTest(unittest.TestCase):

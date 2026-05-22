@@ -9,6 +9,16 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- Add daemon shared profile cache
+  - Added daemon profile cache requests for reading and publishing measured
+    direct/relay profile data by target GPU and relay GPU set.
+  - Runtime now checks the daemon profile cache during daemon session setup,
+    ignores stale or invalid entries, and records the cache status.
+  - Daemon profile cache hits are injected into the native Runtime cache so
+    transfers can use the shared profile without repeating local profiling.
+  - Runtime publishes fresh local profile results back to the daemon after
+    `Runtime.profile()`.
+
 - Add training offload bucket API and benchmark
   - Added `turbobus.training_offload.TrainingOffloadManager` and
     `TrainingOffloadStore` for PyTorch parameter or optimizer bucket movement.
@@ -291,6 +301,28 @@ python -m compileall turbobus\training_offload.py benchmarks\training_offload.py
 
 Result: passed.
 
+For daemon shared profile cache:
+
+```text
+python -m unittest discover -s test\python -p "test_runtime_handle.py" -v
+```
+
+Result: 29 tests passed, 2 skipped because PyTorch is not installed locally.
+
+```text
+python -m unittest discover -s test\python -p "test_daemon_*.py" -v
+```
+
+Result: 7 tests passed, 3 skipped because Windows does not expose Unix domain
+socket support in this environment.
+
+```text
+python -m compileall turbobus\runtime.py turbobus\daemon test\python\test_runtime_handle.py test\python\test_daemon_state.py test\python\test_daemon_socket.py -q
+git diff --check
+```
+
+Result: passed.
+
 ## Known Server Follow-Up
 
 After C++/CUDA/pybind edits, reinstall before server tests:
@@ -305,5 +337,5 @@ Then run native and vLLM checks on target GPU 6 with relay GPU 5.
 
 ## Next Task
 
-Start with the task under `## Current` in `docs/NEXT_STEPS.md`: add daemon
-shared profile cache support for Runtime.
+Start with the task under `## Current` in `docs/NEXT_STEPS.md`: add daemon-aware
+benchmark options for the main Runtime-driven benchmarks.

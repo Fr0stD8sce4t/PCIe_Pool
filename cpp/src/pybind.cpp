@@ -79,21 +79,25 @@ PYBIND11_MODULE(_turbobus, m) {
                      &turbobus::RuntimeOptions::dynamic_weight_alpha);
 
   py::class_<turbobus::RelayProfile>(m, "RelayProfile")
-      .def_readonly("relay_device", &turbobus::RelayProfile::relay_device)
-      .def_readonly("target_device", &turbobus::RelayProfile::target_device)
-      .def_readonly("h2d_bw_gbps", &turbobus::RelayProfile::h2d_bw_gbps)
-      .def_readonly("d2h_bw_gbps", &turbobus::RelayProfile::d2h_bw_gbps)
-      .def_readonly("p2p_bw_gbps", &turbobus::RelayProfile::p2p_bw_gbps)
-      .def_readonly("effective_bw_gbps", &turbobus::RelayProfile::effective_bw_gbps)
-      .def_readonly("effective_d2h_bw_gbps",
-                    &turbobus::RelayProfile::effective_d2h_bw_gbps)
-      .def_readonly("p2p_enabled", &turbobus::RelayProfile::p2p_enabled);
+      .def(py::init<>())
+      .def_readwrite("relay_device", &turbobus::RelayProfile::relay_device)
+      .def_readwrite("target_device", &turbobus::RelayProfile::target_device)
+      .def_readwrite("h2d_bw_gbps", &turbobus::RelayProfile::h2d_bw_gbps)
+      .def_readwrite("d2h_bw_gbps", &turbobus::RelayProfile::d2h_bw_gbps)
+      .def_readwrite("p2p_bw_gbps", &turbobus::RelayProfile::p2p_bw_gbps)
+      .def_readwrite("effective_bw_gbps", &turbobus::RelayProfile::effective_bw_gbps)
+      .def_readwrite("effective_d2h_bw_gbps",
+                     &turbobus::RelayProfile::effective_d2h_bw_gbps)
+      .def_readwrite("p2p_enabled", &turbobus::RelayProfile::p2p_enabled);
 
   py::class_<turbobus::ProfileResult>(m, "ProfileResult")
-      .def_readonly("target_device", &turbobus::ProfileResult::target_device)
-      .def_readonly("direct_h2d_bw_gbps", &turbobus::ProfileResult::direct_h2d_bw_gbps)
-      .def_readonly("direct_d2h_bw_gbps", &turbobus::ProfileResult::direct_d2h_bw_gbps)
-      .def_readonly("relays", &turbobus::ProfileResult::relays);
+      .def(py::init<>())
+      .def_readwrite("target_device", &turbobus::ProfileResult::target_device)
+      .def_readwrite("direct_h2d_bw_gbps",
+                     &turbobus::ProfileResult::direct_h2d_bw_gbps)
+      .def_readwrite("direct_d2h_bw_gbps",
+                     &turbobus::ProfileResult::direct_d2h_bw_gbps)
+      .def_readwrite("relays", &turbobus::ProfileResult::relays);
 
   py::class_<turbobus::Path>(m, "Path")
       .def_property_readonly("kind",
@@ -188,6 +192,8 @@ PYBIND11_MODULE(_turbobus, m) {
       .def("profile", &turbobus::TurboBusRuntime::Profile,
            py::arg("bytes") = 256ull * 1024ull * 1024ull,
            py::arg("force") = false)
+      .def("set_cached_profile", &turbobus::TurboBusRuntime::SetCachedProfile,
+           py::arg("profile"))
       .def("set_transfer_mode", &turbobus::TurboBusRuntime::SetTransferMode,
            py::arg("mode"))
       .def("cached_profile", &turbobus::TurboBusRuntime::CachedProfile,

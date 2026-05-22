@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import time
 from typing import Iterable, Mapping, Sequence
 
 from .daemon import TurboBusDaemonClient
@@ -65,6 +66,7 @@ class RuntimeOptions:
     dynamic_weight_alpha: float = 0.25
     daemon_socket_path: str | None = None
     daemon_max_inflight_chunks: int = 8
+    daemon_profile_max_age_seconds: float = 3600.0
 
     @classmethod
     def from_tuning_json(cls, path: str | Path) -> "RuntimeOptions":
@@ -146,7 +148,9 @@ class Runtime:
         self.options = options or RuntimeOptions()
         self._daemon_client = None
         self._daemon_session_id: str | None = None
+        self._daemon_profile = None
         self._last_daemon_reservation: dict[str, object] = {}
+        self._last_daemon_profile: dict[str, object] = {}
         self._last_resolved_transfer_mode = TransferMode.POOL
         self._last_auto_decision: AutoTransferDecision | None = None
         self._forced_transfer_mode: TransferMode | None = None
@@ -169,6 +173,7 @@ class Runtime:
             raise RuntimeError(response.error or "daemon session registration failed")
         self._daemon_client = client
         self._daemon_session_id = str(response.payload["session"]["session_id"])
+        self._load_daemon_profile()
 
     def close(self) -> None:
         if self._daemon_client is not None and self._daemon_session_id is not None:
@@ -182,7 +187,10 @@ class Runtime:
             pass
 
     def profile(self, bytes: int = 256 * 1024 * 1024, force: bool = False):
-        return self._runtime.profile(int(bytes), bool(force))
+        profile = self._runtime.profile(int(bytes), bool(force))
+        self._daemon_profile = profile
+        self._publish_daemon_profile(profile, int(bytes))
+        return profile
 
     def cached_profile(self):
         return self._runtime.cached_profile()
@@ -277,11 +285,7 @@ class Runtime:
         direction: str,
         range_count: int | None,
     ) -> AutoTransferDecision:
-        plan_profile = (
-            self.planner_profile()
-            if self.options.enable_dynamic_weights
-            else self.cached_profile()
-        )
+        plan_profile = self._auto_profile()
         direct_attr = "direct_h2d_bw_gbps" if direction == "h2d" else "direct_d2h_bw_gbps"
         direct_bw = getattr(plan_profile, direct_attr, 0.0)
         if direction != "h2d" and direct_bw <= 0.0:
@@ -296,11 +300,7 @@ class Runtime:
             relay_min_effective_bw_gbps=self.options.relay_min_effective_bw_gbps,
             relay_min_direct_ratio=self.options.relay_min_direct_ratio,
         )
-        plan_profile = (
-            self.planner_profile()
-            if self.options.enable_dynamic_weights
-            else self.cached_profile()
-        )
+        plan_profile = self._auto_profile()
         decision = selector.choose(
             plan_profile,
             request_bytes=bytes,
@@ -309,6 +309,95 @@ class Runtime:
             direction=direction,
         )
         return decision
+
+    def _auto_profile(self):
+        daemon_profile = getattr(self, "_daemon_profile", None)
+        if daemon_profile is not None and not self.options.enable_dynamic_weights:
+            return daemon_profile
+        return self.planner_profile() if self.options.enable_dynamic_weights else self.cached_profile()
+
+    def _load_daemon_profile(self) -> None:
+        if self._daemon_client is None:
+            return
+        getter = getattr(self._daemon_client, "get_profile", None)
+        if not callable(getter):
+            return
+        try:
+            response = getter(self.target_gpu, self.relay_gpus)
+            if not response.ok:
+                self._daemon_profile = None
+                self._last_daemon_profile = {
+                    "daemon_profile_status": "miss",
+                    "daemon_profile_error": response.error or "",
+                }
+                return
+            entry = response.payload.get("profile")
+            if not entry:
+                self._daemon_profile = None
+                self._last_daemon_profile = {"daemon_profile_status": "miss"}
+                return
+            if not _daemon_profile_is_fresh(
+                entry,
+                max_age_seconds=self.options.daemon_profile_max_age_seconds,
+            ):
+                self._daemon_profile = None
+                self._last_daemon_profile = {"daemon_profile_status": "stale"}
+                return
+            profile = _profile_from_daemon_entry(entry, self.target_gpu)
+        except Exception as exc:
+            self._daemon_profile = None
+            self._last_daemon_profile = {
+                "daemon_profile_status": "invalid",
+                "daemon_profile_error": str(exc),
+            }
+            return
+
+        self._daemon_profile = profile
+        self._set_native_cached_profile(profile)
+        self._last_daemon_profile = {
+            "daemon_profile_status": "hit",
+            "daemon_profile_updated_at": entry.get("updated_at", 0.0),
+            "daemon_profile_bytes": entry.get("profile_bytes", 0),
+        }
+
+    def _publish_daemon_profile(self, profile, profile_bytes: int) -> None:
+        daemon_client = getattr(self, "_daemon_client", None)
+        if daemon_client is None:
+            return
+        publisher = getattr(daemon_client, "put_profile", None)
+        if not callable(publisher):
+            return
+        try:
+            response = publisher(
+                self.target_gpu,
+                self.relay_gpus,
+                _profile_to_daemon_dict(profile),
+                profile_bytes=int(profile_bytes),
+            )
+        except Exception as exc:
+            self._last_daemon_profile = {
+                "daemon_profile_status": "publish_failed",
+                "daemon_profile_error": str(exc),
+            }
+            return
+        if response.ok:
+            self._last_daemon_profile = {
+                "daemon_profile_status": "published",
+                "daemon_profile_bytes": int(profile_bytes),
+            }
+        else:
+            self._last_daemon_profile = {
+                "daemon_profile_status": "publish_failed",
+                "daemon_profile_error": response.error or "",
+            }
+
+    def _set_native_cached_profile(self, profile) -> None:
+        setter = getattr(self._runtime, "set_cached_profile", None)
+        if callable(setter):
+            setter(profile)
+
+    def last_daemon_profile_dict(self) -> dict[str, object]:
+        return dict(getattr(self, "_last_daemon_profile", {}))
 
     @contextmanager
     def batch_transfer_mode(
@@ -692,6 +781,126 @@ def _range_fields(item) -> tuple[int, int, int]:
     dst_offset = getattr(item, "dst_offset")
     bytes_ = getattr(item, "bytes")
     return int(src_offset), int(dst_offset), int(bytes_)
+
+
+def _profile_to_daemon_dict(profile) -> dict[str, object]:
+    return {
+        "target_device": int(getattr(profile, "target_device", 0)),
+        "direct_h2d_bw_gbps": float(getattr(profile, "direct_h2d_bw_gbps", 0.0) or 0.0),
+        "direct_d2h_bw_gbps": float(getattr(profile, "direct_d2h_bw_gbps", 0.0) or 0.0),
+        "relays": [
+            {
+                "relay_device": int(getattr(relay, "relay_device")),
+                "target_device": int(getattr(relay, "target_device", 0)),
+                "h2d_bw_gbps": float(getattr(relay, "h2d_bw_gbps", 0.0) or 0.0),
+                "d2h_bw_gbps": float(getattr(relay, "d2h_bw_gbps", 0.0) or 0.0),
+                "p2p_bw_gbps": float(getattr(relay, "p2p_bw_gbps", 0.0) or 0.0),
+                "effective_bw_gbps": float(
+                    getattr(relay, "effective_bw_gbps", 0.0) or 0.0
+                ),
+                "effective_d2h_bw_gbps": float(
+                    getattr(relay, "effective_d2h_bw_gbps", 0.0) or 0.0
+                ),
+                "p2p_enabled": bool(getattr(relay, "p2p_enabled", False)),
+            }
+            for relay in getattr(profile, "relays", []) or []
+        ],
+    }
+
+
+def _profile_from_daemon_entry(entry: Mapping, target_gpu: int):
+    profile = entry.get("profile")
+    if not isinstance(profile, Mapping):
+        raise ValueError("daemon profile entry has no profile object")
+    direct_h2d = float(profile.get("direct_h2d_bw_gbps", 0.0) or 0.0)
+    if direct_h2d <= 0.0:
+        raise ValueError("daemon profile direct_h2d_bw_gbps must be positive")
+    use_native_profile = _turbobus is not None and hasattr(_turbobus, "ProfileResult")
+    if use_native_profile:
+        profile_obj = _turbobus.ProfileResult()
+        profile_obj.target_device = int(profile.get("target_device", target_gpu))
+        profile_obj.direct_h2d_bw_gbps = direct_h2d
+        profile_obj.direct_d2h_bw_gbps = float(profile.get("direct_d2h_bw_gbps", 0.0) or 0.0)
+        profile_relays = []
+    else:
+        profile_relays = []
+    for relay in profile.get("relays", []) or []:
+        if not isinstance(relay, Mapping):
+            raise ValueError("daemon profile relay must be an object")
+        relay_obj = {
+            "relay_device": int(relay["relay_device"]),
+            "target_device": int(relay.get("target_device", target_gpu)),
+            "h2d_bw_gbps": float(relay.get("h2d_bw_gbps", 0.0) or 0.0),
+            "d2h_bw_gbps": float(relay.get("d2h_bw_gbps", 0.0) or 0.0),
+            "p2p_bw_gbps": float(relay.get("p2p_bw_gbps", 0.0) or 0.0),
+            "effective_bw_gbps": float(relay.get("effective_bw_gbps", 0.0) or 0.0),
+            "effective_d2h_bw_gbps": float(
+                relay.get("effective_d2h_bw_gbps", 0.0) or 0.0
+            ),
+            "p2p_enabled": bool(relay.get("p2p_enabled", False)),
+        }
+        if use_native_profile:
+            native_relay = _turbobus.RelayProfile()
+            native_relay.relay_device = relay_obj["relay_device"]
+            native_relay.target_device = relay_obj["target_device"]
+            native_relay.h2d_bw_gbps = relay_obj["h2d_bw_gbps"]
+            native_relay.d2h_bw_gbps = relay_obj["d2h_bw_gbps"]
+            native_relay.p2p_bw_gbps = relay_obj["p2p_bw_gbps"]
+            native_relay.effective_bw_gbps = relay_obj["effective_bw_gbps"]
+            native_relay.effective_d2h_bw_gbps = relay_obj["effective_d2h_bw_gbps"]
+            native_relay.p2p_enabled = relay_obj["p2p_enabled"]
+            profile_relays.append(native_relay)
+        else:
+            profile_relays.append(
+                SimpleProfileRelay(
+                    relay_device=relay_obj["relay_device"],
+                    target_device=relay_obj["target_device"],
+                    h2d_bw_gbps=relay_obj["h2d_bw_gbps"],
+                    d2h_bw_gbps=relay_obj["d2h_bw_gbps"],
+                    p2p_bw_gbps=relay_obj["p2p_bw_gbps"],
+                    effective_bw_gbps=relay_obj["effective_bw_gbps"],
+                    effective_d2h_bw_gbps=relay_obj["effective_d2h_bw_gbps"],
+                    p2p_enabled=relay_obj["p2p_enabled"],
+                )
+            )
+    if use_native_profile:
+        profile_obj.relays = profile_relays
+        return profile_obj
+    return SimpleProfileResult(
+        target_device=int(profile.get("target_device", target_gpu)),
+        direct_h2d_bw_gbps=direct_h2d,
+        direct_d2h_bw_gbps=float(profile.get("direct_d2h_bw_gbps", 0.0) or 0.0),
+        relays=profile_relays,
+    )
+
+
+def _daemon_profile_is_fresh(entry: Mapping, max_age_seconds: float) -> bool:
+    if max_age_seconds <= 0:
+        return True
+    updated_at = float(entry.get("updated_at", 0.0) or 0.0)
+    if updated_at <= 0.0:
+        return False
+    return (time.time() - updated_at) <= float(max_age_seconds)
+
+
+@dataclass(frozen=True)
+class SimpleProfileRelay:
+    relay_device: int
+    target_device: int
+    h2d_bw_gbps: float
+    d2h_bw_gbps: float
+    p2p_bw_gbps: float
+    effective_bw_gbps: float
+    effective_d2h_bw_gbps: float
+    p2p_enabled: bool
+
+
+@dataclass(frozen=True)
+class SimpleProfileResult:
+    target_device: int
+    direct_h2d_bw_gbps: float
+    direct_d2h_bw_gbps: float
+    relays: list[SimpleProfileRelay]
 
 
 class _TransferStatsWithDaemon:

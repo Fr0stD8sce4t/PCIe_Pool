@@ -42,6 +42,15 @@ ProfileResult TurboBusRuntime::Profile(std::size_t bytes, bool force) {
   return profile_;
 }
 
+void TurboBusRuntime::SetCachedProfile(const ProfileResult& profile) {
+  if (!initialized_) {
+    throw std::runtime_error("runtime is not initialized");
+  }
+  profile_ = profile;
+  planner_profile_ = profile_;
+  has_profile_ = true;
+}
+
 void TurboBusRuntime::SetTransferMode(TransferMode mode) {
   options_.transfer_mode = mode;
 }

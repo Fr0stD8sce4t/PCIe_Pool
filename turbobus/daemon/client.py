@@ -87,3 +87,33 @@ class TurboBusDaemonClient:
                 payload={"reservation_id": str(reservation_id)},
             )
         )
+
+    def get_profile(self, target_gpu: int, relay_gpus: list[int]) -> DaemonResponse:
+        return self.send(
+            DaemonRequest(
+                request_type=RequestType.GET_PROFILE,
+                payload={
+                    "target_gpu": int(target_gpu),
+                    "relay_gpus": [int(gpu) for gpu in relay_gpus],
+                },
+            )
+        )
+
+    def put_profile(
+        self,
+        target_gpu: int,
+        relay_gpus: list[int],
+        profile: dict,
+        profile_bytes: int = 0,
+    ) -> DaemonResponse:
+        return self.send(
+            DaemonRequest(
+                request_type=RequestType.PUT_PROFILE,
+                payload={
+                    "target_gpu": int(target_gpu),
+                    "relay_gpus": [int(gpu) for gpu in relay_gpus],
+                    "profile": profile,
+                    "profile_bytes": int(profile_bytes),
+                },
+            )
+        )

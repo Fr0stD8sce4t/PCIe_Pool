@@ -137,6 +137,57 @@ class DaemonSocketTest(unittest.TestCase):
             other_closed = client.close_session(other_session_id)
             self.assertTrue(other_closed.ok)
 
+    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
+    def test_client_get_and_put_profile_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            socket_path = os.path.join(tmpdir, "turbobusd.sock")
+            daemon = TurboBusDaemon(relay_gpus=[1])
+            thread = threading.Thread(
+                target=daemon.serve_forever,
+                args=(socket_path,),
+                daemon=True,
+            )
+            thread.start()
+
+            for _ in range(100):
+                if os.path.exists(socket_path):
+                    break
+                time.sleep(0.01)
+            self.assertTrue(os.path.exists(socket_path))
+
+            client = TurboBusDaemonClient(socket_path)
+            missing = client.get_profile(target_gpu=0, relay_gpus=[1])
+            self.assertTrue(missing.ok)
+            self.assertIsNone(missing.payload["profile"])
+
+            stored = client.put_profile(
+                target_gpu=0,
+                relay_gpus=[1],
+                profile={
+                    "target_device": 0,
+                    "direct_h2d_bw_gbps": 7.5,
+                    "direct_d2h_bw_gbps": 8.5,
+                    "relays": [
+                        {
+                            "relay_device": 1,
+                            "target_device": 0,
+                            "h2d_bw_gbps": 7.6,
+                            "d2h_bw_gbps": 8.6,
+                            "p2p_bw_gbps": 40.0,
+                            "effective_bw_gbps": 7.6,
+                            "effective_d2h_bw_gbps": 8.6,
+                            "p2p_enabled": True,
+                        }
+                    ],
+                },
+                profile_bytes=4096,
+            )
+            self.assertTrue(stored.ok)
+
+            loaded = client.get_profile(target_gpu=0, relay_gpus=[1])
+            self.assertTrue(loaded.ok)
+            self.assertEqual(loaded.payload["profile"]["profile_bytes"], 4096)
+
 
 if __name__ == "__main__":
     unittest.main()
