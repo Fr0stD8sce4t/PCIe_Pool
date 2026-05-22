@@ -84,6 +84,31 @@ class DaemonSmokeTest(unittest.TestCase):
         self.assertIn("--force-profile", command)
         self.assertIn("--verify", command)
 
+    def test_build_client_command_supports_training_offload(self) -> None:
+        args = argparse.Namespace(
+            target_gpu=6,
+            relay_gpus="5",
+            bytes=64,
+            chunk_bytes=4,
+            profile_bytes=8,
+            min_pool_bytes=6,
+            mode="pool",
+            iterations=1,
+            warmup=0,
+            verify=True,
+            force_profile_first=False,
+            daemon_max_inflight_chunks=128,
+            bucket_count=4,
+            bucket_bytes=8,
+            storage_layout="packed",
+        )
+
+        command = build_client_command(args, "/tmp/turbobusd.sock", "training-offload", 1)
+
+        self.assertIn(str(BENCHMARKS / "training_offload.py"), command)
+        self.assertIn("--bucket-count", command)
+        self.assertIn("--bucket-bytes", command)
+
     def test_build_smoke_result_reports_publish_hit_and_reservation(self) -> None:
         first_output = """
 COPY_SUMMARY_BEGIN

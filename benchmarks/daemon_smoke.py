@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 BENCHMARK_SCRIPTS = {
     "bandwidth": REPO_ROOT / "benchmarks" / "bandwidth_pool.py",
     "model-loading": REPO_ROOT / "benchmarks" / "model_loading.py",
+    "training-offload": REPO_ROOT / "benchmarks" / "training_offload.py",
 }
 
 
@@ -69,6 +70,33 @@ def build_client_command(args, socket_path: str, workload: str, client_index: in
             ]
         )
     elif workload == "model-loading":
+        command.extend(
+            [
+                "--target-gpu",
+                str(args.target_gpu),
+                "--relay-gpus",
+                args.relay_gpus,
+                "--bucket-count",
+                str(args.bucket_count),
+                "--bucket-bytes",
+                str(args.bucket_bytes),
+                "--storage-layout",
+                args.storage_layout,
+                "--chunk-bytes",
+                str(args.chunk_bytes),
+                "--profile-bytes",
+                str(args.profile_bytes),
+                "--min-pool-bytes",
+                str(args.min_pool_bytes),
+                "--mode",
+                args.mode,
+                "--iterations",
+                str(args.iterations),
+                "--warmup",
+                str(args.warmup),
+            ]
+        )
+    elif workload == "training-offload":
         command.extend(
             [
                 "--target-gpu",

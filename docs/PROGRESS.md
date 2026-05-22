@@ -9,6 +9,11 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- Extend daemon smoke to training offload
+  - Added `training-offload` as a supported daemon smoke workload so the same
+    wrapper can exercise the training offload benchmark through a local daemon.
+  - Added regression coverage for the training-offload client command builder.
+
 - Fix daemon smoke parser conflict
   - Split the daemon smoke parser construction into a helper so the wrapper can
     accept both daemon-launch quotas and client daemon options without
@@ -149,6 +154,21 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 ## Last Verified Checks
 
 Additional local checks on the Windows development environment:
+
+```text
+python -m unittest discover -s test\python -p "test_daemon_smoke.py" -v
+```
+
+Result: 6 tests passed.
+
+```text
+python -m compileall benchmarks\daemon_smoke.py test\python\test_daemon_smoke.py -q
+git diff --check
+```
+
+Result: passed.
+
+Further local checks on the Windows development environment:
 
 ```text
 python -m unittest discover -s test\python -p "test_daemon_smoke.py" -v
