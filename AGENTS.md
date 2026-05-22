@@ -65,6 +65,68 @@ Prefer small, verifiable steps. The project should move toward the TurboBus
 paper system: daemon-managed PCIe bandwidth pooling through relay GPUs, with
 real large-model integration points instead of simulated inference workloads.
 
+### Project Direction
+
+Advance TurboBus from a working research prototype into a usable KV/tensor
+transfer system for real inference frameworks. Do not let benchmark scripts
+become the system. Keep the project organized into three layers:
+
+1. Native transfer engine.
+   - Own C++/CUDA transfer execution, chunk planning, peer access, staging
+     buffers, direct/relay/pool paths, profiling, and low-level stats.
+   - Do not put vLLM request, prefix, token, or scheduler policy here.
+
+2. Python runtime API.
+   - Own `Runtime`, `RuntimeOptions`, transfer mode selection, profile cache,
+     transfer stats, `last_plan_dict()`, `last_auto_decision_dict()`, and
+     `batch_transfer_mode()`.
+   - Keep this API stable enough for framework integrations and benchmarks to
+     share the same entry points.
+
+3. Framework integration layer.
+   - Own vLLM connector logic, framework KV slot adapters, examples, and
+     framework-specific compatibility code.
+   - Keep integration code thin: translate framework lifecycle events into
+     TurboBus runtime calls, then report clear timing and transfer stats.
+
+Project priorities:
+
+1. Stabilize the Runtime API.
+   - Make direct, relay, pool, and auto transfer behavior clear and
+     explainable.
+   - Keep profile refresh, fallback behavior, and plan reporting test-covered.
+   - Prefer one shared runtime path over duplicated benchmark-only logic.
+
+2. Engineer the vLLM connector path.
+   - Define supported vLLM versions and configuration keys.
+   - Keep save/restore prefix lifecycle clear: request metadata, allocation,
+     connector metadata, worker transfer, prefix registration, completion, and
+     cleanup.
+   - Reduce example-side special cases as connector lifecycle support matures.
+
+3. Grow daemon and multi-process resource management.
+   - Use the daemon for session lifecycle, relay ownership, relay quota,
+     transfer reservations, shared profile cache, and cleanup after failures.
+   - Keep CUDA data movement in the runtime unless a daemon-side movement
+     design is explicitly requested.
+
+4. Prove value with real workloads.
+   - Benchmarks should answer when TurboBus helps, when it does not, and why.
+   - Track TTFT, prefix restore latency, save overhead, throughput impact, relay
+     GPU pressure, transfer bytes, chunks, path choice, and fallback reason.
+   - Use microbenchmarks to debug transfer behavior, but prioritize real vLLM
+     generation paths for project decisions.
+
+Near-term code direction:
+
+1. Align README, examples, and benchmarks around the stable Runtime API.
+2. Consolidate vLLM connector configuration for mode, target GPU, relay GPUs,
+   prefix/session keys, restore/save flags, and prefix capacity.
+3. Keep one minimal real vLLM demo path that saves a prefix, restores it in a
+   later request, and reports connector events plus timing.
+4. Return to auto/chunk/profile strategy only after real workload results show
+   a specific gap.
+
 Current completed baseline:
 
 - H2D and D2H direct transfers.
