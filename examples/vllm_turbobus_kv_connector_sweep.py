@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from datetime import datetime
+import json
 import os
 from pathlib import Path
 import shlex
@@ -139,26 +141,18 @@ def run_case(args, mode: str, restore_blocks: int, matched_tokens: int, log_path
 
 
 def build_sweep_summary_lines(args, results) -> list[str]:
-    case_rows = []
-    min_pool_bytes = getattr(args, "min_pool_bytes", 12 * 1024 * 1024)
+    case_rows = build_case_rows(args, results)
     lines = ["SWEEP_SUMMARY_BEGIN"]
-    lines.append(
-        " ".join(
-            [
-                "vllm_kv_connector_sweep_config",
-                f"target={args.target_gpu}",
-                f"relays={parse_csv_ints(args.relay_gpus)}",
-                f"cuda_visible_devices={os.environ.get('CUDA_VISIBLE_DEVICES', '')}",
-                f"model={args.model}",
-                f"prompt_repeat={args.prompt_repeat}",
-                f"modes={','.join(args.modes)}",
-                f"restore_blocks_list={','.join(str(item) for item in args.restore_blocks_list)}",
-                f"chunk_bytes={args.chunk_bytes}",
-                f"profile_bytes={args.profile_bytes}",
-                f"min_pool_bytes={min_pool_bytes}",
-            ]
-        )
-    )
+    lines.append(_config_line(args))
+    for row in case_rows:
+        lines.append(_case_line(row))
+    lines.extend(_speedup_lines(case_rows))
+    lines.append("SWEEP_SUMMARY_END")
+    return lines
+
+
+def build_case_rows(args, results) -> list[dict[str, object]]:
+    case_rows = []
     for result in results:
         summary = result["summary"]
         config = summary.get("vllm_kv_connector_config", {})
@@ -207,63 +201,107 @@ def build_sweep_summary_lines(args, results) -> list[str]:
         }
         row["restore_gib_s"] = gib_per_second(row["bytes"], row["restore_ms"])
         case_rows.append(row)
-        lines.append(
-            " ".join(
-                [
-                    "vllm_kv_connector_sweep_case",
-                    f"mode={row['mode']}",
-                    f"restore_blocks={row['restore_blocks']}",
-                    f"matched_tokens={row['matched_tokens']}",
-                    f"returncode={row['returncode']}",
-                    f"save_ms={row['save_ms']}",
-                    f"save_runtime_init_ms={row['save_runtime_init_ms']}",
-                    f"save_prepare_ms={row['save_prepare_ms']}",
-                    f"save_cpu_alloc_ms={row['save_cpu_alloc_ms']}",
-                    f"save_adapter_ms={row['save_adapter_ms']}",
-                    f"save_refs_ms={row['save_refs_ms']}",
-                    f"save_transfer_ms={row['save_transfer_ms']}",
-                    f"save_register_ms={row['save_register_ms']}",
-                    f"save_total_ms={row['save_total_ms']}",
-                    f"save_layer_count={row['save_layer_count']}",
-                    f"save_layer_ranges={row['save_layer_ranges']}",
-                    f"restore_ms={row['restore_ms']}",
-                    f"restore_gib_s={row['restore_gib_s']}",
-                    f"restore_prepare_ms={row['restore_prepare_ms']}",
-                    f"restore_transfer_ms={row['restore_transfer_ms']}",
-                    f"restore_total_ms={row['restore_total_ms']}",
-                    f"start_load_ms={row['start_load_ms']}",
-                    f"bytes={row['bytes']}",
-                    f"direct_chunks={row['direct_chunks']}",
-                    f"relay_chunks={row['relay_chunks']}",
-                    f"auto_resolved_mode={row['auto_resolved_mode']}",
-                    f"auto_reason={row['auto_reason']}",
-                    f"auto_request_bytes={row['auto_request_bytes']}",
-                    f"auto_request_chunks={row['auto_request_chunks']}",
-                    f"auto_direct_bw_gbps={row['auto_direct_bw_gbps']}",
-                    f"auto_relay_bw_gbps={row['auto_relay_bw_gbps']}",
-                    f"auto_eligible_relays={row['auto_eligible_relays']}",
-                    f"layers={row['layers']}",
-                    f"ranges={row['ranges']}",
-                    f"prompt_tokens={row['prompt_tokens']}",
-                    f"shared_prefix={row['shared_prefix']}",
-                    f"child_mode={row['child_mode']}",
-                    f"log={row['log']}",
-                ]
-            )
-        )
+    return case_rows
+
+
+def print_sweep_summary(
+    args,
+    results,
+    output_path: Path | None = None,
+    cases_json_output: Path | None = None,
+    cases_csv_output: Path | None = None,
+) -> None:
+    case_rows = build_case_rows(args, results)
+    lines = ["SWEEP_SUMMARY_BEGIN", _config_line(args)]
+    lines.extend(_case_line(row) for row in case_rows)
     lines.extend(_speedup_lines(case_rows))
     lines.append("SWEEP_SUMMARY_END")
-    return lines
-
-
-def print_sweep_summary(args, results, output_path: Path | None = None) -> None:
-    lines = build_sweep_summary_lines(args, results)
     text = "\n".join(lines)
     print(text)
     if output_path is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(text + "\n", encoding="utf-8")
         print("vllm_kv_connector_sweep summary", output_path)
+    if cases_json_output is not None:
+        cases_json_output.parent.mkdir(parents=True, exist_ok=True)
+        cases_json_output.write_text(json.dumps(case_rows, indent=2) + "\n", encoding="utf-8")
+        print("vllm_kv_connector_sweep cases_json", cases_json_output)
+    if cases_csv_output is not None:
+        _write_case_rows_csv(cases_csv_output, case_rows)
+        print("vllm_kv_connector_sweep cases_csv", cases_csv_output)
+
+
+def _config_line(args) -> str:
+    min_pool_bytes = getattr(args, "min_pool_bytes", 12 * 1024 * 1024)
+    return " ".join(
+        [
+            "vllm_kv_connector_sweep_config",
+            f"target={args.target_gpu}",
+            f"relays={parse_csv_ints(args.relay_gpus)}",
+            f"cuda_visible_devices={os.environ.get('CUDA_VISIBLE_DEVICES', '')}",
+            f"model={args.model}",
+            f"prompt_repeat={args.prompt_repeat}",
+            f"modes={','.join(args.modes)}",
+            f"restore_blocks_list={','.join(str(item) for item in args.restore_blocks_list)}",
+            f"chunk_bytes={args.chunk_bytes}",
+            f"profile_bytes={args.profile_bytes}",
+            f"min_pool_bytes={min_pool_bytes}",
+        ]
+    )
+
+
+def _case_line(row) -> str:
+    keys = [
+        "mode",
+        "restore_blocks",
+        "matched_tokens",
+        "returncode",
+        "save_ms",
+        "save_runtime_init_ms",
+        "save_prepare_ms",
+        "save_cpu_alloc_ms",
+        "save_adapter_ms",
+        "save_refs_ms",
+        "save_transfer_ms",
+        "save_register_ms",
+        "save_total_ms",
+        "save_layer_count",
+        "save_layer_ranges",
+        "restore_ms",
+        "restore_gib_s",
+        "restore_prepare_ms",
+        "restore_transfer_ms",
+        "restore_total_ms",
+        "start_load_ms",
+        "bytes",
+        "direct_chunks",
+        "relay_chunks",
+        "auto_resolved_mode",
+        "auto_reason",
+        "auto_request_bytes",
+        "auto_request_chunks",
+        "auto_direct_bw_gbps",
+        "auto_relay_bw_gbps",
+        "auto_eligible_relays",
+        "layers",
+        "ranges",
+        "prompt_tokens",
+        "shared_prefix",
+        "child_mode",
+        "log",
+    ]
+    return " ".join(["vllm_kv_connector_sweep_case", *(f"{key}={row[key]}" for key in keys)])
+
+
+def _write_case_rows_csv(path: Path, case_rows) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not case_rows:
+        path.write_text("", encoding="utf-8")
+        return
+    with path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=list(case_rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(case_rows)
 
 
 def _speedup_lines(case_rows) -> list[str]:
@@ -328,6 +366,8 @@ def parse_args():
     parser.add_argument("--no-map-physical-gpus", action="store_true")
     parser.add_argument("--log-dir", default=None)
     parser.add_argument("--summary-output", default=None)
+    parser.add_argument("--cases-json-output", default=None)
+    parser.add_argument("--cases-csv-output", default=None)
     args = parser.parse_args()
     args.modes = parse_csv_strings(args.modes)
     args.restore_blocks_list = parse_csv_ints(args.restore_blocks_list)
@@ -349,6 +389,12 @@ def main() -> None:
     summary_output = Path(args.summary_output) if args.summary_output is not None else log_dir / "sweep_summary.txt"
     if not summary_output.is_absolute():
         summary_output = repo_root / summary_output
+    cases_json_output = Path(args.cases_json_output) if args.cases_json_output is not None else log_dir / "sweep_cases.json"
+    if not cases_json_output.is_absolute():
+        cases_json_output = repo_root / cases_json_output
+    cases_csv_output = Path(args.cases_csv_output) if args.cases_csv_output is not None else log_dir / "sweep_cases.csv"
+    if not cases_csv_output.is_absolute():
+        cases_csv_output = repo_root / cases_csv_output
 
     results = []
     failed = False
@@ -372,7 +418,13 @@ def main() -> None:
         if failed:
             break
 
-    print_sweep_summary(args, results, summary_output)
+    print_sweep_summary(
+        args,
+        results,
+        summary_output,
+        cases_json_output=cases_json_output,
+        cases_csv_output=cases_csv_output,
+    )
     if failed:
         sys.exit(1)
 

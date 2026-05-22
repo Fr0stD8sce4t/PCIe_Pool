@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import contextlib
@@ -125,8 +126,11 @@ class VllmKVConnectorSweepTest(unittest.TestCase):
             ]
 
             lines = sweep.build_sweep_summary_lines(args, results)
+            rows = sweep.build_case_rows(args, results)
 
         self.assertTrue(any("mode=pool" in line and "restore_gib_s=50.000" in line for line in lines))
+        self.assertEqual(rows[1]["mode"], "pool")
+        self.assertEqual(rows[1]["restore_gib_s"], "50.000")
         self.assertTrue(any("mode=pool" in line and "restore_prepare_ms=1" in line for line in lines))
         self.assertTrue(any("mode=pool" in line and "start_load_ms=22" in line for line in lines))
         self.assertTrue(any("mode=pool" in line and "layers=28" in line for line in lines))
@@ -142,6 +146,13 @@ class VllmKVConnectorSweepTest(unittest.TestCase):
     def test_print_sweep_summary_writes_output_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "summary.txt"
+            json_output = Path(tmpdir) / "cases.json"
+            csv_output = Path(tmpdir) / "cases.csv"
+            log = Path(tmpdir) / "pool.log"
+            log.write_text(
+                "turbobus_kv_connector_event event=restore elapsed_ms=20 bytes=1073741824\n",
+                encoding="utf-8",
+            )
             args = SimpleNamespace(
                 target_gpu=6,
                 relay_gpus="5",
@@ -152,10 +163,29 @@ class VllmKVConnectorSweepTest(unittest.TestCase):
                 chunk_bytes=4194304,
                 profile_bytes=16777216,
             )
+            results = [
+                {
+                    "mode": "pool",
+                    "restore_blocks": 8,
+                    "matched_tokens": 128,
+                    "returncode": 0,
+                    "log_path": str(log),
+                    "summary": {},
+                },
+            ]
             with contextlib.redirect_stdout(io.StringIO()):
-                sweep.print_sweep_summary(args, [], output)
+                sweep.print_sweep_summary(
+                    args,
+                    results,
+                    output,
+                    cases_json_output=json_output,
+                    cases_csv_output=csv_output,
+                )
 
             self.assertIn("SWEEP_SUMMARY_BEGIN", output.read_text(encoding="utf-8"))
+            cases = json.loads(json_output.read_text(encoding="utf-8"))
+            self.assertEqual(cases[0]["mode"], "pool")
+            self.assertIn("restore_gib_s", csv_output.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
