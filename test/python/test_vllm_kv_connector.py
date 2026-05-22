@@ -446,6 +446,35 @@ class TurboBusConnectorTest(unittest.TestCase):
 
         self.assertEqual(connector.request_finished(request, [1, 2]), (False, None))
 
+    def test_request_finished_all_groups_delegates_to_save_finish(self) -> None:
+        connector = self.make_connector()
+        request = FakeRequest(
+            {
+                "turbobus.do_save": True,
+                "turbobus.prefix_key": "saved",
+                "turbobus.save_blocks": 3,
+            }
+        )
+        connector.update_state_after_alloc(request, FakeBlocks(([1, 2, 3],)), 0)
+
+        should_delay, params = connector.request_finished_all_groups(
+            request,
+            ([1], [2, 3]),
+        )
+
+        self.assertTrue(should_delay)
+        self.assertEqual(params["turbobus.prefix_key"], "saved")
+        self.assertEqual(params["turbobus.matched_tokens"], 48)
+
+    def test_request_finished_all_groups_does_not_delay_until_save_is_queued(self) -> None:
+        connector = self.make_connector()
+        request = FakeRequest({"turbobus.do_save": True})
+
+        self.assertEqual(
+            connector.request_finished_all_groups(request, ([1], [2])),
+            (False, None),
+        )
+
     def test_empty_connector_metadata_does_not_add_events(self) -> None:
         connector = self.make_connector()
         metadata = connector.build_connector_meta(object())

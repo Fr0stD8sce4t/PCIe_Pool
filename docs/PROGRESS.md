@@ -9,6 +9,15 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- Restore vLLM multi-group finish hook
+  - The target server vLLM build still requires
+    `request_finished_all_groups()` on `KVConnectorBase_V1` / `SupportsHMA`.
+  - `TurboBusConnector` now implements that compatibility hook by flattening
+    group block ids and delegating to the existing `request_finished()` save
+    completion path.
+  - Added focused coverage for delayed block release and no-delay behavior
+    through the multi-group hook.
+
 - Harden paper validation success checks
   - `benchmarks/paper_validation.py` now deletes stale workload output files
     before each non-dry run.
@@ -268,6 +277,16 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
   - Connector configuration was consolidated around shared keys.
 
 ## Last Verified Checks
+
+For the vLLM multi-group finish hook:
+
+```text
+python -m unittest discover -s test\python -p "test_vllm_kv_connector.py" -v
+python -m compileall turbobus\vllm_kv_connector.py test\python\test_vllm_kv_connector.py -q
+git diff --check
+```
+
+Result: passed.
 
 For paper validation success gating:
 
@@ -693,6 +712,14 @@ python benchmarks/paper_validation.py --target-gpu 6 --relay-gpus 5 --workloads 
 Expected output: `PAPER_VALIDATION_SUMMARY_BEGIN` / `PAPER_VALIDATION_SUMMARY_END`,
 plus `paper_metric` lines for `model-loading`, `vllm-kv`, and
 `training-offload` with `status=ok` and `returncode=0`.
+
+If rerunning only the vLLM connector after the
+`request_finished_all_groups()` fix, use the same vLLM command emitted by the
+paper validation harness or run:
+
+```bash
+python examples/vllm_turbobus_kv_connector_sweep.py --model Qwen/Qwen3-0.6B --target-gpu 6 --relay-gpus 5 --modes auto,direct,relay,pool --restore-blocks-list 8 --enforce-eager --summary-output benchmarks/results/paper_validation/vllm_kv_summary.txt --cases-json-output benchmarks/results/paper_validation/vllm_kv_cases.json
+```
 
 ## Next Task
 

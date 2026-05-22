@@ -11,6 +11,9 @@ from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
   - The local harness now clears stale workload outputs before each non-dry
     run and fails a workload when its fresh metrics are missing; use the
     command in `docs/PROGRESS.md` for the next target-server run.
+  - A target-server vLLM run exposed that this vLLM build still requires
+    `request_finished_all_groups()`; TurboBus now has that compatibility hook,
+    so rerun the vLLM/paper validation command after pulling the latest commit.
 
 ## Completed
 
