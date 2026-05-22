@@ -9,6 +9,10 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- `830d137 Document TurboBus roadmap workflow`
+  - Added repository roadmap files and AGENTS rules for keeping future coding
+    turns on the TurboBus paper reproduction main line.
+
 - `c9cb837 Persist vLLM save intent until block allocation`
   - The vLLM connector now keeps save parameters by request id until enough
     allocated block ids arrive.
@@ -66,5 +70,6 @@ Then run native and vLLM checks on target GPU 6 with relay GPU 5.
 
 ## Next Task
 
-Start with item 1 in `docs/NEXT_STEPS.md`: split transfer selection out of
-`turbobus/runtime.py` while preserving public imports and behavior.
+Start with the task under `## Current` in `docs/NEXT_STEPS.md`: split transfer
+selection out of `turbobus/runtime.py` while preserving public imports and
+behavior.

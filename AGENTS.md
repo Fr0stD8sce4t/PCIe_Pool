@@ -74,7 +74,7 @@ next implementation task:
 2. `docs/NEXT_STEPS.md`
 3. `docs/PROGRESS.md`
 
-The first unfinished item in `docs/NEXT_STEPS.md` is the default task. Do not
+The task under `## Current` in `docs/NEXT_STEPS.md` is the default task. Do not
 replace this roadmap with isolated test, docs, summary, or benchmark parsing
 work unless that work directly unblocks the current code task.
 
@@ -83,7 +83,8 @@ After each coding turn:
 - update `docs/PROGRESS.md` with the work completed, verification performed,
   commit id if one was created, and any remaining risk;
 - update `docs/NEXT_STEPS.md` when an item is completed or blocked;
-- keep the next actionable code task at the top of `docs/NEXT_STEPS.md`.
+- when `## Current` is completed, move it to `## Completed` and promote the
+  first `## Upcoming` item to `## Current`.
 
 Tests are verification, not the main deliverable.
 

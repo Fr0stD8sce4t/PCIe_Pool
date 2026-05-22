@@ -1,75 +1,109 @@
 # TurboBus Next Steps
 
-Future coding sessions should start here and take the first unfinished task.
-After each task, update this file and `docs/PROGRESS.md`.
+Future coding sessions should start here and take the task under `## Current`.
+After that task is complete, move it to `## Completed`, promote the first item
+from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
 
-## Active Sequence
+## Current
 
-1. Split transfer selection out of `turbobus/runtime.py`.
-   - Create `turbobus/transfer_selector.py`.
-   - Move `TransferMode`, `AutoTransferDecision`, and `AutoTransferSelector`
-     without changing public imports from `turbobus.runtime`.
-   - Keep existing Runtime behavior unchanged.
-   - Acceptance:
-     - existing Python tests pass;
-     - `from turbobus.runtime import AutoTransferSelector, TransferMode` still works;
-     - benchmarks can still import and use `turbobus.Runtime`.
+### 1. Split Transfer Selection Out Of Runtime
 
-2. Split Runtime plan/profile helpers.
-   - Create `turbobus/plan_trace.py` for `transfer_plan_to_dict` and related
-     conversion helpers.
-   - Create `turbobus/profile_cache.py` only if it removes real Runtime
-     complexity; do not add a speculative cache layer.
-   - Acceptance:
-     - Runtime public API stays stable;
-     - plan dict output is unchanged;
-     - tests cover old import paths.
+Move transfer mode and auto-selection policy out of `turbobus/runtime.py`
+without changing the public Runtime API.
 
-3. Add multi-relay planner coverage.
-   - Extend C++ planner tests for two relay GPUs with different effective
-     bandwidths.
-   - Verify chunk assignment roughly follows path bandwidth.
-   - Verify H2D and D2H both use direction-specific bandwidth fields.
-   - Acceptance:
-     - planner test passes;
-     - no vLLM or Python policy enters the native planner.
+Implementation:
 
-4. Improve multi-relay executor behavior.
-   - Ensure relay staging slots and streams are isolated per relay.
-   - Verify pool transfer can use direct plus more than one relay path.
-   - Report per-relay bytes/chunks in stats.
-   - Acceptance:
-     - CUDA correctness tests pass on a multi-GPU server;
-     - path stats show all used relays.
+- Create `turbobus/transfer_selector.py`.
+- Move `TransferMode`, `AutoTransferDecision`, and `AutoTransferSelector`.
+- Re-export those names from `turbobus.runtime` so existing imports keep
+  working.
+- Keep Runtime behavior unchanged.
 
-5. Wire daemon transfer reservations into Runtime planning.
-   - Add or stabilize daemon messages for transfer reservation and release.
-   - Runtime should request relay permission before planning relay chunks.
-   - If reservation denies relay use, Runtime should reduce relay paths or
-     fall back to direct.
-   - Acceptance:
-     - daemon state tests cover quota and reservation release;
-     - Runtime stats expose reservation/session information.
+Acceptance:
 
-6. Continue vLLM connector lifecycle cleanup.
-   - Keep save intent, block ids, metadata, worker save, prefix registration,
-     and completion inside `TurboBusConnector`.
-   - Example scripts should send `kv_transfer_params` and report events only.
-   - Acceptance:
-     - no example-side manual prefix registration in the real connector path;
-     - save and restore events report bytes, layers, ranges, chunks, and timing.
+- Existing Python tests pass.
+- `from turbobus.runtime import AutoTransferSelector, TransferMode` still works.
+- Benchmarks can still import and use `turbobus.Runtime`.
 
-7. Add model loading workload API and benchmark.
-   - Add CPU pinned weight bucket movement through Runtime.
-   - Measure direct, relay, pool, and auto.
-   - Acceptance:
-     - benchmark reports load latency, path split, and speedup.
+## Upcoming
 
-8. Add training offload bucket API and benchmark.
-   - Add PyTorch tensor bucket movement suitable for parameter or optimizer
-     state offload.
-   - Acceptance:
-     - benchmark reports iteration proxy time, transfer time, and path split.
+### 2. Split Runtime Plan/Profile Helpers
+
+Create `turbobus/plan_trace.py` for `transfer_plan_to_dict` and related
+conversion helpers. Create `turbobus/profile_cache.py` only if it removes real
+Runtime complexity; do not add a speculative cache layer.
+
+Acceptance:
+
+- Runtime public API stays stable.
+- Plan dict output is unchanged.
+- Tests cover old import paths.
+
+### 3. Add Multi-Relay Planner Coverage
+
+Extend C++ planner tests for two relay GPUs with different effective
+bandwidths. Verify chunk assignment roughly follows path bandwidth. Verify H2D
+and D2H both use direction-specific bandwidth fields.
+
+Acceptance:
+
+- Planner test passes.
+- No vLLM or Python policy enters the native planner.
+
+### 4. Improve Multi-Relay Executor Behavior
+
+Ensure relay staging slots and streams are isolated per relay. Verify pool
+transfer can use direct plus more than one relay path. Report per-relay
+bytes/chunks in stats.
+
+Acceptance:
+
+- CUDA correctness tests pass on a multi-GPU server.
+- Path stats show all used relays.
+
+### 5. Wire Daemon Transfer Reservations Into Runtime Planning
+
+Add or stabilize daemon messages for transfer reservation and release. Runtime
+should request relay permission before planning relay chunks. If reservation
+denies relay use, Runtime should reduce relay paths or fall back to direct.
+
+Acceptance:
+
+- Daemon state tests cover quota and reservation release.
+- Runtime stats expose reservation/session information.
+
+### 6. Continue vLLM Connector Lifecycle Cleanup
+
+Keep save intent, block ids, metadata, worker save, prefix registration, and
+completion inside `TurboBusConnector`. Example scripts should send
+`kv_transfer_params` and report events only.
+
+Acceptance:
+
+- No example-side manual prefix registration in the real connector path.
+- Save and restore events report bytes, layers, ranges, chunks, and timing.
+
+### 7. Add Model Loading Workload API And Benchmark
+
+Add CPU pinned weight bucket movement through Runtime. Measure direct, relay,
+pool, and auto.
+
+Acceptance:
+
+- Benchmark reports load latency, path split, and speedup.
+
+### 8. Add Training Offload Bucket API And Benchmark
+
+Add PyTorch tensor bucket movement suitable for parameter or optimizer state
+offload.
+
+Acceptance:
+
+- Benchmark reports iteration proxy time, transfer time, and path split.
+
+## Completed
+
+- 2026-05-22: Document TurboBus roadmap workflow (`830d137`).
 
 ## Working Rules
 
