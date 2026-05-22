@@ -171,6 +171,8 @@ class TurboBusConnectorTest(unittest.TestCase):
             "turbobus.profile_bytes": "16777216",
             "turbobus.mode": "auto",
             "turbobus.min_pool_bytes": "12582912",
+            "turbobus.daemon_socket_path": "/tmp/turbobusd.sock",
+            "turbobus.daemon_max_inflight_chunks": "6",
             "turbobus.restore_block_limit": "8",
             "turbobus.restore_enabled": "true",
             "turbobus.session_id": "session-a",
@@ -193,6 +195,8 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertEqual(config.profile_bytes, 16777216)
         self.assertEqual(config.mode, "auto")
         self.assertEqual(config.min_pool_bytes, 12582912)
+        self.assertEqual(config.daemon_socket_path, "/tmp/turbobusd.sock")
+        self.assertEqual(config.daemon_max_inflight_chunks, 6)
         self.assertEqual(config.restore_block_limit, 8)
         self.assertTrue(config.restore_enabled)
         self.assertEqual(config.session_id, "session-a")
@@ -206,6 +210,8 @@ class TurboBusConnectorTest(unittest.TestCase):
             "turbobus.profile_bytes": 16777216,
             "turbobus.mode": "auto",
             "turbobus.min_pool_bytes": 12582912,
+            "turbobus.daemon_socket_path": "/tmp/turbobusd.sock",
+            "turbobus.daemon_max_inflight_chunks": 6,
         }
 
         with mock.patch("turbobus.vllm_kv_connector.Runtime") as runtime_class:
@@ -218,6 +224,8 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertEqual(kwargs["options"].profile_bytes, 16777216)
         self.assertEqual(kwargs["options"].transfer_mode, "auto")
         self.assertEqual(kwargs["options"].min_pool_bytes, 12582912)
+        self.assertEqual(kwargs["options"].daemon_socket_path, "/tmp/turbobusd.sock")
+        self.assertEqual(kwargs["options"].daemon_max_inflight_chunks, 6)
 
     def test_reports_explicit_external_match(self) -> None:
         register_saved_prefix("default", [object()], block_count=8, matched_tokens=96)
@@ -694,6 +702,15 @@ class TurboBusConnectorTest(unittest.TestCase):
 
         adapter = StatsAdapter()
         connector = self.make_connector({"turbobus.restore_enabled": True})
+        connector.runtime = mock.Mock(
+            last_auto_decision_dict=mock.Mock(return_value={}),
+            last_daemon_reservation_dict=mock.Mock(
+                return_value={
+                    "daemon_session_id": "daemon-session",
+                    "daemon_reservation_status": "granted",
+                }
+            ),
+        )
         connector.state.kv_caches = {"0": mock.Mock()}
         request = mock.Mock(
             request_id="req0",
@@ -717,6 +734,8 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertEqual(connector.state.events[-1]["bytes"], 96)
         self.assertEqual(connector.state.events[-1]["direct_chunks"], 3)
         self.assertEqual(connector.state.events[-1]["relay_chunks"], 2)
+        self.assertEqual(connector.state.events[-1]["daemon_session_id"], "daemon-session")
+        self.assertEqual(connector.state.events[-1]["daemon_reservation_status"], "granted")
 
 
 if __name__ == "__main__":

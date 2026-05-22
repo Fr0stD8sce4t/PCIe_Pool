@@ -9,6 +9,17 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- Wire daemon transfer reservations into Runtime planning
+  - Added `TurboBusDaemonClient` for the local daemon socket protocol.
+  - `RuntimeOptions.daemon_socket_path` now makes Runtime register a daemon
+    session directly, reserve relay chunks before relay/pool transfers, release
+    reservations after wait, and fall back to direct when daemon quota denies
+    relay use.
+  - `TransferHandle.stats`, `last_daemon_reservation_dict()`, and vLLM restore
+    events expose daemon session and reservation fields.
+  - vLLM connector config now accepts `turbobus.daemon_socket_path` and
+    `turbobus.daemon_max_inflight_chunks`.
+
 - Multi-relay executor behavior
   - Added `test_multi_relay_pool` for direct plus two relay H2D correctness.
   - The test checks returned data, per-relay bytes/chunks, and path stats.
@@ -158,6 +169,34 @@ environment.
 Local C++/CUDA checks were not run because `cmake` is not installed in this
 environment.
 
+For daemon reservation Runtime wiring:
+
+```text
+python -m unittest discover -s test\python -p "test_runtime_handle.py" -v
+```
+
+Result: 25 tests passed, 2 skipped because PyTorch is not installed locally.
+
+```text
+python -m unittest discover -s test\python -p "test_daemon_*.py" -v
+```
+
+Result: 5 tests passed, 2 skipped because Windows does not expose Unix domain
+socket support in this environment.
+
+```text
+python -m unittest discover -s test\python -p "test_vllm_kv_connector.py" -v
+```
+
+Result: 31 tests passed.
+
+```text
+python -m compileall turbobus test\python\test_runtime_handle.py test\python\test_daemon_socket.py test\python\test_vllm_kv_connector.py -q
+git diff --check
+```
+
+Result: passed.
+
 ## Known Server Follow-Up
 
 After C++/CUDA/pybind edits, reinstall before server tests:
@@ -172,5 +211,5 @@ Then run native and vLLM checks on target GPU 6 with relay GPU 5.
 
 ## Next Task
 
-Start with the task under `## Current` in `docs/NEXT_STEPS.md`: wire daemon
-transfer reservations into Runtime planning.
+Start with the task under `## Current` in `docs/NEXT_STEPS.md`: continue vLLM
+connector lifecycle cleanup.

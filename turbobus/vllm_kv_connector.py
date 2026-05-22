@@ -221,6 +221,8 @@ class TurboBusConnectorConfig:
     profile_bytes: int
     mode: str
     min_pool_bytes: int
+    daemon_socket_path: str
+    daemon_max_inflight_chunks: int
     restore_block_limit: int
     restore_enabled: bool
     session_id: str
@@ -261,6 +263,16 @@ class TurboBusConnectorConfig:
                 "turbobus.min_pool_bytes",
                 int(os.environ.get("TURBOBUS_MIN_POOL_BYTES", 12 * 1024 * 1024)),
             ),
+            daemon_socket_path=_extra_config_str(
+                vllm_config,
+                "turbobus.daemon_socket_path",
+                os.environ.get("TURBOBUS_DAEMON_SOCKET_PATH", ""),
+            ),
+            daemon_max_inflight_chunks=_extra_config_int(
+                vllm_config,
+                "turbobus.daemon_max_inflight_chunks",
+                int(os.environ.get("TURBOBUS_DAEMON_MAX_INFLIGHT_CHUNKS", "8") or 8),
+            ),
             restore_block_limit=_extra_config_int(
                 vllm_config,
                 "turbobus.restore_block_limit",
@@ -289,6 +301,8 @@ class TurboBusConnectorConfig:
             profile_bytes=self.profile_bytes,
             transfer_mode=self.mode,
             min_pool_bytes=self.min_pool_bytes,
+            daemon_socket_path=self.daemon_socket_path or None,
+            daemon_max_inflight_chunks=self.daemon_max_inflight_chunks,
         )
 
 
@@ -845,6 +859,9 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         total_ms = (time.perf_counter() - total_start) * 1000.0
         stats = _adapter_transfer_stats(adapter, refs, handles).as_dict()
         auto_decision = self.runtime.last_auto_decision_dict() if self.runtime else {}
+        daemon_reservation = (
+            self.runtime.last_daemon_reservation_dict() if self.runtime else {}
+        )
         self.state.events.append(
             {
                 "event": "restore",
@@ -861,6 +878,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                 "ranges": len(refs),
                 **stats,
                 **auto_decision,
+                **daemon_reservation,
             }
         )
         _emit_event(
@@ -878,6 +896,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             ranges=len(refs),
             **stats,
             **auto_decision,
+            **daemon_reservation,
         )
 
     def _start_layer_save_context(

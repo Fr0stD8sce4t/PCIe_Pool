@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
+from .daemon import TurboBusDaemonClient
 from .plan_trace import transfer_plan_to_dict
 from .transfer_selector import (
     AutoTransferDecision,
@@ -62,6 +63,8 @@ class RuntimeOptions:
     relay_min_direct_ratio: float = 0.0
     enable_dynamic_weights: bool = False
     dynamic_weight_alpha: float = 0.25
+    daemon_socket_path: str | None = None
+    daemon_max_inflight_chunks: int = 8
 
     @classmethod
     def from_tuning_json(cls, path: str | Path) -> "RuntimeOptions":
@@ -141,6 +144,9 @@ class Runtime:
         self.target_gpu = int(target_gpu)
         self.relay_gpus = [int(gpu) for gpu in (relay_gpus or [])]
         self.options = options or RuntimeOptions()
+        self._daemon_client = None
+        self._daemon_session_id: str | None = None
+        self._last_daemon_reservation: dict[str, object] = {}
         self._last_resolved_transfer_mode = TransferMode.POOL
         self._last_auto_decision: AutoTransferDecision | None = None
         self._forced_transfer_mode: TransferMode | None = None
@@ -148,6 +154,32 @@ class Runtime:
             self._last_resolved_transfer_mode = TransferMode.AUTO
         self._runtime = _turbobus.Runtime(self.options.to_native())
         self._runtime.init(self.target_gpu, self.relay_gpus)
+        self._init_daemon_session()
+
+    def _init_daemon_session(self) -> None:
+        if not self.options.daemon_socket_path:
+            return
+        client = TurboBusDaemonClient(self.options.daemon_socket_path)
+        response = client.register_session(
+            target_gpu=self.target_gpu,
+            relay_gpus=self.relay_gpus,
+            max_inflight_chunks=self.options.daemon_max_inflight_chunks,
+        )
+        if not response.ok:
+            raise RuntimeError(response.error or "daemon session registration failed")
+        self._daemon_client = client
+        self._daemon_session_id = str(response.payload["session"]["session_id"])
+
+    def close(self) -> None:
+        if self._daemon_client is not None and self._daemon_session_id is not None:
+            self._daemon_client.close_session(self._daemon_session_id)
+            self._daemon_session_id = None
+
+    def __del__(self):  # pragma: no cover - best-effort cleanup
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def profile(self, bytes: int = 256 * 1024 * 1024, force: bool = False):
         return self._runtime.profile(int(bytes), bool(force))
@@ -312,6 +344,9 @@ class Runtime:
             ),
         }
 
+    def last_daemon_reservation_dict(self) -> dict[str, object]:
+        return dict(self._last_daemon_reservation)
+
     def fetch_to_gpu(self, cpu_tensor, gpu_tensor):
         _require_torch()
         bytes_to_copy = _validate_transfer_tensors(
@@ -320,14 +355,21 @@ class Runtime:
             target_gpu=self.target_gpu,
             direction="h2d",
         )
-        self.resolve_transfer_mode(bytes_to_copy, direction="h2d")
-
-        handle = self._runtime.fetch_to_gpu(
-            int(cpu_tensor.data_ptr()),
-            int(gpu_tensor.data_ptr()),
-            int(bytes_to_copy),
+        reservations = self._resolve_transfer_with_daemon(
+            bytes_to_copy,
+            direction="h2d",
         )
-        return TransferHandle(self, handle)
+
+        try:
+            handle = self._runtime.fetch_to_gpu(
+                int(cpu_tensor.data_ptr()),
+                int(gpu_tensor.data_ptr()),
+                int(bytes_to_copy),
+            )
+        except Exception:
+            self._release_daemon_reservations(reservations)
+            raise
+        return TransferHandle(self, handle, reservations)
 
     def offload_to_cpu(self, gpu_tensor, cpu_tensor):
         _require_torch()
@@ -337,14 +379,21 @@ class Runtime:
             target_gpu=self.target_gpu,
             direction="d2h",
         )
-        self.resolve_transfer_mode(bytes_to_copy, direction="d2h")
-
-        handle = self._runtime.offload_to_cpu(
-            int(gpu_tensor.data_ptr()),
-            int(cpu_tensor.data_ptr()),
-            int(bytes_to_copy),
+        reservations = self._resolve_transfer_with_daemon(
+            bytes_to_copy,
+            direction="d2h",
         )
-        return TransferHandle(self, handle)
+
+        try:
+            handle = self._runtime.offload_to_cpu(
+                int(gpu_tensor.data_ptr()),
+                int(cpu_tensor.data_ptr()),
+                int(bytes_to_copy),
+            )
+        except Exception:
+            self._release_daemon_reservations(reservations)
+            raise
+        return TransferHandle(self, handle, reservations)
 
     def fetch_ranges_to_gpu(self, cpu_tensor, gpu_tensor, ranges: Iterable):
         _require_torch()
@@ -362,15 +411,23 @@ class Runtime:
             max(1, math.ceil(int(bytes_) / max(1, int(self.options.chunk_bytes))))
             for _, _, bytes_ in range_fields
         )
-        self.resolve_transfer_mode(transfer_bytes, direction="h2d", range_count=range_count)
-        handle = self._runtime.fetch_ranges_to_gpu(
-            int(cpu_tensor.data_ptr()),
-            int(source_bytes),
-            int(gpu_tensor.data_ptr()),
-            int(destination_bytes),
-            native_ranges,
+        reservations = self._resolve_transfer_with_daemon(
+            transfer_bytes,
+            direction="h2d",
+            range_count=range_count,
         )
-        return TransferHandle(self, handle)
+        try:
+            handle = self._runtime.fetch_ranges_to_gpu(
+                int(cpu_tensor.data_ptr()),
+                int(source_bytes),
+                int(gpu_tensor.data_ptr()),
+                int(destination_bytes),
+                native_ranges,
+            )
+        except Exception:
+            self._release_daemon_reservations(reservations)
+            raise
+        return TransferHandle(self, handle, reservations)
 
     def offload_ranges_to_cpu(self, gpu_tensor, cpu_tensor, ranges: Iterable):
         _require_torch()
@@ -388,23 +445,38 @@ class Runtime:
             max(1, math.ceil(int(bytes_) / max(1, int(self.options.chunk_bytes))))
             for _, _, bytes_ in range_fields
         )
-        self.resolve_transfer_mode(transfer_bytes, direction="d2h", range_count=range_count)
-        handle = self._runtime.offload_ranges_to_cpu(
-            int(gpu_tensor.data_ptr()),
-            int(source_bytes),
-            int(cpu_tensor.data_ptr()),
-            int(destination_bytes),
-            native_ranges,
+        reservations = self._resolve_transfer_with_daemon(
+            transfer_bytes,
+            direction="d2h",
+            range_count=range_count,
         )
-        return TransferHandle(self, handle)
+        try:
+            handle = self._runtime.offload_ranges_to_cpu(
+                int(gpu_tensor.data_ptr()),
+                int(source_bytes),
+                int(cpu_tensor.data_ptr()),
+                int(destination_bytes),
+                native_ranges,
+            )
+        except Exception:
+            self._release_daemon_reservations(reservations)
+            raise
+        return TransferHandle(self, handle, reservations)
 
     def wait(self, handle: "TransferHandle") -> None:
-        self._runtime.wait(handle.native)
-        handle._status = "complete"
-        handle._stats = self._runtime.stats(handle.native)
+        try:
+            self._runtime.wait(handle.native)
+            handle._status = "complete"
+            handle._stats = self.stats(handle)
+        finally:
+            self._release_daemon_reservations(handle._daemon_reservations)
+            handle._daemon_reservations = []
 
     def stats(self, handle: "TransferHandle"):
-        return self._runtime.stats(handle.native)
+        stats = self._runtime.stats(handle.native)
+        if handle.daemon_reservation_info:
+            return _attach_daemon_stats(stats, handle.daemon_reservation_info)
+        return stats
 
     def run_dummy_compute(self, tensor, iterations: int):
         _require_torch()
@@ -423,6 +495,99 @@ class Runtime:
             int(tensor.numel()),
             int(iterations),
         )
+
+    def _resolve_transfer_with_daemon(
+        self,
+        bytes: int,
+        direction: str,
+        range_count: int | None = None,
+    ) -> list[str]:
+        decision = self.resolve_transfer_mode(bytes, direction=direction, range_count=range_count)
+        return self._reserve_daemon_transfer(decision, direction)
+
+    def _reserve_daemon_transfer(
+        self,
+        decision: AutoTransferDecision,
+        direction: str,
+    ) -> list[str]:
+        if (
+            self._daemon_client is None
+            or self._daemon_session_id is None
+            or decision.resolved_mode is TransferMode.DIRECT
+        ):
+            self._last_daemon_reservation = {}
+            return []
+
+        relay_devices = tuple(decision.eligible_relay_devices or self.relay_gpus)
+        if not relay_devices:
+            self._last_daemon_reservation = {
+                "daemon_session_id": self._daemon_session_id,
+                "daemon_reservation_status": "skipped",
+                "daemon_reservation_reason": "no relay devices",
+            }
+            return []
+
+        divisor = len(relay_devices)
+        if decision.resolved_mode is TransferMode.POOL:
+            divisor += 1
+        chunks_per_relay = max(1, math.ceil(decision.request_chunks / divisor))
+        bytes_per_relay = (
+            math.ceil(decision.request_bytes / divisor)
+            if decision.request_bytes > 0
+            else 0
+        )
+        reservations: list[str] = []
+        try:
+            for relay_gpu in relay_devices:
+                response = self._daemon_client.reserve_transfer(
+                    self._daemon_session_id,
+                    relay_gpu=int(relay_gpu),
+                    chunks=chunks_per_relay,
+                    bytes_=bytes_per_relay,
+                    direction=direction,
+                )
+                if not response.ok:
+                    raise RuntimeError(response.error or "daemon reservation denied")
+                reservations.append(str(response.payload["reservation"]["reservation_id"]))
+        except Exception as exc:
+            self._release_daemon_reservations(reservations)
+            self._last_daemon_reservation = {
+                "daemon_session_id": self._daemon_session_id,
+                "daemon_reservation_status": "denied",
+                "daemon_reservation_error": str(exc),
+            }
+            fallback = AutoTransferDecision(
+                requested_mode=decision.requested_mode,
+                resolved_mode=TransferMode.DIRECT,
+                request_bytes=decision.request_bytes,
+                request_chunks=decision.request_chunks,
+                direct_h2d_bw_gbps=decision.direct_h2d_bw_gbps,
+                relay_effective_bw_gbps=decision.relay_effective_bw_gbps,
+                eligible_relay_devices=(),
+                reason=f"daemon reservation denied: {exc}",
+            )
+            self._last_resolved_transfer_mode = TransferMode.DIRECT
+            if decision.requested_mode is TransferMode.AUTO:
+                self._last_auto_decision = fallback
+            self._runtime.set_transfer_mode(_runtime_transfer_mode_value(TransferMode.DIRECT))
+            return []
+
+        self._last_daemon_reservation = {
+            "daemon_session_id": self._daemon_session_id,
+            "daemon_reservation_status": "granted",
+            "daemon_reservation_ids": ",".join(reservations),
+            "daemon_reserved_relays": ",".join(str(gpu) for gpu in relay_devices),
+            "daemon_reserved_chunks_per_relay": chunks_per_relay,
+            "daemon_reserved_bytes_per_relay": bytes_per_relay,
+            "daemon_reserved_direction": direction,
+        }
+        return reservations
+
+    def _release_daemon_reservations(self, reservations: list[str]) -> None:
+        if self._daemon_client is None:
+            return
+        for reservation_id in list(reservations):
+            self._daemon_client.release_transfer(reservation_id)
 
 
 def _validate_transfer_tensors(cpu_tensor, gpu_tensor, target_gpu: int, direction: str) -> int:
@@ -529,10 +694,37 @@ def _range_fields(item) -> tuple[int, int, int]:
     return int(src_offset), int(dst_offset), int(bytes_)
 
 
+class _TransferStatsWithDaemon:
+    def __init__(self, stats, daemon_info: dict[str, object]) -> None:
+        self._stats = stats
+        self.daemon_reservation_info = dict(daemon_info)
+        for key, value in self.daemon_reservation_info.items():
+            setattr(self, key, value)
+
+    def __getattr__(self, name: str):
+        return getattr(self._stats, name)
+
+
+def _attach_daemon_stats(stats, daemon_info: dict[str, object]):
+    if isinstance(stats, dict):
+        return {**stats, **daemon_info}
+    return _TransferStatsWithDaemon(stats, daemon_info)
+
+
 class TransferHandle:
-    def __init__(self, runtime: Runtime, native_handle) -> None:
+    def __init__(
+        self,
+        runtime: Runtime,
+        native_handle,
+        daemon_reservations: list[str] | None = None,
+    ) -> None:
         self.runtime = runtime
         self.native = native_handle
+        self._daemon_reservations = list(daemon_reservations or [])
+        last_daemon_reservation = getattr(runtime, "last_daemon_reservation_dict", None)
+        self.daemon_reservation_info = (
+            last_daemon_reservation() if callable(last_daemon_reservation) else {}
+        )
         self._status = "submitted"
         self._stats = None
         self.error = ""

@@ -9,7 +9,7 @@ This repository currently implements the first single-node TurboBus boundary:
 - CUDA stream/event based relay flow
 - simple bandwidth profiler
 - thin Python/PyTorch API
-- daemon state skeleton for session and relay quota control
+- daemon-managed session, relay quota, and transfer reservation control
 
 It intentionally does not implement RDMA, cross-node transfer, HMC integration,
 vLLM/SGLang patching, or a full KV cache state machine.
@@ -152,10 +152,19 @@ Supported requests in this MVP:
 
 - `REGISTER_SESSION`
 - `PROFILE`
+- `RESERVE_TRANSFER`
+- `RELEASE_TRANSFER`
 - `CLOSE_SESSION`
 
 `FETCH_TO_GPU` is reserved in the protocol enum for later expansion, but it is
 not wired to cross-process execution in this version.
+
+When `RuntimeOptions.daemon_socket_path` is set, Runtime registers a daemon
+session during construction. Before a relay or pooled transfer it reserves the
+relay chunk budget through the daemon, then releases that reservation after
+`TransferHandle.wait()` completes or fails. If the reservation is denied,
+Runtime sets the native transfer mode to direct for that request so another
+process's relay quota is respected.
 
 ## Validation Status
 

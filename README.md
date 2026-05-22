@@ -17,12 +17,17 @@ The current implementation focuses on:
 - path profiling
 - a thin PyTorch API
 - real framework KV slot APIs
-- a per-node daemon state skeleton for relay quota control
+- a per-node daemon for relay quota and transfer reservation control
 
 The daemon manages session and relay quota state through a local Unix socket.
 It is the control-plane boundary for cross-job bandwidth sharing. Client
 processes still execute their own CUDA transfers, but daemon policy decides
 which relay GPUs and relay capacity they may use.
+
+Pass `RuntimeOptions(daemon_socket_path="/tmp/turbobusd.sock")` to make a
+Runtime register with the daemon and reserve relay chunks before relay or pool
+transfers. If the daemon denies a reservation because another process is using
+the relay quota, Runtime falls back to direct transfer for that request.
 
 Out of scope for this first version:
 

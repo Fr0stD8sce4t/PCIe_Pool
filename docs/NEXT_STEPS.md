@@ -6,19 +6,6 @@ from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
 
 ## Current
 
-### 5. Wire Daemon Transfer Reservations Into Runtime Planning
-
-Add or stabilize daemon messages for transfer reservation and release. Runtime
-should request relay permission before planning relay chunks. If reservation
-denies relay use, Runtime should reduce relay paths or fall back to direct.
-
-Acceptance:
-
-- Daemon state tests cover quota and reservation release.
-- Runtime stats expose reservation/session information.
-
-## Upcoming
-
 ### 6. Continue vLLM Connector Lifecycle Cleanup
 
 Keep save intent, block ids, metadata, worker save, prefix registration, and
@@ -29,6 +16,8 @@ Acceptance:
 
 - No example-side manual prefix registration in the real connector path.
 - Save and restore events report bytes, layers, ranges, chunks, and timing.
+
+## Upcoming
 
 ### 7. Add Model Loading Workload API And Benchmark
 
@@ -49,6 +38,16 @@ Acceptance:
 - Benchmark reports iteration proxy time, transfer time, and path split.
 
 ## Completed
+
+- 2026-05-22: Wire daemon transfer reservations into Runtime planning.
+  - Added a daemon socket client and Runtime daemon session registration.
+  - Runtime now reserves relay chunks before relay/pool transfers, releases
+    reservations after `TransferHandle.wait()`, and falls back to direct when
+    daemon quota denies relay use.
+  - Runtime stats and vLLM restore events expose daemon session/reservation
+    fields.
+  - vLLM connector config can pass `turbobus.daemon_socket_path` and
+    `turbobus.daemon_max_inflight_chunks` into Runtime.
 
 - 2026-05-22: Improve multi-relay executor behavior.
   - Added a CUDA correctness test for a pool transfer that uses direct plus two

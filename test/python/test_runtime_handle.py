@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import tempfile
 
 from turbobus import runtime as runtime_module
+from turbobus.daemon.protocol import DaemonResponse
 from turbobus.plan_trace import transfer_plan_to_dict as plan_trace_to_dict
 from turbobus.runtime import (
     AutoTransferSelector,
@@ -24,6 +25,12 @@ except ImportError:  # pragma: no cover - optional dependency for validation tes
 class NativeHandle:
     def __init__(self, handle_id: int = 1) -> None:
         self.id = handle_id
+
+
+class NativeStats:
+    bytes = 64
+    direct_chunks = 1
+    gib_per_second = 7.5
 
 
 class SuccessfulRuntime:
@@ -414,6 +421,200 @@ class RuntimeOptionsTest(unittest.TestCase):
         self.assertEqual(options.chunk_bytes, 8388608)
         self.assertEqual(options.profile_bytes, 16777216)
         self.assertEqual(options.staging_slots, 2)
+
+
+class RuntimeDaemonReservationTest(unittest.TestCase):
+    class Relay:
+        relay_device = 1
+        effective_bw_gbps = 7.6
+        p2p_enabled = True
+
+    class RelayProfile:
+        direct_h2d_bw_gbps = 7.5
+        relays = []
+
+    def setUp(self) -> None:
+        self.RelayProfile.relays = []
+
+    class FakeRuntime:
+        def __init__(self) -> None:
+            self.mode = None
+            self.wait_calls = 0
+
+        def profile(self, bytes: int, force: bool = False):
+            return RuntimeDaemonReservationTest.RelayProfile()
+
+        def cached_profile(self):
+            return RuntimeDaemonReservationTest.RelayProfile()
+
+        def planner_profile(self):
+            return RuntimeDaemonReservationTest.RelayProfile()
+
+        def set_transfer_mode(self, mode):
+            self.mode = mode
+
+        def wait(self, handle):
+            self.wait_calls += 1
+
+        def stats(self, handle):
+            return NativeStats()
+
+    class FakeDaemonClient:
+        def __init__(self, deny: bool = False) -> None:
+            self.deny = deny
+            self.register_calls = []
+            self.close_calls = []
+            self.reserve_calls = []
+            self.release_calls = []
+
+        def register_session(self, target_gpu, relay_gpus, max_inflight_chunks=8):
+            self.register_calls.append(
+                {
+                    "target_gpu": target_gpu,
+                    "relay_gpus": relay_gpus,
+                    "max_inflight_chunks": max_inflight_chunks,
+                }
+            )
+            return DaemonResponse(
+                ok=True,
+                payload={"session": {"session_id": "session-1"}},
+            )
+
+        def close_session(self, session_id):
+            self.close_calls.append(session_id)
+            return DaemonResponse(ok=True, payload={"session_id": session_id})
+
+        def reserve_transfer(self, session_id, relay_gpu, chunks, bytes_=0, direction="unknown"):
+            self.reserve_calls.append(
+                {
+                    "session_id": session_id,
+                    "relay_gpu": relay_gpu,
+                    "chunks": chunks,
+                    "bytes": bytes_,
+                    "direction": direction,
+                }
+            )
+            if self.deny:
+                return DaemonResponse(ok=False, error="relay chunk quota is unavailable")
+            reservation_id = f"res-{len(self.reserve_calls)}"
+            return DaemonResponse(
+                ok=True,
+                payload={"reservation": {"reservation_id": reservation_id}},
+            )
+
+        def release_transfer(self, reservation_id):
+            self.release_calls.append(reservation_id)
+            return DaemonResponse(ok=True, payload={"reservation_id": reservation_id})
+
+    def make_runtime(self, client):
+        runtime = object.__new__(runtime_module.Runtime)
+        runtime.target_gpu = 0
+        runtime.relay_gpus = [1]
+        runtime.options = RuntimeOptions(
+            transfer_mode="auto",
+            chunk_bytes=4 * 1024 * 1024,
+            daemon_socket_path="/tmp/turbobusd-test.sock",
+        )
+        runtime._daemon_client = client
+        runtime._daemon_session_id = "session-1"
+        runtime._runtime = self.FakeRuntime()
+        runtime._last_resolved_transfer_mode = TransferMode.AUTO
+        runtime._last_auto_decision = None
+        runtime._forced_transfer_mode = None
+        runtime._last_daemon_reservation = {}
+        return runtime
+
+    def test_daemon_reservation_granted_for_pool_transfer(self) -> None:
+        self.RelayProfile.relays = [self.Relay()]
+        client = self.FakeDaemonClient()
+        runtime = self.make_runtime(client)
+
+        reservations = runtime._resolve_transfer_with_daemon(
+            32 * 1024 * 1024,
+            direction="h2d",
+            range_count=8,
+        )
+
+        self.assertEqual(reservations, ["res-1"])
+        self.assertEqual(runtime.last_transfer_mode(), TransferMode.POOL)
+        self.assertEqual(client.reserve_calls[0]["session_id"], "session-1")
+        self.assertEqual(client.reserve_calls[0]["relay_gpu"], 1)
+        self.assertEqual(client.reserve_calls[0]["chunks"], 4)
+        self.assertEqual(client.reserve_calls[0]["direction"], "h2d")
+        info = runtime.last_daemon_reservation_dict()
+        self.assertEqual(info["daemon_reservation_status"], "granted")
+        self.assertEqual(info["daemon_reserved_relays"], "1")
+
+    def test_daemon_reservation_denial_falls_back_to_direct(self) -> None:
+        self.RelayProfile.relays = [self.Relay()]
+        client = self.FakeDaemonClient(deny=True)
+        runtime = self.make_runtime(client)
+
+        reservations = runtime._resolve_transfer_with_daemon(
+            32 * 1024 * 1024,
+            direction="h2d",
+            range_count=8,
+        )
+
+        self.assertEqual(reservations, [])
+        self.assertEqual(runtime.last_transfer_mode(), TransferMode.DIRECT)
+        self.assertEqual(runtime.last_auto_decision_dict()["auto_resolved_mode"], "direct")
+        self.assertIn("daemon_reservation_denied", runtime.last_auto_decision_dict()["auto_reason"])
+        info = runtime.last_daemon_reservation_dict()
+        self.assertEqual(info["daemon_reservation_status"], "denied")
+        self.assertIn("relay chunk quota", info["daemon_reservation_error"])
+
+    def test_transfer_handle_wait_releases_daemon_reservation(self) -> None:
+        self.RelayProfile.relays = [self.Relay()]
+        client = self.FakeDaemonClient()
+        runtime = self.make_runtime(client)
+        reservations = runtime._resolve_transfer_with_daemon(
+            32 * 1024 * 1024,
+            direction="h2d",
+            range_count=8,
+        )
+        handle = TransferHandle(runtime, NativeHandle(), reservations)
+
+        handle.wait()
+
+        self.assertEqual(client.release_calls, ["res-1"])
+        self.assertEqual(handle._daemon_reservations, [])
+        self.assertTrue(handle.done)
+        self.assertEqual(handle.stats.bytes, 64)
+        self.assertEqual(handle.stats.gib_per_second, 7.5)
+        self.assertEqual(handle.stats.daemon_session_id, "session-1")
+        self.assertEqual(handle.stats.daemon_reservation_status, "granted")
+        self.assertEqual(
+            handle.stats.daemon_reservation_info["daemon_reservation_status"],
+            "granted",
+        )
+        self.assertEqual(handle.daemon_reservation_info["daemon_reservation_status"], "granted")
+
+    def test_runtime_initializes_and_closes_daemon_session(self) -> None:
+        client = self.FakeDaemonClient()
+        old_client = runtime_module.TurboBusDaemonClient
+        runtime_module.TurboBusDaemonClient = lambda socket_path: client
+        runtime = object.__new__(runtime_module.Runtime)
+        runtime.target_gpu = 0
+        runtime.relay_gpus = [1]
+        runtime.options = RuntimeOptions(
+            daemon_socket_path="/tmp/turbobusd-test.sock",
+            daemon_max_inflight_chunks=3,
+        )
+        runtime._daemon_client = None
+        runtime._daemon_session_id = None
+        try:
+            runtime._init_daemon_session()
+            self.assertEqual(runtime._daemon_session_id, "session-1")
+            self.assertEqual(client.register_calls[0]["target_gpu"], 0)
+            self.assertEqual(client.register_calls[0]["relay_gpus"], [1])
+            self.assertEqual(client.register_calls[0]["max_inflight_chunks"], 3)
+
+            runtime.close()
+            self.assertEqual(client.close_calls, ["session-1"])
+            self.assertIsNone(runtime._daemon_session_id)
+        finally:
+            runtime_module.TurboBusDaemonClient = old_client
 
 
 class PlanTraceTest(unittest.TestCase):
