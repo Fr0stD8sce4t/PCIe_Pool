@@ -8,6 +8,13 @@ import statistics
 import torch
 
 import turbobus
+from daemon_support import (
+    add_daemon_options,
+    daemon_profile_line,
+    daemon_profile_summary,
+    daemon_reservation_line,
+    runtime_options_kwargs,
+)
 
 
 def parse_relay_gpus(value: str) -> list[int]:
@@ -213,6 +220,9 @@ def run_mode(
         "median_gib_per_second": median,
         "samples": samples,
         "last_stats": stats_to_dict(last_stats) if last_stats is not None else None,
+        "daemon_reservation": dict(
+            getattr(last_stats, "daemon_reservation_info", {}) or {}
+        ),
     }
     result.update(plan_result(runtime, include_plan))
     return result
@@ -275,9 +285,20 @@ def compact_summary(result: dict) -> str:
                 f"median_ms={path['median_cuda_ms']:.3f} "
                 f"bytes={path['median_bytes']} chunks={path['median_chunks']}"
             )
+        daemon_reservation = daemon_reservation_line(
+            mode_result.get("daemon_reservation", {})
+        )
+        if daemon_reservation:
+            lines.append(f"{daemon_reservation} mode={mode}")
 
     for key, value in result["speedups"].items():
         lines.append(f"speedup {key}={value:.3f}")
+    daemon_profile_initial = daemon_profile_line(result.get("daemon_profile_initial", {}))
+    if daemon_profile_initial:
+        lines.append(f"{daemon_profile_initial} phase=initial")
+    daemon_profile = daemon_profile_line(result.get("daemon_profile", {}))
+    if daemon_profile:
+        lines.append(f"{daemon_profile} phase=after_profile")
     if result["verify"] is not None:
         lines.append(f"verify match={result['verify']}")
     lines.append("COPY_SUMMARY_END")
@@ -291,6 +312,7 @@ def main() -> None:
     parser.add_argument("--bytes", type=int, default=256 * 1024 * 1024)
     parser.add_argument("--chunk-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--profile-bytes", type=int, default=16 * 1024 * 1024)
+    parser.add_argument("--force-profile", action="store_true")
     parser.add_argument("--min-pool-bytes", type=int, default=12 * 1024 * 1024)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--iterations", type=int, default=5)
@@ -313,6 +335,7 @@ def main() -> None:
         "--summary-output",
         help="write the compact COPY_SUMMARY block to this text file",
     )
+    add_daemon_options(parser)
     args = parser.parse_args()
 
     relays = parse_relay_gpus(args.relay_gpus)
@@ -326,9 +349,11 @@ def main() -> None:
         min_pool_bytes=args.min_pool_bytes,
         enable_dynamic_weights=args.dynamic_weights,
         dynamic_weight_alpha=args.dynamic_weight_alpha,
+        **runtime_options_kwargs(args),
     )
     runtime = turbobus.Runtime(target_gpu=args.target_gpu, relay_gpus=relays, options=options)
-    profile = runtime.profile(args.profile_bytes)
+    daemon_profile_initial = daemon_profile_summary(runtime)
+    profile = runtime.profile(args.profile_bytes, force=args.force_profile)
     result = {
         "config": {
             "target_gpu": args.target_gpu,
@@ -337,13 +362,18 @@ def main() -> None:
             "chunk_bytes": args.chunk_bytes,
             "min_pool_bytes": args.min_pool_bytes,
             "profile_bytes": args.profile_bytes,
+            "force_profile": args.force_profile,
             "warmup": args.warmup,
             "iterations": args.iterations,
             "mode": args.mode,
             "dynamic_weights": args.dynamic_weights,
             "dynamic_weight_alpha": args.dynamic_weight_alpha,
+            "daemon_socket_path": args.daemon_socket_path,
+            "daemon_max_inflight_chunks": args.daemon_max_inflight_chunks,
         },
         "profile": profile_to_dict(profile),
+        "daemon_profile_initial": daemon_profile_initial,
+        "daemon_profile": daemon_profile_summary(runtime),
         "modes": {},
         "speedups": {},
         "verify": None,

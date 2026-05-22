@@ -9,6 +9,14 @@ import time
 import torch
 
 import turbobus
+from daemon_support import (
+    add_daemon_options,
+    collect_daemon_reservation_info,
+    daemon_profile_line,
+    daemon_profile_summary,
+    daemon_reservation_line,
+    runtime_options_kwargs,
+)
 
 
 def parse_relay_gpus(value: str) -> list[int]:
@@ -274,6 +282,12 @@ def run_mode(
             "compute_ms": compute_ms,
             "prefetch": prefetch,
             "offload": offload,
+            "prefetch_daemon_reservation": collect_daemon_reservation_info(
+                prefetch_handles
+            ),
+            "offload_daemon_reservation": collect_daemon_reservation_info(
+                offload_handles
+            ),
             "auto_decision": runtime.last_auto_decision_dict(),
         }
         samples.append(sample)
@@ -314,6 +328,12 @@ def run_mode(
         "mismatches": mismatches[:8],
         "last_plan": runtime.last_plan_dict(),
         "last_auto_decision": runtime.last_auto_decision_dict(),
+        "prefetch_daemon_reservation": (
+            samples[-1]["prefetch_daemon_reservation"] if samples else {}
+        ),
+        "offload_daemon_reservation": (
+            samples[-1]["offload_daemon_reservation"] if samples else {}
+        ),
     }
     print(
         "mode",
@@ -401,9 +421,25 @@ def compact_summary(result: dict) -> str:
                 )
         if mode_result["verify"] is not None:
             lines.append(f"training_verify mode={mode} match={mode_result['verify']}")
+        prefetch_daemon = daemon_reservation_line(
+            mode_result.get("prefetch_daemon_reservation", {})
+        )
+        if prefetch_daemon:
+            lines.append(f"{prefetch_daemon} mode={mode} op=prefetch")
+        offload_daemon = daemon_reservation_line(
+            mode_result.get("offload_daemon_reservation", {})
+        )
+        if offload_daemon:
+            lines.append(f"{offload_daemon} mode={mode} op=offload")
 
     for key, value in result["speedups"].items():
         lines.append(f"training_speedup {key}={value:.3f}")
+    daemon_profile_initial = daemon_profile_line(result.get("daemon_profile_initial", {}))
+    if daemon_profile_initial:
+        lines.append(f"{daemon_profile_initial} phase=initial")
+    daemon_profile = daemon_profile_line(result.get("daemon_profile", {}))
+    if daemon_profile:
+        lines.append(f"{daemon_profile} phase=after_profile")
     lines.append("TRAINING_OFFLOAD_SUMMARY_END")
     return "\n".join(lines)
 
@@ -418,6 +454,7 @@ def main() -> None:
     parser.add_argument("--storage-layout", choices=["separate", "packed"], default="packed")
     parser.add_argument("--chunk-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument("--profile-bytes", type=int, default=16 * 1024 * 1024)
+    parser.add_argument("--force-profile", action="store_true")
     parser.add_argument("--min-pool-bytes", type=int, default=12 * 1024 * 1024)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--iterations", type=int, default=5)
@@ -430,6 +467,7 @@ def main() -> None:
     parser.add_argument("--json-output")
     parser.add_argument("--no-copy-summary", action="store_true")
     parser.add_argument("--summary-output")
+    add_daemon_options(parser)
     args = parser.parse_args()
 
     if args.bucket_count <= 0:
@@ -447,9 +485,11 @@ def main() -> None:
         min_pool_bytes=args.min_pool_bytes,
         enable_dynamic_weights=args.dynamic_weights,
         dynamic_weight_alpha=args.dynamic_weight_alpha,
+        **runtime_options_kwargs(args),
     )
     runtime = turbobus.Runtime(target_gpu=args.target_gpu, relay_gpus=relays, options=options)
-    profile = runtime.profile(args.profile_bytes, force=True)
+    daemon_profile_initial = daemon_profile_summary(runtime)
+    profile = runtime.profile(args.profile_bytes, force=args.force_profile)
     manager = make_manager(args, runtime)
     names = manager.names()
     compute_tensor = torch.ones(
@@ -469,6 +509,7 @@ def main() -> None:
             "chunk_bytes": args.chunk_bytes,
             "min_pool_bytes": args.min_pool_bytes,
             "profile_bytes": args.profile_bytes,
+            "force_profile": args.force_profile,
             "warmup": args.warmup,
             "iterations": args.iterations,
             "mode": args.mode,
@@ -476,8 +517,12 @@ def main() -> None:
             "compute_iterations": args.compute_iterations,
             "dynamic_weights": args.dynamic_weights,
             "dynamic_weight_alpha": args.dynamic_weight_alpha,
+            "daemon_socket_path": args.daemon_socket_path,
+            "daemon_max_inflight_chunks": args.daemon_max_inflight_chunks,
         },
         "profile": profile_to_dict(profile),
+        "daemon_profile_initial": daemon_profile_initial,
+        "daemon_profile": daemon_profile_summary(runtime),
         "modes": {},
         "speedups": {},
     }

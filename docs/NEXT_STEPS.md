@@ -6,20 +6,30 @@ from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
 
 ## Current
 
-### 10. Add Daemon-Aware Benchmark Options
+### 11. Add Daemon Multi-Process Benchmark Smoke
 
-Expose daemon socket options in the main Runtime-driven benchmarks so model
-loading, training offload, and bandwidth checks can run through the same daemon
-session/profile/reservation path as framework integrations.
+Add a small benchmark wrapper that starts a local daemon and runs two benchmark
+clients against it, so shared profile cache hits and relay reservation behavior
+can be checked without hand-running several shells.
 
 Acceptance:
 
-- `bandwidth_pool.py`, `model_loading.py`, and `training_offload.py` accept a
-  daemon socket path.
-- Benchmark output reports daemon profile and reservation status when enabled.
-- Unit tests or parser checks cover the new benchmark option plumbing.
+- The wrapper can run a short bandwidth or model-loading smoke with target GPU
+  and relay GPU arguments.
+- Output reports first-client profile publish, second-client profile hit, and
+  reservation status.
+- The wrapper keeps CUDA data movement in benchmark clients, not the daemon.
 
 ## Completed
+
+- 2026-05-22: Add daemon-aware benchmark options.
+  - Added shared daemon benchmark option helpers.
+  - `bandwidth_pool.py`, `model_loading.py`, and `training_offload.py` now
+    accept daemon socket and daemon inflight chunk options.
+  - Benchmark JSON and compact summary output report daemon profile status and
+    daemon transfer reservation status when enabled.
+  - Benchmarks now default to reusable profile cache behavior and expose
+    `--force-profile` for explicit refreshes.
 
 - 2026-05-22: Add daemon shared profile cache.
   - Added daemon `GET_PROFILE` and `PUT_PROFILE` requests with validation and

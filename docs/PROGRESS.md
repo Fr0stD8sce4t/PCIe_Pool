@@ -9,6 +9,16 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
+- Add daemon-aware benchmark options
+  - Added `benchmarks/daemon_support.py` for shared daemon benchmark argument
+    and summary helpers.
+  - `bandwidth_pool.py`, `model_loading.py`, and `training_offload.py` now pass
+    daemon socket settings into `RuntimeOptions`.
+  - Compact summaries now include daemon profile cache status and daemon
+    reservation status when daemon mode is enabled.
+  - Benchmarks now default to reusable profile cache behavior and expose
+    `--force-profile` when a fresh profile measurement is needed.
+
 - Add daemon shared profile cache
   - Added daemon profile cache requests for reading and publishing measured
     direct/relay profile data by target GPU and relay GPU set.
@@ -323,6 +333,21 @@ git diff --check
 
 Result: passed.
 
+For daemon-aware benchmark options:
+
+```text
+python -m unittest discover -s test\python -p "test_benchmark_daemon_support.py" -v
+```
+
+Result: 3 tests passed.
+
+```text
+python -m compileall benchmarks\daemon_support.py benchmarks\bandwidth_pool.py benchmarks\model_loading.py benchmarks\training_offload.py test\python\test_benchmark_daemon_support.py -q
+git diff --check
+```
+
+Result: passed.
+
 ## Known Server Follow-Up
 
 After C++/CUDA/pybind edits, reinstall before server tests:
@@ -337,5 +362,5 @@ Then run native and vLLM checks on target GPU 6 with relay GPU 5.
 
 ## Next Task
 
-Start with the task under `## Current` in `docs/NEXT_STEPS.md`: add daemon-aware
-benchmark options for the main Runtime-driven benchmarks.
+Start with the task under `## Current` in `docs/NEXT_STEPS.md`: add a daemon
+multi-process benchmark smoke wrapper.
