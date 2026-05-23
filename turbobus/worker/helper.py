@@ -7,6 +7,7 @@ from typing import Mapping
 from ..schema import (
     BufferRegistration,
     DaemonResponse,
+    TransferStatusState,
     WorkerTransferAuthorization,
     WorkerTransferAuthorizationRequest,
 )
@@ -14,6 +15,8 @@ from ..schema import (
 
 class WorkerTransferState(str, Enum):
     UNSUPPORTED = "unsupported"
+    FAILED = "failed"
+    COMPLETE = "complete"
 
 
 class UnsupportedWorkerExecution(RuntimeError):
@@ -21,6 +24,10 @@ class UnsupportedWorkerExecution(RuntimeError):
 
 
 class WorkerAuthorizationError(RuntimeError):
+    pass
+
+
+class WorkerStatusReportError(RuntimeError):
     pass
 
 
@@ -131,14 +138,44 @@ class WorkerTransferAuthorizer:
             ) from exc
 
 
+class WorkerTransferStatusReporter:
+    def __init__(self, daemon_client) -> None:
+        self.daemon_client = daemon_client
+
+    def report(self, result: WorkerTransferResult) -> DaemonResponse:
+        if not isinstance(result, WorkerTransferResult):
+            raise TypeError("result must be a WorkerTransferResult")
+        daemon_state = _daemon_state_for_worker_state(result.state)
+        error = result.error
+        if result.state == WorkerTransferState.UNSUPPORTED and error is None:
+            error = "worker execution is unsupported"
+        if result.state == WorkerTransferState.FAILED and error is None:
+            error = "worker transfer failed"
+        response: DaemonResponse = self.daemon_client.transfer_status(
+            result.transfer_id,
+            state=daemon_state.value,
+            bytes_completed=result.bytes_completed,
+            error=error,
+        )
+        if not response.ok:
+            raise WorkerStatusReportError(
+                response.error or "worker transfer status report failed"
+            )
+        return response
+
+
 class WorkerTransferClient:
     def __init__(
         self,
         daemon_client,
         executor: WorkerTransferUnsupportedExecutor | None = None,
+        status_reporter: WorkerTransferStatusReporter | None = None,
     ) -> None:
         self.authorizer = WorkerTransferAuthorizer(daemon_client)
         self.executor = executor or WorkerTransferUnsupportedExecutor()
+        self.status_reporter = status_reporter or WorkerTransferStatusReporter(
+            daemon_client
+        )
 
     def authorize(
         self,
@@ -153,6 +190,14 @@ class WorkerTransferClient:
         worker_request = self.authorize(request)
         return self.executor.execute(worker_request)
 
+    def submit_and_report(
+        self,
+        request: WorkerTransferAuthorizationRequest,
+    ) -> WorkerTransferResult:
+        result = self.submit(request)
+        self.status_reporter.report(result)
+        return result
+
 
 def _buffer_from_payload(payload: object) -> BufferRegistration:
     if not isinstance(payload, Mapping):
@@ -166,3 +211,12 @@ def _buffer_from_payload(payload: object) -> BufferRegistration:
         address=payload.get("address"),
         pinned=bool(payload.get("pinned", False)),
     )
+
+
+def _daemon_state_for_worker_state(
+    state: WorkerTransferState,
+) -> TransferStatusState:
+    worker_state = WorkerTransferState(state)
+    if worker_state == WorkerTransferState.COMPLETE:
+        return TransferStatusState.COMPLETE
+    return TransferStatusState.FAILED

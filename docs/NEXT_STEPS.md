@@ -79,15 +79,18 @@ Current status:
   authorization and convert the daemon response into a `WorkerTransferRequest`;
   execution still reports unsupported until the IPC-backed worker data path is
   added.
+- worker helper code can now report unsupported, failed, and completed worker
+  outcomes back to the daemon through `TRANSFER_STATUS`, so worker-side control
+  flow can update daemon-owned transfer status before real IPC movement exists.
 
 Next code cut:
 
-- add a worker-side status reporting helper that can translate unsupported,
-  failed, and later completed worker results into daemon `TRANSFER_STATUS`
-  updates;
-- keep this as control-plane plumbing only, without adding CUDA IPC or real
-  data movement yet;
-- keep worker execution behind the daemon-authorized request and lease context.
+- add a daemon-owned resource and topology inventory skeleton for GPUs, PCIe
+  paths, and scale-up fabric capabilities;
+- keep the inventory backend-neutral and injectable for tests, without adding
+  NVML, ROCm SMI, CUDA IPC, or real device discovery yet;
+- expose the inventory through the daemon control plane so later scheduling can
+  consume daemon-owned resource state instead of client-local assumptions.
 
 ## Upcoming
 

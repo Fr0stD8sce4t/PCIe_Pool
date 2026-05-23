@@ -82,6 +82,9 @@ transfer request objects:
   `authorize_worker_transfer` on the daemon client, builds a
   `WorkerTransferRequest` from the daemon response, and keeps execution on the
   explicit unsupported path until worker IPC movement exists.
+- `turbobus.worker` now has a status reporter that maps worker unsupported,
+  failed, and completed outcomes into daemon `TRANSFER_STATUS` updates, keeping
+  transfer state owned by the daemon even before real worker movement exists.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -123,11 +126,14 @@ phase:
     daemon-approved input shape.
 12. worker/helper code now has a package boundary and a no-op unsupported
     executor for daemon-authorized transfer contexts.
+13. worker/helper outcomes can be reported back through the daemon status path,
+    so future worker execution can update daemon-owned transfer status instead
+    of maintaining local-only state.
 
-The next immediate goal is to add worker-side status reporting plumbing that
-can send unsupported, failed, and later completed worker outcomes back through
-the daemon `TRANSFER_STATUS` request. This continues the privileged-daemon
-work, but still does not add CUDA IPC or real data movement yet.
+The next immediate goal is to add a daemon-owned resource and topology inventory
+skeleton for GPUs, PCIe paths, and scale-up fabric capabilities. This should be
+backend-neutral and injectable for tests, without adding NVML, ROCm SMI, CUDA
+IPC, or real device discovery yet.
 
 ## Verification
 
@@ -159,8 +165,8 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
 
 - define daemon protocol records for job identity, buffer registration,
   lease tokens, and worker-facing cleanup;
-- add worker-side status reporting plumbing while keeping execution
-  unsupported;
+- add a daemon-owned resource and topology inventory skeleton that later
+  scheduling can consume;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper
