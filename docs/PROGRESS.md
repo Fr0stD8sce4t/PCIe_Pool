@@ -54,6 +54,11 @@ transfer request objects:
 - the worker helper process now uses the CUDA worker executor and resource
   binder by default, so the helper-process boundary no longer defaults to the
   unsupported executor when serving real requests;
+- `turbobus.client_transfer.WorkerManagedTransferClient` now connects the
+  first client-to-daemon-to-worker call for H2D relay transfers using shared
+  CPU source buffers, CUDA IPC target buffers, daemon-issued relay leases,
+  worker execution, daemon status reporting, and relay reservation release on
+  completion;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -249,6 +254,9 @@ transfer request objects:
   chunks into an exact native relay plan, initializing a worker-local CUDA
   runtime, waiting for transfer completion, and returning daemon status
   metadata.
+- Added worker-managed client coverage showing job and buffer registration,
+  daemon planning, worker authorization, worker completion reporting, final
+  daemon status lookup, and relay reservation release in one call.
 
 ## Immediate Goal
 
@@ -374,15 +382,20 @@ phase:
     the native runtime inside the worker process, initializes the daemon-
     authorized relay GPU, submits the relay-only exact chunk plan, waits for
     completion, and returns daemon-owned completion metadata.
+45. the client layer now has a worker-managed transfer call for the first H2D
+    relay path. It registers the job and real buffer handles, obtains the
+    daemon plan and lease token, submits the worker authorization request,
+    observes worker completion, releases the completed relay reservation, and
+    returns the daemon-owned final transfer status.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
 daemon-managed data movement slice. The worker control-plane smoke helper,
 worker endpoint observability/event-history plumbing, loopback transport
 wrapper, and full worker response lifecycle serialization have been removed.
-The next code should connect client, daemon, and worker into one functional
-call that creates the transfer, invokes the helper executor, reports status,
-and lets the client wait on daemon-owned completion.
+The next code should verify the worker-managed H2D relay call on a CUDA server
+and add only the minimum hardware-facing check needed to prove bytes moved
+through shared CPU memory, relay staging, and the CUDA IPC target buffer.
 
 ## Verification
 
@@ -416,14 +429,9 @@ $env:PYTHONPATH='.'; python test/python/test_client_shared_buffer.py
 - keep the minimum daemon/client/worker spine for job and buffer registration,
   transfer requests, exact plans, leases, lease validation, worker
   authorization, staging ownership, completion, cleanup, and direct fallback;
-- rebuild the native extension on a CUDA server and verify that daemon-issued
-  direct, relay, and pooled plans execute through the exact-plan entry point;
-- verify the first CUDA worker executor on a CUDA server with one H2D relay
-  path;
-- rebuild the native extension on a CUDA server and run the new worker
-  executor against real shared CPU, relay GPU, and CUDA IPC target buffers;
-- wire client, daemon, worker, and backend into one transfer call that moves
-  real bytes and reports daemon-owned completion;
+- rebuild the native extension on a CUDA server and verify the worker-managed
+  H2D relay call against real shared CPU, relay GPU, and CUDA IPC target
+  buffers;
 - keep direct fallback available when relay lease or worker execution fails;
 - add cleanup and staging-buffer protection required by the real data path;
 - defer more protocol, socket, observability, and smoke-test work unless it

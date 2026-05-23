@@ -242,13 +242,16 @@ class FakeDaemonClient:
         response: DaemonResponse,
         status_response: DaemonResponse | None = None,
         cleanup_response: DaemonResponse | None = None,
+        release_response: DaemonResponse | None = None,
     ) -> None:
         self.response = response
         self.status_response = status_response or DaemonResponse(ok=True)
         self.cleanup_response = cleanup_response or DaemonResponse(ok=True)
+        self.release_response = release_response or DaemonResponse(ok=True)
         self.requests: list[WorkerTransferAuthorizationRequest] = []
         self.status_updates: list[dict[str, object]] = []
         self.cleanup_requests: list[dict[str, object]] = []
+        self.release_requests: list[str] = []
 
     def authorize_worker_transfer(
         self,
@@ -290,6 +293,10 @@ class FakeDaemonClient:
             }
         )
         return self.cleanup_response
+
+    def release_transfer(self, reservation_id: str) -> DaemonResponse:
+        self.release_requests.append(str(reservation_id))
+        return self.release_response
 
 
 class WorkerHelperTest(unittest.TestCase):
@@ -577,7 +584,7 @@ class WorkerHelperTest(unittest.TestCase):
             ],
         )
 
-    def test_cleanup_coordinator_skips_complete_transfer(self) -> None:
+    def test_cleanup_coordinator_releases_complete_transfer_reservation(self) -> None:
         daemon_client = FakeDaemonClient(
             DaemonResponse(ok=True, payload=authorization_payload())
         )
@@ -594,7 +601,7 @@ class WorkerHelperTest(unittest.TestCase):
         )
 
         self.assertTrue(response.ok)
-        self.assertTrue(response.payload["cleanup_skipped"])
+        self.assertEqual(daemon_client.release_requests, ["lease-1"])
         self.assertEqual(daemon_client.cleanup_requests, [])
 
     def test_cleanup_coordinator_raises_on_daemon_rejection(self) -> None:
@@ -900,6 +907,7 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(backend.close_ipc_calls, [4321])
         self.assertEqual(lifecycle.status_update["state"], "complete")
         self.assertEqual(daemon_client.cleanup_requests, [])
+        self.assertEqual(daemon_client.release_requests, ["lease-1"])
 
     def test_worker_client_reports_resource_binding_failure(self) -> None:
         daemon_client = FakeDaemonClient(
@@ -1024,7 +1032,7 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(daemon_client.status_updates[0]["state"], "failed")
         self.assertEqual(daemon_client.cleanup_requests[0]["target_id"], "lease-1")
 
-    def test_worker_client_lifecycle_skips_cleanup_for_complete_result(self) -> None:
+    def test_worker_client_lifecycle_releases_complete_result_reservation(self) -> None:
         class CompleteExecutor:
             def execute(
                 self,
@@ -1046,9 +1054,10 @@ class WorkerHelperTest(unittest.TestCase):
 
         self.assertEqual(lifecycle.final_state, "complete")
         self.assertEqual(lifecycle.cleanup_target_kind, "reservation")
-        self.assertIsNone(lifecycle.cleanup_target_id)
-        self.assertTrue(lifecycle.cleanup_response.payload["cleanup_skipped"])
+        self.assertEqual(lifecycle.cleanup_target_id, "lease-1")
+        self.assertEqual(lifecycle.cleanup_response, daemon_client.release_response)
         self.assertEqual(daemon_client.cleanup_requests, [])
+        self.assertEqual(daemon_client.release_requests, ["lease-1"])
         self.assertEqual(lifecycle.status_update["state"], "complete")
         self.assertEqual(lifecycle.status_update["bytes_completed"], 64)
         self.assertEqual(daemon_client.status_updates[0]["state"], "complete")

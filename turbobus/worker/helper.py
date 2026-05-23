@@ -555,13 +555,17 @@ class WorkerTransferCleanupCoordinator:
         if not isinstance(result, WorkerTransferResult):
             raise TypeError("result must be a WorkerTransferResult")
         if result.state == WorkerTransferState.COMPLETE:
-            return DaemonResponse(
-                ok=True,
-                payload={
-                    "cleanup_skipped": True,
-                    "reason": "transfer_complete",
-                },
-            )
+            release = getattr(self.daemon_client, "release_transfer", None)
+            if not callable(release):
+                raise WorkerCleanupError(
+                    "daemon client cannot release completed worker transfer"
+                )
+            response: DaemonResponse = release(request.authorization.lease_id)
+            if not response.ok:
+                raise WorkerCleanupError(
+                    response.error or "worker completion release failed"
+                )
+            return response
         return self._cleanup(
             target_kind=target_kind,
             target_id=_cleanup_target_id(
@@ -728,13 +732,15 @@ class WorkerTransferClient:
                 final_state="status_failed",
                 error=str(exc),
             )
-        cleanup_target_id = None
-        if result.state != WorkerTransferState.COMPLETE:
-            cleanup_target_id = _cleanup_target_id(
+        cleanup_target_id = (
+            worker_request.authorization.lease_id
+            if result.state == WorkerTransferState.COMPLETE
+            else _cleanup_target_id(
                 cleanup_target_kind,
                 lease_id=worker_request.authorization.lease_id,
                 session_id=worker_request.authorization.session_id,
             )
+        )
         try:
             cleanup_response = self.cleanup_coordinator.cleanup_execution_failure(
                 worker_request,

@@ -92,12 +92,18 @@ Completed current code cut:
   handles, creates a worker-local native CUDA runtime, allocates relay staging
   inside that worker runtime, executes the authorized relay chunks, waits for
   completion, and reports daemon-owned completion metadata.
+- Connect client, daemon, and worker into one functional call. The new
+  worker-managed client path registers a job and shared CPU/CUDA IPC buffers,
+  requests a daemon plan and relay lease, submits the worker authorization
+  request, lets the worker report completion, releases the completed relay
+  reservation, and returns the daemon-owned final transfer status.
 
-1. Connect client, daemon, and worker into one functional call.
-   - Client submits a transfer request to the daemon.
-   - Daemon authorizes relay use and returns the plan/lease.
-   - Worker executes and reports status.
-   - Client waits on daemon-owned completion.
+1. Verify the worker-managed H2D relay path on a CUDA server.
+   - Rebuild the native extension with CUDA.
+   - Allocate a real shared pinned CPU source and CUDA IPC target buffer.
+   - Run the worker-managed client path through the CUDA worker executor.
+   - Verify bytes land on the target GPU and the daemon releases the relay
+     reservation.
 
 2. Add cleanup and isolation only where the real path needs it.
    - Validate lease tokens before touching relay resources.

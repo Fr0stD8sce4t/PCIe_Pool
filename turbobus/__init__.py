@@ -64,6 +64,11 @@ from .planner_engine import (
 )
 from .runtime import AutoTransferSelector, Runtime
 from .runtime_engine import RuntimeOptions
+from .client_transfer import (
+    WorkerManagedTransferClient,
+    WorkerManagedTransferResult,
+    make_worker_managed_transfer_client,
+)
 from .schema import AutoTransferDecision, TransferMode
 from .transfer import TransferDirection, TransferRange, TransferRequest
 from .client import (
@@ -102,6 +107,9 @@ __all__ = [
     "CudaIpcDeviceBuffer",
     "Runtime",
     "RuntimeOptions",
+    "WorkerManagedTransferClient",
+    "WorkerManagedTransferResult",
+    "make_worker_managed_transfer_client",
     "SharedPinnedCpuBuffer",
     "SharedPinnedCpuBufferAllocator",
     "TransferMode",
