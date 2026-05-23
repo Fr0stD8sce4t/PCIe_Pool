@@ -249,6 +249,9 @@ transfer request objects:
 - daemon lease validation and worker authorization now require the complete
   source/destination buffer pair from the daemon-issued lease, rejecting
   partial buffer validation and swapped worker source/destination requests.
+- daemon worker authorization now refuses transfers whose daemon-owned status
+  is already terminal, preventing failed, canceled, or completed transfers from
+  receiving a helper execution context.
 
 ## What Was Updated
 
@@ -791,6 +794,10 @@ phase:
     source/destination buffer-pair matches against the daemon-issued lease.
     Partial buffer validation and swapped source/destination worker requests
     fail before helper execution can open handles.
+89. daemon worker authorization now rejects terminal transfer statuses before
+    lease or handle authorization. A failed, canceled, or completed transfer
+    cannot receive a helper execution context even if relay cleanup has not
+    finished yet.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

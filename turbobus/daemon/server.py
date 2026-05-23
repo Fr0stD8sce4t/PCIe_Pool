@@ -440,6 +440,8 @@ class TurboBusDaemon:
                 return DaemonResponse(ok=False, error="transfer session mismatch")
             if status.job_id != request.job_id:
                 return DaemonResponse(ok=False, error="transfer job mismatch")
+            if status.state in _TERMINAL_TRANSFER_STATES:
+                return DaemonResponse(ok=False, error="transfer is terminal")
             lease = self._lease_tokens.get(request.lease_id)
             if lease is None:
                 return DaemonResponse(ok=False, error="unknown lease")

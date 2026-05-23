@@ -274,6 +274,9 @@ Completed current code cut:
   daemon-issued source/destination buffer pair. Partial buffer validation and
   swapped source/destination worker requests are rejected before helper
   execution.
+- Reject worker authorization after a daemon transfer has reached a terminal
+  state. Failed, canceled, or completed transfers can no longer receive a
+  helper execution context even if the relay lease has not been cleaned yet.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
