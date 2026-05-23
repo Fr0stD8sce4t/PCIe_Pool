@@ -270,6 +270,10 @@ Completed current code cut:
   active. Buffer registration now rejects overwriting a `buffer_id` that is
   still named by an active lease, so worker authorization cannot open a handle
   that was swapped after planning.
+- Require lease validation and worker authorization to match the complete
+  daemon-issued source/destination buffer pair. Partial buffer validation and
+  swapped source/destination worker requests are rejected before helper
+  execution.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.

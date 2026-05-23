@@ -246,6 +246,9 @@ transfer request objects:
 - daemon buffer registration now refuses to overwrite a `buffer_id` while an
   active lease still names it, keeping worker-opened shared CPU and CUDA IPC
   handles stable between planning and helper execution.
+- daemon lease validation and worker authorization now require the complete
+  source/destination buffer pair from the daemon-issued lease, rejecting
+  partial buffer validation and swapped worker source/destination requests.
 
 ## What Was Updated
 
@@ -784,6 +787,10 @@ phase:
     overwritten. A `buffer_id` named by an active lease cannot be re-registered
     until that lease is released or expired, so worker authorization cannot
     consume a swapped shared CPU or CUDA IPC handle.
+88. daemon lease validation and worker authorization now require exact
+    source/destination buffer-pair matches against the daemon-issued lease.
+    Partial buffer validation and swapped source/destination worker requests
+    fail before helper execution can open handles.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

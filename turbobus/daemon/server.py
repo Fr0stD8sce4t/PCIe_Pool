@@ -411,9 +411,9 @@ class TurboBusDaemon:
                 return DaemonResponse(ok=False, error="lease job mismatch")
             if buffer_ids is not None:
                 requested_buffers = tuple(str(buffer_id) for buffer_id in buffer_ids)
+                if requested_buffers != lease.buffer_ids:
+                    return DaemonResponse(ok=False, error="lease buffer mismatch")
                 for buffer_id in requested_buffers:
-                    if buffer_id not in lease.buffer_ids:
-                        return DaemonResponse(ok=False, error="lease buffer mismatch")
                     buffer = self._buffers.get(buffer_id)
                     if buffer is None:
                         return DaemonResponse(ok=False, error="unknown buffer")
@@ -476,9 +476,8 @@ class TurboBusDaemon:
             if requested_bytes > reservation.bytes:
                 return DaemonResponse(ok=False, error="authorization exceeds reservation bytes")
             required_buffers = (request.src_buffer_id, request.dst_buffer_id)
-            for buffer_id in required_buffers:
-                if buffer_id not in lease.buffer_ids:
-                    return DaemonResponse(ok=False, error="lease buffer mismatch")
+            if required_buffers != lease.buffer_ids:
+                return DaemonResponse(ok=False, error="lease buffer mismatch")
             src_buffer = self._buffers.get(request.src_buffer_id)
             dst_buffer = self._buffers.get(request.dst_buffer_id)
             if src_buffer is None or dst_buffer is None:

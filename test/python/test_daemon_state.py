@@ -1239,6 +1239,17 @@ class DaemonStateTest(unittest.TestCase):
         )
         self.assertTrue(validated.ok)
 
+        partial_buffers = daemon.validate_lease(
+            lease_id=lease_token["lease_id"],
+            token=lease_token["token"],
+            session_id=session_id,
+            relay_gpu=1,
+            job_id="job-1",
+            buffer_ids=["cpu-buffer"],
+        )
+        self.assertFalse(partial_buffers.ok)
+        self.assertIn("lease buffer mismatch", partial_buffers.error)
+
         wrong_buffer = daemon.validate_lease(
             lease_id=lease_token["lease_id"],
             token=lease_token["token"],
@@ -1662,6 +1673,22 @@ class DaemonStateTest(unittest.TestCase):
         )
         self.assertFalse(wrong_buffer.ok)
         self.assertIn("lease buffer mismatch", wrong_buffer.error)
+
+        swapped_buffers = daemon.authorize_worker_transfer(
+            WorkerTransferAuthorizationRequest(
+                transfer_id=transfer_id,
+                lease_id=lease_token["lease_id"],
+                token=lease_token["token"],
+                session_id=session_id,
+                job_id="job-1",
+                src_buffer_id="gpu-buffer",
+                dst_buffer_id="cpu-buffer",
+                direction="h2d",
+                relay_gpu=1,
+            )
+        )
+        self.assertFalse(swapped_buffers.ok)
+        self.assertIn("lease buffer mismatch", swapped_buffers.error)
 
         mismatched_ranges = daemon.authorize_worker_transfer(
             WorkerTransferAuthorizationRequest(
