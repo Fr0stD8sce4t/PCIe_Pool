@@ -193,6 +193,82 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
         self.assertEqual(profile["reservations"], {})
         self.assertEqual(profile["relay_quotas"][1]["active_chunks"], 0)
 
+    def test_worker_authorization_uses_daemon_plan_chunks(self) -> None:
+        daemon = daemon_with_relay_path()
+        executor = CompleteExecutor()
+        transfer_client = make_worker_managed_transfer_client(
+            daemon,
+            target_gpu=0,
+            relay_gpus=[1],
+            worker_client=WorkerTransferClient(daemon, executor=executor),
+            max_inflight_chunks=8,
+        )
+        allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-client-worker-test")
+
+        with allocator.allocate("cpu-buffer", "job-1", 64) as source:
+            target = CudaIpcDeviceBuffer.from_device_pointer(
+                buffer_id="gpu-buffer",
+                job_id="job-1",
+                device_index=0,
+                size_bytes=64,
+                device_ptr=4096,
+                backend=FakeCudaBackend(),
+            )
+
+            result = transfer_client.fetch_shared_cpu_to_cuda_ipc(
+                source,
+                target,
+                ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 64},),
+                chunk_bytes=16,
+                mode="relay",
+            )
+
+        self.assertEqual(result.bytes_completed, 64)
+        self.assertEqual(
+            tuple(result.authorization_request.ranges),
+            (
+                {"src_offset": 0, "dst_offset": 0, "bytes": 16},
+                {"src_offset": 16, "dst_offset": 16, "bytes": 16},
+                {"src_offset": 32, "dst_offset": 32, "bytes": 16},
+                {"src_offset": 48, "dst_offset": 48, "bytes": 16},
+            ),
+        )
+        self.assertEqual(executor.requests[0].authorization.ranges, result.authorization_request.ranges)
+
+    def test_worker_managed_transfer_rejects_pool_plan_and_releases_lease(self) -> None:
+        daemon = daemon_with_relay_path()
+        transfer_client = make_worker_managed_transfer_client(
+            daemon,
+            target_gpu=0,
+            relay_gpus=[1],
+            worker_client=WorkerTransferClient(daemon, executor=CompleteExecutor()),
+            max_inflight_chunks=8,
+        )
+        allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-client-worker-test")
+
+        with allocator.allocate("cpu-buffer", "job-1", 64) as source:
+            target = CudaIpcDeviceBuffer.from_device_pointer(
+                buffer_id="gpu-buffer",
+                job_id="job-1",
+                device_index=0,
+                size_bytes=64,
+                device_ptr=4096,
+                backend=FakeCudaBackend(),
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "relay-only daemon plan"):
+                transfer_client.fetch_shared_cpu_to_cuda_ipc(
+                    source,
+                    target,
+                    ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 64},),
+                    chunk_bytes=16,
+                    mode="pool",
+                )
+
+        profile = daemon.describe().payload
+        self.assertEqual(profile["reservations"], {})
+        self.assertEqual(profile["relay_quotas"][1]["active_chunks"], 0)
+
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
     def test_fetch_shared_cpu_to_cuda_ipc_can_use_worker_socket_boundary(self) -> None:
         daemon = daemon_with_relay_path()

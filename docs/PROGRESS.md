@@ -68,6 +68,10 @@ transfer request objects:
   worker helper sockets, runs the worker-managed relay transfer with shared CPU
   source memory and a CUDA IPC target tensor, verifies the target bytes, and
   asserts daemon reservation release;
+- `WorkerManagedTransferClient` now submits the daemon-issued relay chunks to
+  the worker/helper instead of reusing the original client request range. The
+  current H2D worker path rejects direct or mixed pooled daemon plans and
+  releases the relay reservation before returning the error;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -274,6 +278,9 @@ transfer request objects:
   daemon setup. It confirms the server verifier seeds a relay-capable topology
   and profile that produce a relay plan and lease before CUDA hardware is
   required.
+- Added worker-managed client coverage proving that worker authorization uses
+  daemon plan chunks, and that an unsupported mixed pool plan releases its
+  daemon relay reservation.
 
 ## Immediate Goal
 
@@ -413,6 +420,10 @@ phase:
     processes, shared CPU memory, a CUDA IPC target tensor, daemon-issued relay
     lease, worker CUDA executor, byte comparison, and daemon reservation-release
     assertions.
+48. worker-managed H2D relay execution now honors the exact daemon-issued
+    relay chunk list for the leased relay. The narrow worker path refuses mixed
+    direct-plus-relay plans until pooled worker execution exists, and it asks
+    the daemon to release the relay reservation before surfacing that error.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
@@ -422,7 +433,8 @@ wrapper, and full worker response lifecycle serialization have been removed.
 The next code should verify the worker-managed H2D relay call on a CUDA server
 through the helper socket by running `python -m turbobus.verification`. If it
 fails, the next code should fix the failing real data-path layer before adding
-new functionality.
+new functionality. If it passes, the next functional expansion should be
+pooled direct-plus-relay worker execution through the same daemon plan path.
 
 ## Verification
 

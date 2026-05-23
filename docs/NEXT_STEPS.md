@@ -107,6 +107,11 @@ Completed current code cut:
   worker helper socket process, allocates shared CPU source memory and a CUDA
   IPC target tensor, runs the relay transfer, checks target bytes, and asserts
   that the daemon released relay reservations.
+- Make worker-managed H2D relay execution consume the exact daemon-issued
+  relay chunks. The worker authorization ranges now come from the daemon plan
+  assignment for the leased relay instead of the original client request range.
+  Plans that include direct chunks or another relay are rejected for this
+  narrow worker path and their relay reservation is released.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.

@@ -122,7 +122,15 @@ class WorkerManagedTransferClient:
             mode=mode,
         )
         _require_ok(planned, "daemon transfer planning failed")
-        lease_token = _single_lease_token(planned)
+        lease_token = _single_lease_token(self.daemon_client, planned)
+        try:
+            worker_ranges = _relay_chunks_from_daemon_plan(
+                planned.payload,
+                lease_token,
+            )
+        except Exception:
+            _cleanup_planned_relay_lease(self.daemon_client, lease_token)
+            raise
         authorization_request = WorkerTransferAuthorizationRequest(
             transfer_id=str(planned.payload["transfer_id"]),
             lease_id=str(lease_token["lease_id"]),
@@ -132,7 +140,7 @@ class WorkerManagedTransferClient:
             src_buffer_id=source.buffer_id,
             dst_buffer_id=target.buffer_id,
             direction="h2d",
-            ranges=tuple(item.as_dict() for item in transfer_request.ranges),
+            ranges=worker_ranges,
             relay_gpu=int(lease_token["relay_gpu"]),
         )
         worker_execution = _submit_worker_execution(
@@ -214,11 +222,71 @@ def _plan_transfer_request(
     )
 
 
-def _single_lease_token(response: DaemonResponse) -> Mapping[str, object]:
+def _single_lease_token(daemon_client, response: DaemonResponse) -> Mapping[str, object]:
     lease_tokens = response.payload.get("lease_tokens") or ()
     if len(lease_tokens) != 1:
+        for lease_token in lease_tokens:
+            _cleanup_planned_relay_lease(daemon_client, lease_token)
         raise RuntimeError("worker-managed transfer requires exactly one relay lease")
     return dict(lease_tokens[0])
+
+
+def _relay_chunks_from_daemon_plan(
+    plan_payload: Mapping[str, object],
+    lease_token: Mapping[str, object],
+) -> tuple[dict[str, int], ...]:
+    plan = plan_payload.get("plan")
+    if not isinstance(plan, Mapping):
+        raise RuntimeError("daemon response did not include a transfer plan")
+    relay_gpu = int(lease_token["relay_gpu"])
+    chunks: list[dict[str, int]] = []
+    for assignment in plan.get("assignments", ()) or ():
+        if not isinstance(assignment, Mapping):
+            raise RuntimeError("daemon transfer plan assignment must be a mapping")
+        path = assignment.get("path")
+        if not isinstance(path, Mapping):
+            raise RuntimeError("daemon transfer plan assignment has no path")
+        path_kind = str(path.get("kind", "")).lower()
+        path_direction = str(path.get("direction", "")).lower()
+        assignment_relay = int(path.get("relay_device", -1))
+        if (
+            path_kind != "relay"
+            or path_direction != "h2d"
+            or assignment_relay != relay_gpu
+        ):
+            raise RuntimeError(
+                "worker-managed H2D transfer currently requires a relay-only "
+                "daemon plan for the leased relay"
+            )
+        for chunk in assignment.get("chunks", ()) or ():
+            if not isinstance(chunk, Mapping):
+                raise RuntimeError("daemon transfer plan chunk must be a mapping")
+            chunks.append(
+                {
+                    "src_offset": int(chunk["src_offset"]),
+                    "dst_offset": int(chunk["dst_offset"]),
+                    "bytes": int(chunk["bytes"]),
+                }
+            )
+    if not chunks:
+        raise RuntimeError("daemon relay plan did not include worker chunks")
+    return tuple(chunks)
+
+
+def _cleanup_planned_relay_lease(
+    daemon_client,
+    lease_token: Mapping[str, object],
+) -> None:
+    cleanup = getattr(daemon_client, "cleanup", None)
+    if not callable(cleanup):
+        return
+    response = cleanup(
+        target_kind="reservation",
+        target_id=str(lease_token["lease_id"]),
+        reason="unsupported_worker_plan",
+        force=True,
+    )
+    _require_ok(response, "daemon reservation cleanup failed")
 
 
 @dataclass(frozen=True)
