@@ -266,6 +266,10 @@ Completed current code cut:
   request omits `job_id`, and carry that job identity into scheduler leases,
   transfer status, and worker authorization instead of falling back to the
   session id.
+- Keep daemon-authorized buffer handles stable while a transfer lease is
+  active. Buffer registration now rejects overwriting a `buffer_id` that is
+  still named by an active lease, so worker authorization cannot open a handle
+  that was swapped after planning.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.

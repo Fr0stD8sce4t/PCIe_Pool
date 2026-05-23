@@ -1429,6 +1429,98 @@ class DaemonStateTest(unittest.TestCase):
         self.assertTrue(authorized.ok)
         self.assertEqual(authorized.payload["authorization"]["job_id"], "job-1")
 
+    def test_register_buffer_rejects_overwrite_while_buffer_has_active_lease(self) -> None:
+        daemon = TurboBusDaemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=1,
+            max_inflight_chunks_per_relay=8,
+        )
+        register = daemon.register_session(
+            target_gpu=0,
+            requested_relays=[1],
+            max_inflight_chunks=8,
+        )
+        session_id = register.payload["session"]["session_id"]
+        self.assertTrue(daemon.register_job(job_id="job-1", session_id=session_id).ok)
+        self.assertTrue(
+            daemon.register_buffer(
+                buffer_id="cpu-buffer",
+                job_id="job-1",
+                kind="cpu_pinned",
+                size_bytes=64,
+                pinned=True,
+            ).ok
+        )
+        self.assertTrue(
+            daemon.register_buffer(
+                buffer_id="gpu-buffer",
+                job_id="job-1",
+                kind="gpu",
+                size_bytes=64,
+                device_index=0,
+            ).ok
+        )
+        daemon.put_profile(
+            target_gpu=0,
+            relay_gpus=[1],
+            profile={
+                "target_device": 0,
+                "direct_h2d_bw_gbps": 7.5,
+                "direct_d2h_bw_gbps": 6.5,
+                "relays": [
+                    {
+                        "relay_device": 1,
+                        "target_device": 0,
+                        "h2d_bw_gbps": 7.5,
+                        "d2h_bw_gbps": 6.5,
+                        "p2p_bw_gbps": 40.0,
+                        "effective_bw_gbps": 7.5,
+                        "effective_d2h_bw_gbps": 6.5,
+                        "p2p_enabled": True,
+                    }
+                ],
+            },
+        )
+
+        planned = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.PLAN_TRANSFER,
+                session_id=session_id,
+                payload={
+                    "total_bytes": 64,
+                    "chunk_bytes": 16,
+                    "mode": "pool",
+                    "direction": "h2d",
+                    "job_id": "job-1",
+                    "buffer_ids": ["cpu-buffer", "gpu-buffer"],
+                },
+            )
+        )
+        self.assertTrue(planned.ok)
+        reservation_id = planned.payload["reservations"][0]["reservation_id"]
+
+        overwrite = daemon.register_buffer(
+            buffer_id="cpu-buffer",
+            job_id="job-1",
+            kind="cpu_pinned",
+            size_bytes=128,
+            pinned=True,
+        )
+        self.assertFalse(overwrite.ok)
+        self.assertIn("active lease", overwrite.error)
+
+        released = daemon.release_transfer(reservation_id)
+        self.assertTrue(released.ok)
+        replaced = daemon.register_buffer(
+            buffer_id="cpu-buffer",
+            job_id="job-1",
+            kind="cpu_pinned",
+            size_bytes=128,
+            pinned=True,
+        )
+        self.assertTrue(replaced.ok)
+        self.assertEqual(replaced.payload["buffer"]["size_bytes"], 128)
+
     def test_worker_transfer_authorization_packages_validated_transfer_context(self) -> None:
         daemon = TurboBusDaemon(
             relay_gpus=[1],

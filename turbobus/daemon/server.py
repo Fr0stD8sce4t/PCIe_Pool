@@ -196,8 +196,13 @@ class TurboBusDaemon:
             metadata={} if metadata is None else metadata,
         )
         with self._lock:
+            now = time.time()
+            self._reap_stale_sessions_locked(now)
+            self._reap_expired_leases_locked(now)
             if buffer.job_id not in self._jobs:
                 return DaemonResponse(ok=False, error="unknown job")
+            if self._active_buffer_lease_ids_locked(buffer.buffer_id):
+                return DaemonResponse(ok=False, error="buffer has active lease")
             self._buffers[buffer.buffer_id] = buffer
             return DaemonResponse(ok=True, payload={"buffer": asdict(buffer)})
 
@@ -744,6 +749,14 @@ class TurboBusDaemon:
         )
         self._lease_tokens[lease_token.lease_id] = lease_token
         return lease_token
+
+    def _active_buffer_lease_ids_locked(self, buffer_id: str) -> tuple[str, ...]:
+        normalized = str(buffer_id)
+        return tuple(
+            lease_id
+            for lease_id, lease in sorted(self._lease_tokens.items())
+            if lease_id in self._reservations and normalized in lease.buffer_ids
+        )
 
     def _validate_transfer_buffers_locked(
         self,

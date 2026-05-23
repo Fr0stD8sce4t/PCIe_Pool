@@ -243,6 +243,9 @@ transfer request objects:
 - daemon transfer planning now infers the owning job from registered buffers
   when the request omits `job_id`, then carries that job id through the
   scheduler lease, transfer status, and worker authorization path.
+- daemon buffer registration now refuses to overwrite a `buffer_id` while an
+  active lease still names it, keeping worker-opened shared CPU and CUDA IPC
+  handles stable between planning and helper execution.
 
 ## What Was Updated
 
@@ -777,6 +780,10 @@ phase:
     buffer owner. The inferred job id is written into scheduler leases, lease
     tokens, transfer status, and worker authorization, so same-session
     multi-job transfers cannot fall back to a session-id pseudo owner.
+87. daemon buffer registration now protects active transfer handles from being
+    overwritten. A `buffer_id` named by an active lease cannot be re-registered
+    until that lease is released or expired, so worker authorization cannot
+    consume a swapped shared CPU or CUDA IPC handle.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
