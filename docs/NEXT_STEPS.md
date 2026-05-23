@@ -44,6 +44,7 @@ Delete or fold down code that only supports the old unsupported path:
   the Unix socket helper path because it can carry the real helper-process
   request boundary;
 - response envelope fields that only serialize unsupported lifecycle details;
+  done for the worker service response envelope and legacy service dict output;
 - protocol fields that are not consumed by daemon planning, lease validation,
   worker authorization, execution, completion, or cleanup.
 

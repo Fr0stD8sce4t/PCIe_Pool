@@ -390,19 +390,14 @@ class WorkerServiceRequestEnvelope:
 @dataclass(frozen=True)
 class WorkerServiceResponseEnvelope:
     ok: bool
-    lifecycle: Mapping[str, object] | None = None
     completion: Mapping[str, object] | None = None
     error: str | None = None
     final_state: str | None = None
 
     def __post_init__(self) -> None:
-        if self.lifecycle is not None and not isinstance(self.lifecycle, Mapping):
-            raise TypeError("lifecycle must be a mapping")
         if self.completion is not None and not isinstance(self.completion, Mapping):
             raise TypeError("completion must be a mapping")
         object.__setattr__(self, "ok", bool(self.ok))
-        if self.lifecycle is not None:
-            object.__setattr__(self, "lifecycle", dict(self.lifecycle))
         if self.completion is not None:
             object.__setattr__(self, "completion", dict(self.completion))
         if self.error is not None:
@@ -415,13 +410,11 @@ class WorkerServiceResponseEnvelope:
         cls,
         lifecycle: WorkerTransferLifecycleRecord,
     ) -> "WorkerServiceResponseEnvelope":
-        payload = lifecycle.as_dict()
         return cls(
             ok=True,
-            lifecycle=payload,
             completion=lifecycle.completion_envelope().as_dict(),
-            final_state=str(payload["final_state"]),
-            error=payload.get("error"),
+            final_state=lifecycle.final_state,
+            error=lifecycle.error,
         )
 
     @classmethod
@@ -431,7 +424,6 @@ class WorkerServiceResponseEnvelope:
     def as_dict(self) -> dict[str, object]:
         return {
             "ok": self.ok,
-            "lifecycle": dict(self.lifecycle) if self.lifecycle is not None else None,
             "completion": (
                 dict(self.completion) if self.completion is not None else None
             ),
@@ -786,31 +778,11 @@ class WorkerTransferService:
             cleanup_target_kind=cleanup_target_kind,
         )
 
-    def handle(
-        self,
-        request: WorkerTransferAuthorizationRequest,
-        cleanup_target_kind: str = "reservation",
-    ) -> dict[str, object]:
-        return self.handle_lifecycle(
-            request,
-            cleanup_target_kind=cleanup_target_kind,
-        ).as_dict()
-
     def parse_authorization_request(
         self,
         payload: Mapping[str, object],
     ) -> WorkerTransferAuthorizationRequest:
         return parse_worker_authorization_request_payload(payload)
-
-    def handle_payload(
-        self,
-        payload: Mapping[str, object],
-        cleanup_target_kind: str = "reservation",
-    ) -> dict[str, object]:
-        return self.handle(
-            self.parse_authorization_request(payload),
-            cleanup_target_kind=cleanup_target_kind,
-        )
 
     def handle_envelope(
         self,

@@ -128,15 +128,14 @@ transfer request objects:
   cleanup target and response, final outcome, and error for future helper
   process handoff.
 - `WorkerTransferService` now exposes an in-process worker helper service
-  boundary that accepts a worker authorization request and returns serialized
-  lifecycle records across unsupported execution, authorization denial, status
-  failure, and cleanup failure paths.
+  boundary that accepts a worker authorization request and keeps lifecycle
+  records internal for status, cleanup, and staging decisions.
 - worker service payload parsing helpers now convert plain daemon JSON
-  dictionaries into `WorkerTransferAuthorizationRequest` objects and preserve
-  serialized lifecycle output from parsed payloads.
+  dictionaries into `WorkerTransferAuthorizationRequest` objects before
+  helper execution.
 - `WorkerServiceRequestEnvelope` and `WorkerServiceResponseEnvelope` now wrap
-  successful lifecycle payloads, malformed payload errors, status failures, and
-  cleanup failures in one stable in-process response shape.
+  successful completion output, malformed payload errors, status failures, and
+  cleanup failures in one stable helper response shape.
 - Removed the smoke-only `run_worker_service_control_plane_smoke` helper and
   its tests so the worker package no longer preserves an unsupported
   control-plane round trip as a product path.
@@ -163,9 +162,9 @@ transfer request objects:
   boundary a completion-specific serialized shape for allocated staging slots,
   worker results, daemon status updates and responses, daemon cleanup responses,
   and staging release records.
-- `WorkerServiceResponseEnvelope` now includes that completion envelope
-  alongside the full lifecycle payload, so future helper process boundaries can
-  read completion, status, cleanup, and staging-release output directly.
+- `WorkerServiceResponseEnvelope` now carries only the completion envelope,
+  final state, and error, so the helper process boundary no longer serializes
+  the full unsupported lifecycle record.
 - `turbobus.worker.codec` now provides JSON-safe request and response envelope
   encoders/decoders for the future worker helper process boundary while
   staying in process.
@@ -263,8 +262,9 @@ phase:
     transfers and ask the daemon to reclaim the matching reservation or session.
 21. worker request lifecycle records now make status and cleanup decisions
     explicit and serializable for future helper processes.
-22. an in-process worker helper service skeleton now returns serialized
-    lifecycle records without adding sockets, IPC, or real data movement.
+22. an in-process worker helper service skeleton keeps lifecycle records
+    internal and returns completion envelopes without adding sockets, IPC, or
+    real data movement.
 23. worker service payload parsing now validates plain dictionaries into
     worker authorization requests before they enter the service path.
 24. worker service request/response envelopes now provide a stable shape for
@@ -289,8 +289,8 @@ phase:
 30. worker data-plane completion envelopes now serialize lifecycle completion
     output without losing staging release information on unsupported,
     status-failed, or cleanup-failed paths.
-31. worker service response envelopes now carry the completion envelope without
-    dropping the existing lifecycle payload.
+31. worker service response envelopes now carry the completion envelope,
+    final state, and error without serializing the full lifecycle payload.
 32. worker process message codecs now round-trip request and response
     envelopes as JSON-safe strings while preserving completion envelopes and
     malformed-message errors.
@@ -310,19 +310,16 @@ phase:
 37. worker loopback transport and transport protocol wrapper have been removed;
     the remaining worker transport is the Unix socket helper-process boundary
     needed for future daemon-approved execution.
+38. worker service response envelopes and legacy service dict output no longer
+    expose full lifecycle payloads; completion, status, cleanup, and staging
+    release data now flow through the completion envelope only.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
-daemon-managed data movement slice. The worker control-plane smoke helper and
-worker endpoint observability/event-history plumbing have been removed. Before
-adding the CUDA worker data path, continue trimming any remaining
-unsupported-lifecycle serialization that does not serve real transfer
-execution.
-
-After that cleanup, the next code should execute daemon-issued transfer plans
-exactly, define the first registered buffer handles, and replace the
-unsupported worker executor for a narrow CUDA H2D relay path that moves real
-bytes through `CPU -> relay GPU -> target GPU`.
+daemon-managed data movement slice. The worker control-plane smoke helper,
+worker endpoint observability/event-history plumbing, loopback transport
+wrapper, and full worker response lifecycle serialization have been removed.
+The next code should execute daemon-issued transfer plans exactly.
 
 ## Verification
 
@@ -352,8 +349,6 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
 
 ## Remaining Work
 
-- continue removing non-functional scaffold before the worker data path:
-  unsupported-lifecycle response fields that are not needed by real execution;
 - keep the minimum daemon/client/worker spine for job and buffer registration,
   transfer requests, exact plans, leases, lease validation, worker
   authorization, staging ownership, completion, cleanup, and direct fallback;

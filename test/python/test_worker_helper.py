@@ -908,61 +908,75 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(lifecycle.cleanup_target_id, "lease-1")
         self.assertEqual(daemon_client.cleanup_requests[0]["reason"], "worker_authorization_failed")
 
-    def test_worker_service_returns_unsupported_lifecycle_payload(self) -> None:
+    def test_worker_service_returns_unsupported_completion_envelope(self) -> None:
         daemon_client = FakeDaemonClient(
             DaemonResponse(ok=True, payload=authorization_payload())
         )
         service = WorkerTransferService(daemon_client)
 
-        payload = service.handle(authorization_request())
+        payload = service.handle_envelope(
+            WorkerServiceRequestEnvelope(payload=authorization_request_payload())
+        ).as_dict()
 
+        self.assertTrue(payload["ok"])
         self.assertEqual(payload["final_state"], "unsupported")
-        self.assertEqual(payload["result"]["state"], "unsupported")
-        self.assertEqual(payload["status_update"]["state"], "failed")
-        self.assertEqual(payload["cleanup_target"]["target_id"], "lease-1")
+        self.assertEqual(payload["completion"]["worker_result"]["state"], "unsupported")
+        self.assertEqual(payload["completion"]["daemon_status_update"]["state"], "failed")
+        self.assertEqual(payload["completion"]["staging_release"]["slot_id"], "staging-1")
         self.assertEqual(daemon_client.status_updates[0]["state"], "failed")
         self.assertEqual(daemon_client.cleanup_requests[0]["target_kind"], "reservation")
 
-    def test_worker_service_returns_authorization_denial_lifecycle_payload(self) -> None:
+    def test_worker_service_returns_authorization_denial_completion_envelope(self) -> None:
         daemon_client = FakeDaemonClient(DaemonResponse(ok=False, error="denied"))
         service = WorkerTransferService(daemon_client)
 
-        payload = service.handle(authorization_request())
+        payload = service.handle_envelope(
+            WorkerServiceRequestEnvelope(payload=authorization_request_payload())
+        ).as_dict()
 
+        self.assertTrue(payload["ok"])
         self.assertEqual(payload["final_state"], "authorization_failed")
         self.assertIn("denied", payload["error"])
-        self.assertIsNone(payload["worker_request"])
-        self.assertEqual(payload["cleanup_target"]["target_id"], "lease-1")
+        self.assertIsNone(payload["completion"]["worker_result"])
+        self.assertIsNone(payload["completion"]["staging_slot"])
         self.assertEqual(daemon_client.cleanup_requests[0]["reason"], "worker_authorization_failed")
 
-    def test_worker_service_returns_status_failure_lifecycle_payload(self) -> None:
+    def test_worker_service_returns_status_failure_completion_envelope(self) -> None:
         daemon_client = FakeDaemonClient(
             DaemonResponse(ok=True, payload=authorization_payload()),
             status_response=DaemonResponse(ok=False, error="unknown transfer"),
         )
         service = WorkerTransferService(daemon_client)
 
-        payload = service.handle(authorization_request())
+        payload = service.handle_envelope(
+            WorkerServiceRequestEnvelope(payload=authorization_request_payload())
+        ).as_dict()
 
+        self.assertTrue(payload["ok"])
         self.assertEqual(payload["final_state"], "status_failed")
         self.assertIn("unknown transfer", payload["error"])
-        self.assertEqual(payload["status_update"]["state"], "failed")
-        self.assertIsNone(payload["cleanup_target"])
+        self.assertEqual(payload["completion"]["daemon_status_update"]["state"], "failed")
+        self.assertIsNone(payload["completion"]["daemon_status_response"])
+        self.assertIsNone(payload["completion"]["daemon_cleanup_response"])
         self.assertEqual(daemon_client.cleanup_requests, [])
 
-    def test_worker_service_returns_cleanup_failure_lifecycle_payload(self) -> None:
+    def test_worker_service_returns_cleanup_failure_completion_envelope(self) -> None:
         daemon_client = FakeDaemonClient(
             DaemonResponse(ok=True, payload=authorization_payload()),
             cleanup_response=DaemonResponse(ok=False, error="unknown reservation"),
         )
         service = WorkerTransferService(daemon_client)
 
-        payload = service.handle(authorization_request())
+        payload = service.handle_envelope(
+            WorkerServiceRequestEnvelope(payload=authorization_request_payload())
+        ).as_dict()
 
+        self.assertTrue(payload["ok"])
         self.assertEqual(payload["final_state"], "cleanup_failed")
         self.assertIn("unknown reservation", payload["error"])
-        self.assertEqual(payload["status_update"]["state"], "failed")
-        self.assertEqual(payload["cleanup_target"]["target_id"], "lease-1")
+        self.assertEqual(payload["completion"]["daemon_status_update"]["state"], "failed")
+        self.assertTrue(payload["completion"]["daemon_status_response"]["ok"])
+        self.assertIsNone(payload["completion"]["daemon_cleanup_response"])
         self.assertEqual(daemon_client.cleanup_requests[0]["target_id"], "lease-1")
 
     def test_worker_service_handle_lifecycle_returns_record(self) -> None:
@@ -1016,18 +1030,20 @@ class WorkerHelperTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "range bytes must be positive"):
             parse_worker_authorization_request_payload(payload)
 
-    def test_worker_service_handle_payload_preserves_lifecycle_output(self) -> None:
+    def test_worker_service_handle_envelope_preserves_completion_output(self) -> None:
         daemon_client = FakeDaemonClient(
             DaemonResponse(ok=True, payload=authorization_payload())
         )
         service = WorkerTransferService(daemon_client)
 
-        payload = service.handle_payload(authorization_request_payload())
+        payload = service.handle_envelope(
+            WorkerServiceRequestEnvelope(payload=authorization_request_payload())
+        ).as_dict()
 
-        self.assertEqual(payload["authorization_request"]["transfer_id"], "transfer-1")
+        self.assertEqual(payload["completion"]["transfer_id"], "transfer-1")
         self.assertEqual(payload["final_state"], "unsupported")
-        self.assertEqual(payload["status_update"]["state"], "failed")
-        self.assertEqual(payload["cleanup_target"]["target_id"], "lease-1")
+        self.assertEqual(payload["completion"]["daemon_status_update"]["state"], "failed")
+        self.assertEqual(payload["completion"]["staging_release"]["slot_id"], "staging-1")
 
     def test_worker_service_request_envelope_serializes_payload(self) -> None:
         envelope = WorkerServiceRequestEnvelope(
@@ -1085,7 +1101,6 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["error"], "bad payload")
         self.assertEqual(payload["final_state"], "parse_failed")
-        self.assertIsNone(payload["lifecycle"])
         self.assertIsNone(payload["completion"])
 
     def test_worker_service_returns_success_envelope_payload(self) -> None:
@@ -1100,8 +1115,6 @@ class WorkerHelperTest(unittest.TestCase):
 
         self.assertTrue(response["ok"])
         self.assertEqual(response["final_state"], "unsupported")
-        self.assertEqual(response["lifecycle"]["result"]["state"], "unsupported")
-        self.assertEqual(response["lifecycle"]["cleanup_target"]["target_id"], "lease-1")
         self.assertEqual(response["completion"]["worker_result"]["state"], "unsupported")
         self.assertEqual(response["completion"]["daemon_status_update"]["state"], "failed")
         self.assertTrue(response["completion"]["daemon_cleanup_response"]["ok"])
@@ -1123,7 +1136,6 @@ class WorkerHelperTest(unittest.TestCase):
 
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["final_state"], "unsupported")
-        self.assertEqual(payload["lifecycle"]["result"]["state"], "unsupported")
         self.assertEqual(payload["completion"]["worker_result"]["state"], "unsupported")
         self.assertEqual(payload["completion"]["daemon_status_update"]["state"], "failed")
         self.assertEqual(payload["completion"]["staging_release"]["slot_id"], "staging-1")
@@ -1140,7 +1152,6 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["error"], "bad payload")
         self.assertEqual(payload["final_state"], "parse_failed")
-        self.assertIsNone(payload["lifecycle"])
         self.assertIsNone(payload["completion"])
 
     def test_worker_response_message_codec_rejects_bad_json(self) -> None:
@@ -1161,7 +1172,6 @@ class WorkerHelperTest(unittest.TestCase):
 
         self.assertTrue(response["ok"])
         self.assertEqual(response["final_state"], "unsupported")
-        self.assertEqual(response["lifecycle"]["result"]["state"], "unsupported")
         self.assertEqual(response["completion"]["worker_result"]["state"], "unsupported")
         self.assertEqual(response["completion"]["staging_release"]["slot_id"], "staging-1")
         self.assertFalse(response["completion"]["staging_release"]["active"])
@@ -1180,7 +1190,6 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertFalse(response["ok"])
         self.assertEqual(response["final_state"], "parse_failed")
         self.assertIn("Expecting property name", response["error"])
-        self.assertIsNone(response["lifecycle"])
         self.assertIsNone(response["completion"])
         self.assertEqual(daemon_client.requests, [])
 
@@ -1237,7 +1246,6 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertFalse(response["ok"])
         self.assertEqual(response["final_state"], "parse_failed")
         self.assertIn("Expecting property name", response["error"])
-        self.assertIsNone(response["lifecycle"])
         self.assertIsNone(response["completion"])
         self.assertEqual(daemon_client.requests, [])
 
@@ -1284,7 +1292,6 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertFalse(response["ok"])
         self.assertEqual(response["final_state"], "parse_failed")
         self.assertIn("missing worker authorization field: token", response["error"])
-        self.assertIsNone(response["lifecycle"])
         self.assertIsNone(response["completion"])
         self.assertEqual(daemon_client.requests, [])
 
@@ -1300,7 +1307,6 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertTrue(response["ok"])
         self.assertEqual(response["final_state"], "status_failed")
         self.assertIn("unknown transfer", response["error"])
-        self.assertEqual(response["lifecycle"]["status_update"]["state"], "failed")
         self.assertEqual(response["completion"]["daemon_status_update"]["state"], "failed")
         self.assertIsNone(response["completion"]["daemon_status_response"])
         self.assertIsNone(response["completion"]["daemon_cleanup_response"])
@@ -1318,7 +1324,6 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertTrue(response["ok"])
         self.assertEqual(response["final_state"], "cleanup_failed")
         self.assertIn("unknown reservation", response["error"])
-        self.assertEqual(response["lifecycle"]["cleanup_target"]["target_id"], "lease-1")
         self.assertEqual(response["completion"]["daemon_status_update"]["state"], "failed")
         self.assertTrue(response["completion"]["daemon_status_response"]["ok"])
         self.assertIsNone(response["completion"]["daemon_cleanup_response"])

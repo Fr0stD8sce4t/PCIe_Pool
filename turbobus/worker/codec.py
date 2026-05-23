@@ -49,7 +49,6 @@ def decode_worker_response_envelope(
     try:
         return WorkerServiceResponseEnvelope(
             ok=bool(payload["ok"]),
-            lifecycle=_optional_mapping(payload, "lifecycle"),
             completion=_optional_mapping(payload, "completion"),
             error=payload.get("error"),
             final_state=payload.get("final_state"),
