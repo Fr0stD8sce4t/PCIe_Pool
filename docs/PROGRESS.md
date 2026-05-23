@@ -181,6 +181,8 @@ transfer request objects:
   records as copied dictionaries for future transport observability.
 - `WorkerServiceEndpoint.describe()` now includes retained event records under
   the stable `events` field for future transport observability clients.
+- `WorkerServiceEndpoint.health_snapshot()` now reports in-process endpoint
+  readiness from retained events, and `describe()` includes it under `health`.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -300,9 +302,11 @@ phase:
     list.
 41. worker endpoint describe snapshots now include retained event records under
     a stable `events` field without changing encoded worker response payloads.
+42. worker endpoint health snapshots now summarize retained event readiness and
+    surface the same health block through `describe()`.
 
-The next immediate goal is to add an in-process worker endpoint health snapshot
-that summarizes service readiness from retained events for future socket or IPC
+The next immediate goal is to add an in-process worker endpoint metrics snapshot
+that summarizes retained request/response byte counts for future socket or IPC
 observability clients while keeping encoded responses unchanged.
 
 ## Verification
@@ -397,7 +401,9 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
   under a stable field for future transport observability clients; done through
   the `events` field;
 - add an in-process worker endpoint health snapshot for future transport
-  observability clients;
+  observability clients; done through `WorkerServiceEndpoint.health_snapshot()`;
+- add an in-process worker endpoint metrics snapshot for retained request and
+  response byte counts;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

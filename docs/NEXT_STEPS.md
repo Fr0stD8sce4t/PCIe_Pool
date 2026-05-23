@@ -183,15 +183,18 @@ Current status:
   mutable internal event list.
 - worker endpoint `describe()` snapshots now include retained event records
   under the stable `events` field for future transport observability clients.
+- worker endpoint health snapshots now summarize in-process readiness from
+  retained events and are included in `describe()` under `health`.
 
 Next code cut:
 
-- add an in-process worker endpoint health snapshot that summarizes service
-  readiness from retained events for future socket or IPC observability clients;
+- add an in-process worker endpoint metrics snapshot that summarizes retained
+  request/response byte counts for future socket or IPC observability clients;
 - keep it in process only, with no CUDA IPC, sockets, real data movement, or
   hardware discovery yet;
-- add focused tests for empty endpoints, success-only endpoints, and endpoints
-  with parse/status errors while keeping encoded response payloads unchanged.
+- add focused tests for empty endpoints, success-only endpoints, parse/status
+  error endpoints, and bounded event histories while keeping encoded response
+  payloads unchanged.
 
 ## Upcoming
 

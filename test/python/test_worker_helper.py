@@ -1324,6 +1324,18 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertFalse(snapshot["history_bounded"])
         self.assertIsNone(snapshot["last_event"])
         self.assertEqual(snapshot["events"], ())
+        self.assertEqual(
+            snapshot["health"],
+            {
+                "status": "ready",
+                "ready": True,
+                "retained_event_count": 0,
+                "degraded_event_count": 0,
+                "degraded_final_states": (),
+                "last_final_state": None,
+                "last_ok": None,
+            },
+        )
         self.assertEqual(snapshot["final_state_counts"], {})
         self.assertEqual(snapshot["error_count"], 0)
         self.assertEqual(snapshot["completion_count"], 0)
@@ -1452,6 +1464,16 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertTrue(snapshot["events"][0]["has_completion"])
         self.assertFalse(snapshot["events"][1]["has_completion"])
         self.assertTrue(snapshot["events"][2]["has_completion"])
+        self.assertEqual(snapshot["health"]["status"], "degraded")
+        self.assertFalse(snapshot["health"]["ready"])
+        self.assertEqual(snapshot["health"]["retained_event_count"], 3)
+        self.assertEqual(snapshot["health"]["degraded_event_count"], 2)
+        self.assertEqual(
+            snapshot["health"]["degraded_final_states"],
+            ("parse_failed", "status_failed"),
+        )
+        self.assertEqual(snapshot["health"]["last_final_state"], "status_failed")
+        self.assertTrue(snapshot["health"]["last_ok"])
         self.assertEqual(
             decode_worker_response_envelope(success_response).as_dict()["final_state"],
             "unsupported",
@@ -1541,6 +1563,62 @@ class WorkerHelperTest(unittest.TestCase):
 
         self.assertEqual(endpoint.last_event.final_state, "unsupported")
         self.assertEqual(endpoint.event_snapshot()[0]["final_state"], "unsupported")
+
+    def test_worker_service_endpoint_health_snapshot_treats_unsupported_as_ready(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        endpoint = WorkerServiceEndpoint(daemon_client=daemon_client)
+        request_message = encode_worker_request_envelope(
+            WorkerServiceRequestEnvelope(payload=authorization_request_payload())
+        )
+
+        response_message = endpoint.handle_message(request_message)
+        response = decode_worker_response_envelope(response_message).as_dict()
+        health = endpoint.health_snapshot()
+
+        self.assertEqual(response["final_state"], "unsupported")
+        self.assertEqual(health["status"], "ready")
+        self.assertTrue(health["ready"])
+        self.assertEqual(health["retained_event_count"], 1)
+        self.assertEqual(health["degraded_event_count"], 0)
+        self.assertEqual(health["degraded_final_states"], ())
+        self.assertEqual(health["last_final_state"], "unsupported")
+        self.assertTrue(health["last_ok"])
+
+    def test_worker_service_endpoint_health_snapshot_reports_errors(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        endpoint = WorkerServiceEndpoint(daemon_client=daemon_client)
+        request_message = encode_worker_request_envelope(
+            WorkerServiceRequestEnvelope(payload=authorization_request_payload())
+        )
+
+        parse_error_response = endpoint.handle_message("{not-json")
+        daemon_client.status_response = DaemonResponse(
+            ok=False,
+            error="unknown transfer",
+        )
+        status_response = endpoint.handle_message(request_message)
+        parse_error_payload = decode_worker_response_envelope(
+            parse_error_response
+        ).as_dict()
+        status_payload = decode_worker_response_envelope(status_response).as_dict()
+        health = endpoint.health_snapshot()
+
+        self.assertEqual(parse_error_payload["final_state"], "parse_failed")
+        self.assertEqual(status_payload["final_state"], "status_failed")
+        self.assertEqual(health["status"], "degraded")
+        self.assertFalse(health["ready"])
+        self.assertEqual(health["retained_event_count"], 2)
+        self.assertEqual(health["degraded_event_count"], 2)
+        self.assertEqual(
+            health["degraded_final_states"],
+            ("parse_failed", "status_failed"),
+        )
+        self.assertEqual(health["last_final_state"], "status_failed")
+        self.assertTrue(health["last_ok"])
 
     def test_worker_service_endpoint_clear_events_resets_snapshot(self) -> None:
         daemon_client = FakeDaemonClient(

@@ -6,6 +6,16 @@ from .codec import decode_worker_response_envelope, handle_worker_service_messag
 from .helper import WorkerTransferService
 
 
+_DEGRADED_FINAL_STATES = frozenset(
+    {
+        "authorization_failed",
+        "cleanup_failed",
+        "parse_failed",
+        "status_failed",
+    }
+)
+
+
 @dataclass(frozen=True)
 class WorkerEndpointEvent:
     request_bytes: int
@@ -79,6 +89,7 @@ class WorkerServiceEndpoint:
                 self.last_event.as_dict() if self.last_event is not None else None
             ),
             "events": self.event_snapshot(),
+            "health": self.health_snapshot(),
             "final_state_counts": final_state_counts,
             "error_count": error_count,
             "completion_count": completion_count,
@@ -92,6 +103,27 @@ class WorkerServiceEndpoint:
 
     def event_snapshot(self) -> tuple[dict[str, object], ...]:
         return tuple(event.as_dict() for event in self.events)
+
+    def health_snapshot(self) -> dict[str, object]:
+        degraded_final_states: set[str] = set()
+        degraded_event_count = 0
+        for event in self.events:
+            final_state = event.final_state or "unknown"
+            if not event.ok or final_state in _DEGRADED_FINAL_STATES:
+                degraded_event_count += 1
+                degraded_final_states.add(final_state)
+        ready = degraded_event_count == 0
+        return {
+            "status": "ready" if ready else "degraded",
+            "ready": ready,
+            "retained_event_count": len(self.events),
+            "degraded_event_count": degraded_event_count,
+            "degraded_final_states": tuple(sorted(degraded_final_states)),
+            "last_final_state": (
+                self.last_event.final_state if self.last_event is not None else None
+            ),
+            "last_ok": self.last_event.ok if self.last_event is not None else None,
+        }
 
     def _trim_events(self) -> None:
         if self.max_events is None:
