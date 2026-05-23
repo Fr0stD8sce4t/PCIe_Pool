@@ -142,6 +142,9 @@ transfer request objects:
   allocate, describe, validate, and release slots from `WorkerDataPlaneRequest`
   records while rejecting double-release and mismatched transfer, lease,
   session, job, or relay use.
+- worker request lifecycle records now include staging slot allocation and
+  release metadata, and `WorkerTransferClient` releases staging slots after
+  unsupported execution, daemon status failure, and daemon cleanup failure.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -223,11 +226,15 @@ phase:
 27. the worker layer now has an in-memory staging-pool skeleton for relay
     staging slots, with validation and release checks but no CUDA IPC, sockets,
     real data movement, or hardware discovery.
+28. worker service lifecycle now reserves a staging slot after daemon
+    authorization and releases it across unsupported, status-failed, and
+    cleanup-failed paths without adding CUDA IPC, sockets, real data movement,
+    or hardware discovery.
 
-The next immediate goal is to wire the in-memory staging pool into the worker
-service lifecycle. A daemon-authorized worker request should reserve a staging
-slot before unsupported execution and release it during cleanup, still without
-adding CUDA IPC, sockets, real data movement, or hardware discovery.
+The next immediate goal is to define the worker data-plane executor interface.
+The lifecycle should pass both the daemon-authorized `WorkerTransferRequest` and
+the allocated `WorkerStagingSlot` into the executor while keeping the default
+executor on the explicit unsupported path.
 
 ## Verification
 
@@ -288,7 +295,10 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
   records;
 - add an in-memory worker staging-pool skeleton for relay staging slots; done
   through `WorkerStagingPool`;
-- wire the in-memory staging pool into the worker service lifecycle;
+- wire the in-memory staging pool into the worker service lifecycle; done by
+  allocating and releasing staging slots inside `WorkerTransferClient`;
+- define the worker data-plane executor interface that receives both the worker
+  request and allocated staging slot;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

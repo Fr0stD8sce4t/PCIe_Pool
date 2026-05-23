@@ -13,6 +13,7 @@ from ..schema import (
     WorkerTransferAuthorization,
     WorkerTransferAuthorizationRequest,
 )
+from .staging_pool import WorkerStagingPool, WorkerStagingSlot
 
 
 class WorkerTransferState(str, Enum):
@@ -163,6 +164,8 @@ class WorkerTransferResult:
 class WorkerTransferLifecycleRecord:
     authorization_request: WorkerTransferAuthorizationRequest
     worker_request: WorkerTransferRequest | None = None
+    staging_slot: WorkerStagingSlot | None = None
+    staging_release: WorkerStagingSlot | None = None
     result: WorkerTransferResult | None = None
     status_update: Mapping[str, object] | None = None
     status_response: DaemonResponse | None = None
@@ -180,6 +183,16 @@ class WorkerTransferLifecycleRecord:
             WorkerTransferRequest,
         ):
             raise TypeError("worker_request must be a WorkerTransferRequest")
+        if self.staging_slot is not None and not isinstance(
+            self.staging_slot,
+            WorkerStagingSlot,
+        ):
+            raise TypeError("staging_slot must be a WorkerStagingSlot")
+        if self.staging_release is not None and not isinstance(
+            self.staging_release,
+            WorkerStagingSlot,
+        ):
+            raise TypeError("staging_release must be a WorkerStagingSlot")
         if self.result is not None and not isinstance(self.result, WorkerTransferResult):
             raise TypeError("result must be a WorkerTransferResult")
         if self.status_update is not None and not isinstance(self.status_update, Mapping):
@@ -219,6 +232,16 @@ class WorkerTransferLifecycleRecord:
             "worker_request": (
                 self.worker_request.as_dict()
                 if self.worker_request is not None
+                else None
+            ),
+            "staging_slot": (
+                self.staging_slot.as_dict()
+                if self.staging_slot is not None
+                else None
+            ),
+            "staging_release": (
+                self.staging_release.as_dict()
+                if self.staging_release is not None
                 else None
             ),
             "result": self.result.as_dict() if self.result is not None else None,
@@ -451,6 +474,7 @@ class WorkerTransferClient:
         executor: WorkerTransferUnsupportedExecutor | None = None,
         status_reporter: WorkerTransferStatusReporter | None = None,
         cleanup_coordinator: WorkerTransferCleanupCoordinator | None = None,
+        staging_pool: WorkerStagingPool | None = None,
     ) -> None:
         self.authorizer = WorkerTransferAuthorizer(daemon_client)
         self.executor = executor or WorkerTransferUnsupportedExecutor()
@@ -460,6 +484,7 @@ class WorkerTransferClient:
         self.cleanup_coordinator = cleanup_coordinator or WorkerTransferCleanupCoordinator(
             daemon_client
         )
+        self.staging_pool = staging_pool or WorkerStagingPool()
 
     def authorize(
         self,
@@ -539,14 +564,21 @@ class WorkerTransferClient:
                 final_state="authorization_failed",
                 error=str(exc),
             )
+        staging_slot = self.staging_pool.allocate(worker_request.data_plane)
         result = self.executor.execute(worker_request)
         status_update = _daemon_status_update_for_result(result)
         try:
             status_response = self.status_reporter.report(result)
         except WorkerStatusReportError as exc:
+            staging_release = self.staging_pool.release(
+                staging_slot.slot_id,
+                worker_request.data_plane,
+            )
             return WorkerTransferLifecycleRecord(
                 authorization_request=request,
                 worker_request=worker_request,
+                staging_slot=staging_slot,
+                staging_release=staging_release,
                 result=result,
                 status_update=status_update,
                 final_state="status_failed",
@@ -566,9 +598,15 @@ class WorkerTransferClient:
                 target_kind=cleanup_target_kind,
             )
         except WorkerCleanupError as exc:
+            staging_release = self.staging_pool.release(
+                staging_slot.slot_id,
+                worker_request.data_plane,
+            )
             return WorkerTransferLifecycleRecord(
                 authorization_request=request,
                 worker_request=worker_request,
+                staging_slot=staging_slot,
+                staging_release=staging_release,
                 result=result,
                 status_update=status_update,
                 status_response=status_response,
@@ -577,9 +615,15 @@ class WorkerTransferClient:
                 final_state="cleanup_failed",
                 error=str(exc),
             )
+        staging_release = self.staging_pool.release(
+            staging_slot.slot_id,
+            worker_request.data_plane,
+        )
         return WorkerTransferLifecycleRecord(
             authorization_request=request,
             worker_request=worker_request,
+            staging_slot=staging_slot,
+            staging_release=staging_release,
             result=result,
             status_update=status_update,
             status_response=status_response,

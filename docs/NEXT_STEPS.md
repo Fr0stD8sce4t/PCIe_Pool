@@ -135,16 +135,19 @@ Current status:
 - an in-memory worker staging pool now allocates, describes, validates, and
   releases relay staging slots from daemon-approved `WorkerDataPlaneRequest`
   records without CUDA IPC, sockets, real data movement, or hardware discovery.
+- worker service lifecycle now allocates an in-memory staging slot after daemon
+  authorization and releases it on unsupported execution, status failure, and
+  cleanup failure paths without leaking staging slots.
 
 Next code cut:
 
-- wire the in-memory staging pool into the worker service lifecycle so a
-  daemon-authorized worker request can reserve a staging slot before unsupported
-  execution and release it during cleanup;
-- keep the lifecycle in process only, with no CUDA IPC, sockets, real data
-  movement, or hardware discovery yet;
-- add focused tests that unsupported execution releases the staging slot, and
-  that authorization/status failures do not leak allocated staging slots.
+- define a worker data-plane executor interface that receives a
+  `WorkerTransferRequest` plus its allocated `WorkerStagingSlot` and returns a
+  `WorkerTransferResult`;
+- keep the default executor on the explicit unsupported path, with no CUDA IPC,
+  sockets, real data movement, or hardware discovery yet;
+- add focused tests proving the lifecycle passes the allocated staging slot to
+  the executor and still releases it after unsupported execution.
 
 ## Upcoming
 
