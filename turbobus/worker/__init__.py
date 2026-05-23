@@ -36,6 +36,11 @@ from .codec import (
     handle_worker_service_message,
 )
 from .endpoint import WorkerEndpointEvent, WorkerServiceEndpoint
+from .process import (
+    build_worker_helper_transport,
+    main as worker_process_main,
+    run_worker_helper_process,
+)
 from .transport import (
     WorkerServiceLoopbackTransport,
     WorkerServiceTransport,
@@ -58,6 +63,7 @@ __all__ = [
     "WorkerServiceEndpoint",
     "WorkerServiceLoopbackTransport",
     "WorkerStatusReportError",
+    "build_worker_helper_transport",
     "WorkerDataPlaneCompletion",
     "WorkerDataPlaneCompletionEnvelope",
     "WorkerDataPlaneRequest",
@@ -74,6 +80,8 @@ __all__ = [
     "WorkerStagingPool",
     "WorkerStagingPoolError",
     "WorkerStagingSlot",
+    "worker_process_main",
+    "run_worker_helper_process",
     "WorkerServiceTransport",
     "WorkerServiceUnixSocketTransport",
     "WorkerMessageCodecError",

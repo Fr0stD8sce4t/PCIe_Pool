@@ -57,7 +57,15 @@ class WorkerServiceUnixSocketTransport:
     def handle_observability_message(self, message: str | bytes) -> str:
         return self._send(message)
 
-    def serve_forever(self, stop_event: Event | None = None) -> None:
+    def serve_forever(
+        self,
+        stop_event: Event | None = None,
+        max_requests: int | None = None,
+    ) -> None:
+        if max_requests is not None:
+            max_requests = int(max_requests)
+            if max_requests <= 0:
+                raise ValueError("max_requests must be positive")
         if os.path.exists(self.socket_path):
             os.unlink(self.socket_path)
 
@@ -67,8 +75,11 @@ class WorkerServiceUnixSocketTransport:
         server.settimeout(0.1)
 
         try:
+            request_count = 0
             while True:
                 if stop_event is not None and stop_event.is_set():
+                    break
+                if max_requests is not None and request_count >= max_requests:
                     break
                 try:
                     conn, _ = server.accept()
@@ -80,6 +91,7 @@ class WorkerServiceUnixSocketTransport:
                         continue
                     response = self._handle_wire_message(data)
                     conn.sendall((response + "\n").encode("utf-8"))
+                    request_count += 1
         finally:
             server.close()
             if os.path.exists(self.socket_path):

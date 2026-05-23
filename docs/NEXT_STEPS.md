@@ -2,11 +2,10 @@
 
 ## Current
 
-Start the next phase after the worker transport shell: add a real worker
-helper-process entrypoint that runs the in-process endpoint over the Unix
-socket transport, so another process can serve and call the same worker service
-boundary without changing authorization, lifecycle, or observability
-semantics.
+Start the next phase after the worker subprocess smoke path: connect the worker
+helper process to daemon-issued planned transfers through the socket transport,
+while still keeping execution unsupported until CUDA IPC or another real data
+movement path is added.
 
 Completed in the refactor layer:
 
@@ -214,15 +213,21 @@ Current status:
 - `turbobus.worker.transport` now defines a transport protocol, loopback
   adapter, and Unix socket transport shell that forward worker and
   observability messages without changing endpoint behavior.
+- `turbobus.worker.process` now builds and runs the worker helper-process
+  entrypoint, and `python -m turbobus.worker` now serves the in-process worker
+  endpoint over the Unix socket transport.
+- the worker process tests now include a subprocess smoke path that launches
+  `python -m turbobus.worker` against a temporary Unix socket and checks worker
+  request plus observability round-trips.
 
 Next code cut:
 
-- add a helper-process entrypoint that serves the in-process worker endpoint
-  over the Unix socket transport;
-- keep request parsing, authorization, lifecycle, and observability wiring on
-  the same worker service contract;
-- add focused tests that the helper-process entrypoint forwards worker request
-  and observability messages without changing endpoint behavior.
+- connect daemon-issued planned transfer metadata to the worker helper process
+  over the worker socket transport;
+- keep execution on the explicit unsupported path until CUDA IPC or another
+  real worker data path exists;
+- preserve daemon-owned authorization, status, cleanup, and direct fallback
+  behavior.
 
 ## Upcoming
 

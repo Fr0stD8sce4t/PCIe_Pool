@@ -44,6 +44,12 @@ transfer request objects:
 - `turbobus.worker.transport` now also provides a Unix socket transport shell
   that forwards worker and observability messages through the same endpoint
   behavior.
+- `turbobus.worker.process` now provides the worker helper-process entrypoint,
+  and `python -m turbobus.worker` can serve the in-process worker endpoint over
+  the Unix socket transport.
+- worker process coverage now includes a subprocess smoke path that launches
+  `python -m turbobus.worker` and exercises worker request plus observability
+  round-trips over the Unix socket transport.
 - daemon control plane now exposes backend-neutral relay discovery snapshots
   with per-relay eligibility, quota, active sessions, active reservations, and
   redacted lease bookkeeping across jobs.
@@ -210,6 +216,11 @@ transfer request objects:
   transport protocol for the worker service boundary.
 - `turbobus.worker.transport` now also provides a Unix socket transport shell
   for the worker service boundary.
+- `turbobus.worker.process` now builds the daemon client, worker endpoint, and
+  Unix socket transport for a helper-process entrypoint.
+- `test/python/test_worker_process.py` now covers the helper-process builder,
+  CLI argument parsing, bounded request serving, and a subprocess worker socket
+  smoke path.
 - worker endpoint observability snapshots now have JSON-safe encode/decode
   helpers for future transport observability clients.
 - `TurboBusDaemon.discover_relays()` now reports cross-job relay occupancy,
@@ -365,9 +376,10 @@ phase:
     transports can reuse the in-process helper contract without changing
     authorization, lifecycle, or observability handling.
 
-The next immediate goal is to add a helper-process entrypoint that serves the
-in-process worker endpoint over the Unix socket transport without changing
-request parsing, authorization, lifecycle, or observability handling.
+The next immediate goal is to connect daemon-issued planned transfer metadata
+to the worker helper process over the worker socket transport while keeping
+execution on the explicit unsupported path until CUDA IPC or another real data
+movement path exists.
 
 ## Verification
 
