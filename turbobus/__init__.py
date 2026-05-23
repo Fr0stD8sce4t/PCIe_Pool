@@ -9,7 +9,43 @@ from .offload_store import (
     TransferStats,
     summarize_transfer_handles,
 )
-from .model_loading import ModelLoader, ModelWeightLoader
+from .adapters import (
+    FrameworkAdapter,
+    FrameworkKVSlot,
+    FrameworkKVSlotAdapter,
+    InferenceKVSlot,
+    InferenceKVSlotAdapter,
+    ModelLoader,
+    ModelWeightLoader,
+    TrainingOffloadManager,
+    TrainingOffloadStore,
+    TurboBusConnector,
+    TurboBusConnectorConfig,
+    TurboBusConnectorMetadata,
+    TurboBusRequestMetadata,
+    TurboBusSavedPrefix,
+    VllmAllocationEvent,
+    VllmConnectorEvent,
+    VllmIntegrationState,
+    VllmKVBlockRef,
+    VllmKVGroup,
+    VllmKVSlotAdapter,
+    VllmTurboBusConnector,
+    VllmTurboBusIntegration,
+    block_bytes_from_vllm_kv_tensor,
+    clear_connector_events,
+    clear_saved_prefixes,
+    extract_vllm_block_ids,
+    get_connector_events,
+    get_saved_prefix,
+    make_contiguous_kv_slots,
+    make_vllm_block_refs_from_ids,
+    make_vllm_layer_block_refs_from_ids,
+    make_vllm_layer_groups_from_kv_caches,
+    make_vllm_layer_range_refs_from_ids,
+    register_saved_prefix,
+    vllm_block_name,
+)
 from .planner_types import (
     PlannerChunk,
     PlannerDevice,
@@ -26,43 +62,13 @@ from .planner_engine import (
     plan_transfer,
     plan_transfer_ranges,
 )
-from .training_offload import TrainingOffloadManager, TrainingOffloadStore
-from .inference import (
-    FrameworkKVSlot,
-    FrameworkKVSlotAdapter,
-    InferenceKVSlot,
-    InferenceKVSlotAdapter,
-    make_contiguous_kv_slots,
-)
 from .runtime import AutoTransferSelector, Runtime
 from .runtime_engine import RuntimeOptions
 from .schema import AutoTransferDecision, TransferMode
-from .vllm import (
-    VllmKVBlockRef,
-    VllmKVGroup,
-    VllmKVSlotAdapter,
-    block_bytes_from_vllm_kv_tensor,
-    make_vllm_block_refs_from_ids,
-    make_vllm_layer_block_refs_from_ids,
-    make_vllm_layer_groups_from_kv_caches,
-    make_vllm_layer_range_refs_from_ids,
-    vllm_block_name,
-)
-from .vllm_integration import (
-    VllmAllocationEvent,
-    VllmIntegrationState,
-    VllmTurboBusIntegration,
-    extract_vllm_block_ids,
-)
-from .vllm_connector import VllmConnectorEvent, VllmTurboBusConnector
-from .vllm_kv_connector import (
-    TurboBusConnector,
-    TurboBusConnectorMetadata,
-    TurboBusRequestMetadata,
-)
 
 __all__ = [
     "BlockState",
+    "FrameworkAdapter",
     "FrameworkKVSlot",
     "FrameworkKVSlotAdapter",
     "InferenceKVSlot",
@@ -102,15 +108,22 @@ __all__ = [
     "VllmConnectorEvent",
     "VllmTurboBusConnector",
     "TurboBusConnector",
+    "TurboBusConnectorConfig",
     "TurboBusConnectorMetadata",
     "TurboBusRequestMetadata",
+    "TurboBusSavedPrefix",
     "block_bytes_from_vllm_kv_tensor",
+    "clear_connector_events",
+    "clear_saved_prefixes",
     "extract_vllm_block_ids",
+    "get_connector_events",
+    "get_saved_prefix",
     "make_contiguous_kv_slots",
     "make_vllm_block_refs_from_ids",
     "make_vllm_layer_block_refs_from_ids",
     "make_vllm_layer_groups_from_kv_caches",
     "make_vllm_layer_range_refs_from_ids",
+    "register_saved_prefix",
     "summarize_transfer_handles",
     "plan_transfer",
     "plan_transfer_ranges",

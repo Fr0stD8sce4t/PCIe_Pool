@@ -26,6 +26,9 @@ now has its first daemon-managed planning cut:
 - `turbobus.backends` now exists as the first backend-facing package, and the
   current CUDA native runtime is reached through `CudaNativeBackend` instead of
   direct `_turbobus.Runtime(...)` calls in `Runtime`.
+- `turbobus.adapters` now exists as the framework-facing package boundary for
+  inference slots, vLLM, vLLM connector entry points, model loading, and
+  training offload while old root-level imports remain compatible.
 
 ## What Was Updated
 
@@ -45,12 +48,17 @@ now has its first daemon-managed planning cut:
   asks it to create the native runtime, translate transfer modes, and build
   native ranges.
 - `pyproject.toml` now packages `turbobus.backends`.
+- `turbobus/adapters/*.py` now provides the adapter-facing import paths.
+- `turbobus/__init__.py` now re-exports framework-facing objects through
+  `turbobus.adapters` instead of importing each old flat module directly.
+- `pyproject.toml` now packages `turbobus.adapters`.
 - Added a focused protocol serialization test at
   `test/python/test_schema.py`.
 - Added planner model tests at `test/python/test_planner_types.py`.
 - Added planner engine tests at `test/python/test_planner_engine.py`.
 - Added daemon scheduler tests at `test/python/test_daemon_scheduler.py`.
 - Added backend facade tests at `test/python/test_backend_cuda.py`.
+- Added adapter package boundary tests at `test/python/test_adapters_package.py`.
 - Extended daemon state and runtime handle tests for daemon-issued plans and
   direct fallback, plus runtime construction through the backend facade.
 
@@ -62,9 +70,11 @@ Finish the refactor layer that separates planning/control from execution:
    owning relay choice;
 2. keep native CUDA execution behind the backend facade while preserving direct,
    relay, and pooled behavior;
-3. move framework adapter entry points behind adapter-facing modules without
+3. keep framework adapter entry points behind adapter-facing modules without
    breaking the current public imports;
-4. keep framework adapter code outside daemon scheduling and backend execution
+4. introduce explicit client/runtime transfer request objects so later worker
+   execution can consume the same transfer shape;
+5. keep framework adapter code outside daemon scheduling and backend execution
    paths.
 
 ## Verification
@@ -73,6 +83,7 @@ The current refactor checks are:
 
 ```text
 $env:PYTHONPATH='.'; python test/python/test_schema.py
+$env:PYTHONPATH='.'; python test/python/test_adapters_package.py
 $env:PYTHONPATH='.'; python test/python/test_backend_cuda.py
 $env:PYTHONPATH='.'; python test/python/test_daemon_scheduler.py
 $env:PYTHONPATH='.'; python test/python/test_daemon_state.py
@@ -89,5 +100,7 @@ $env:PYTHONPATH='.'; python test/python/test_planner_engine.py
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - separate framework adapters from the flat package root once their imports can
-  remain compatible;
+  move from compatibility wrappers into owned adapter modules;
+- introduce client/runtime transfer request objects that can be shared with the
+  future worker path;
 - avoid reintroducing local relay selection in runtime or framework adapters.

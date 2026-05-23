@@ -17,6 +17,7 @@ Completed in the planner/scheduler cut:
 - runtime preference for daemon-issued plans when the daemon supports the new
   request, with the old reserve-only request kept for compatibility.
 - backend facade for the current native CUDA runtime.
+- adapter package boundary for current framework integrations.
 
 Current status:
 
@@ -33,14 +34,17 @@ Current status:
 - `turbobus.backends.cuda.CudaNativeBackend` owns native runtime creation,
   transfer-mode translation, and native range construction for the current CUDA
   path.
+- `turbobus.adapters` now provides framework-facing imports for inference slot
+  adapters, vLLM helpers/connectors, model loading, and training offload while
+  preserving old root-level import paths.
 
 Next code cut:
 
-- introduce adapter-facing modules for current framework integrations while
-  keeping old imports compatible;
-- start with vLLM-facing files, then model loading and training offload;
-- keep adapters as clients of runtime/daemon APIs, not owners of scheduler or
-  backend policy.
+- introduce client/runtime transfer request objects that adapters can submit and
+  daemon/worker code can consume later;
+- keep direct, relay, and pooled behavior unchanged;
+- keep adapters as clients of runtime/daemon APIs, not owners of scheduler,
+  backend, or worker policy.
 
 ## Upcoming
 
@@ -69,7 +73,7 @@ Next code cut:
    - fallback when relay access is denied.
 
 5. Framework adapters.
-   - adapter package boundary with compatibility imports;
+   - adapter package boundary with compatibility imports; done as the first cut;
    - vLLM KV prefix save/restore;
    - model loading;
    - training offload.
@@ -94,3 +98,4 @@ Next code cut:
   per-relay reserve calls.
 - Runtime now reaches the current CUDA native extension through a backend
   facade instead of creating `_turbobus.Runtime` directly.
+- Framework-facing imports now have a `turbobus.adapters` package boundary.
