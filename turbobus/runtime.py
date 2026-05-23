@@ -153,6 +153,8 @@ class Runtime:
         self._last_daemon_profile: dict[str, object] = {}
         self._last_resolved_transfer_mode = TransferMode.POOL
         self._last_auto_decision: AutoTransferDecision | None = None
+        self._last_auto_decision_profile = None
+        self._last_auto_decision_key: tuple[object, ...] | None = None
         self._forced_transfer_mode: TransferMode | None = None
         if TransferMode(self.options.transfer_mode) is TransferMode.AUTO:
             self._last_resolved_transfer_mode = TransferMode.AUTO
@@ -307,13 +309,27 @@ class Runtime:
         missing_relay_profile = bool(self.relay_gpus) and not plan_profile.relays
         if missing_direct_profile or missing_relay_profile:
             self.profile(self.options.profile_bytes, force=missing_relay_profile)
+            plan_profile = self._auto_profile()
+            direct_bw = getattr(plan_profile, direct_attr, 0.0)
+            if direction != "h2d" and direct_bw <= 0.0:
+                direct_bw = getattr(plan_profile, "direct_h2d_bw_gbps", 0.0)
+            missing_direct_profile = direct_bw <= 0.0
+            missing_relay_profile = bool(self.relay_gpus) and not plan_profile.relays
+        cache_key = self._auto_decision_key(bytes, direction, range_count)
+        last_profile = getattr(self, "_last_auto_decision_profile", None)
+        last_key = getattr(self, "_last_auto_decision_key", None)
+        if (
+            plan_profile is last_profile
+            and cache_key == last_key
+            and self._last_auto_decision is not None
+        ):
+            return self._last_auto_decision
         selector = AutoTransferSelector(
             min_chunks_for_relay=self.options.min_chunks_for_relay,
             min_pool_bytes=self.options.min_pool_bytes,
             relay_min_effective_bw_gbps=self.options.relay_min_effective_bw_gbps,
             relay_min_direct_ratio=self.options.relay_min_direct_ratio,
         )
-        plan_profile = self._auto_profile()
         decision = selector.choose(
             plan_profile,
             request_bytes=bytes,
@@ -321,6 +337,8 @@ class Runtime:
             request_chunks=range_count,
             direction=direction,
         )
+        self._last_auto_decision_profile = plan_profile
+        self._last_auto_decision_key = cache_key
         return decision
 
     def _auto_profile(self):
@@ -328,6 +346,24 @@ class Runtime:
         if daemon_profile is not None and not self.options.enable_dynamic_weights:
             return daemon_profile
         return self.planner_profile() if self.options.enable_dynamic_weights else self.cached_profile()
+
+    def _auto_decision_key(
+        self,
+        bytes: int,
+        direction: str,
+        range_count: int | None,
+    ) -> tuple[object, ...]:
+        return (
+            int(bytes),
+            str(direction),
+            None if range_count is None else int(range_count),
+            int(self.options.chunk_bytes),
+            int(self.options.min_chunks_for_relay),
+            int(self.options.min_pool_bytes),
+            float(self.options.relay_min_effective_bw_gbps),
+            float(self.options.relay_min_direct_ratio),
+            bool(self.options.enable_dynamic_weights),
+        )
 
     def _load_daemon_profile(self) -> None:
         if self._daemon_client is None:

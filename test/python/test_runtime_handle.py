@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
@@ -321,15 +322,16 @@ class RuntimeOptionsTest(unittest.TestCase):
         class FakeRuntime:
             def __init__(self) -> None:
                 self.modes = []
+                self.profile_obj = RelayProfile()
 
             def profile(self, bytes: int, force: bool = False):
-                return RelayProfile()
+                return self.profile_obj
 
             def cached_profile(self):
-                return RelayProfile()
+                return self.profile_obj
 
             def planner_profile(self):
-                return RelayProfile()
+                return self.profile_obj
 
             def set_transfer_mode(self, mode):
                 self.modes.append(mode)
@@ -352,6 +354,74 @@ class RuntimeOptionsTest(unittest.TestCase):
 
         self.assertEqual(first.resolved_mode, TransferMode.POOL)
         self.assertEqual(second.resolved_mode, TransferMode.POOL)
+        self.assertEqual(runtime._runtime.modes, [])
+        self.assertEqual(runtime.last_transfer_mode(), TransferMode.POOL)
+
+    def test_auto_transfer_mode_reuses_cached_decision_for_same_request_shape(self) -> None:
+        class Relay:
+            relay_device = 1
+            effective_bw_gbps = 7.6
+            p2p_enabled = True
+
+        class RelayProfile:
+            direct_h2d_bw_gbps = 7.5
+            relays = [Relay()]
+
+        class FakeRuntime:
+            def __init__(self) -> None:
+                self.modes = []
+                self.profile_obj = RelayProfile()
+
+            def profile(self, bytes: int, force: bool = False):
+                return self.profile_obj
+
+            def cached_profile(self):
+                return self.profile_obj
+
+            def planner_profile(self):
+                return self.profile_obj
+
+            def set_transfer_mode(self, mode):
+                self.modes.append(mode)
+
+        runtime = object.__new__(runtime_module.Runtime)
+        runtime.target_gpu = 0
+        runtime.relay_gpus = [1]
+        runtime.options = RuntimeOptions(
+            transfer_mode="auto",
+            chunk_bytes=4 * 1024 * 1024,
+        )
+        runtime._runtime = FakeRuntime()
+        runtime._last_resolved_transfer_mode = TransferMode.AUTO
+        runtime._last_native_transfer_mode = TransferMode.POOL
+        runtime._last_auto_decision = None
+        runtime._last_auto_decision_profile = None
+        runtime._last_auto_decision_key = None
+        runtime._forced_transfer_mode = None
+
+        decision = runtime_module.AutoTransferDecision(
+            requested_mode=TransferMode.AUTO,
+            resolved_mode=TransferMode.POOL,
+            request_bytes=32 * 1024 * 1024,
+            request_chunks=8,
+            direct_h2d_bw_gbps=7.5,
+            relay_effective_bw_gbps=7.6,
+            eligible_relay_devices=(1,),
+            reason="pool speedup 1.500 >= 1.150",
+        )
+
+        with mock.patch.object(
+            runtime_module.AutoTransferSelector,
+            "choose",
+            autospec=True,
+            return_value=decision,
+        ) as choose:
+            first = runtime.resolve_transfer_mode(32 * 1024 * 1024, direction="h2d")
+            second = runtime.resolve_transfer_mode(32 * 1024 * 1024, direction="h2d")
+
+        self.assertEqual(choose.call_count, 1)
+        self.assertIs(first, decision)
+        self.assertIs(second, decision)
         self.assertEqual(runtime._runtime.modes, [])
         self.assertEqual(runtime.last_transfer_mode(), TransferMode.POOL)
 

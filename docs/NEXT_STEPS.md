@@ -6,23 +6,31 @@ from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
 
 ## Current
 
-### 22. Re-run all-mode paper validation after the native mode trim
+### 23. Re-run all-mode paper validation after the auto-decision cache
 
 Run the paper validation harness in `--mode all` on the target server again
-so the vLLM auto restore numbers can show whether the native mode trim closed
-the small gap to pool.
+after the repeated auto-decision cache so the vLLM restore numbers can show
+whether the extra control-plane overhead is gone.
 
 Acceptance:
 
 - The target-server run reports `paper_metric` and `paper_speedup` lines for
-  model loading, vLLM KV restore, and training offload after the native mode
-  trim.
+  model loading, vLLM KV restore, and training offload after the cache.
 - The new vLLM numbers make it clear whether the auto-path gap to pool has
-  closed or still needs a further code change.
-- If the gap remains, the next `Current` item will capture the specific code
-  fix instead of burying it in docs.
+  closed or still needs another code change.
+- If the gap remains, the next `Current` item will name the remaining code
+  path directly instead of burying it in docs.
 
 ## Completed
+
+- 2026-05-23: Re-run all-mode paper validation after the native mode trim.
+  - The target-server run in `--mode all` completed with `status=ok`,
+    `returncode=0`, and empty `validation_errors` for all three workloads.
+  - Model loading and training offload still showed strong pool/auto wins.
+  - vLLM KV restore still had a small gap, so the next code change cached
+    repeated auto decisions for the same profile and request shape.
+  - The next target-server rerun will check whether that cache closes the
+    remaining vLLM auto gap.
 
 - 2026-05-23: Trim redundant native mode switches in auto restore.
   - `Runtime` now remembers the last native transfer mode it wrote and skips

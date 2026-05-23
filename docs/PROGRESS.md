@@ -7,6 +7,20 @@ Update this file after every coding turn that changes the project.
 The active goal is to turn TurboBus from a working prototype into a paper
 reproduction system for PCIe bandwidth pooling via relay GPUs.
 
+## Current Work
+
+- Runtime now caches repeated auto decisions for identical profile/request
+  shapes, so repeated auto lookups on the same cached profile can reuse the
+  previous pool/direct/relay choice.
+- Verification:
+  `python -m unittest discover -s test\\python -p "test_runtime_handle.py" -v`,
+  `python -m unittest discover -s test\\python -p "test_vllm_kv_connector.py" -v`,
+  `python -m compileall turbobus\\runtime.py test\\python\\test_runtime_handle.py -q`,
+  `git diff --check`.
+- Remaining risk: the latest target-server `--mode all` run still showed
+  vLLM auto restore a little behind pool, so the cache needs another server
+  rerun to confirm the gap has closed.
+
 ## Recent Mainline Commits
 
 - Trim redundant native mode switches in auto restore (`a955298`)
