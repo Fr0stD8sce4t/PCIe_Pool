@@ -234,6 +234,9 @@ transfer request objects:
   to that session. Worker-managed runs no longer leave stale shared-memory or
   CUDA IPC buffer metadata in a long-lived daemon after the client closes the
   session.
+- daemon job registration now rejects unknown session ids. Worker-managed
+  buffer registrations must be tied to a live daemon session before their
+  shared CPU or CUDA IPC handles can be authorized.
 
 ## What Was Updated
 
@@ -757,6 +760,9 @@ phase:
     registrations. This keeps stale shared pinned CPU and CUDA IPC handle
     metadata from surviving after worker-managed transfers close their daemon
     session.
+84. daemon job registration now requires named sessions to exist. This keeps
+    worker-managed buffer handles anchored to a live daemon session before
+    transfer planning or worker authorization can use them.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

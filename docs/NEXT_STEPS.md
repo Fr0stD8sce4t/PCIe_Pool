@@ -256,6 +256,9 @@ Completed current code cut:
 - Reclaim session-scoped job and buffer registrations when a session is
   closed. Long-lived daemons no longer keep stale shared CPU or CUDA IPC handle
   metadata after a worker-managed verification or client session ends.
+- Reject job registrations that name an unknown daemon session. Buffer handles
+  used by worker-managed transfers must now be anchored to an existing session
+  before they can be registered and authorized.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.

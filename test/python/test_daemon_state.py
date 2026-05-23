@@ -80,6 +80,9 @@ class DaemonStateTest(unittest.TestCase):
 
     def test_job_and_buffer_registration_are_tracked_and_cleaned_up(self) -> None:
         daemon = TurboBusDaemon(relay_gpus=[1])
+        session = daemon.register_session(target_gpu=0, requested_relays=[1])
+        self.assertTrue(session.ok)
+        session_id = session.payload["session"]["session_id"]
 
         job = daemon.handle_request(
             DaemonRequest(
@@ -87,7 +90,7 @@ class DaemonStateTest(unittest.TestCase):
                 payload={
                     "job_id": "job-1",
                     "user_id": "user-1",
-                    "session_id": "session-1",
+                    "session_id": session_id,
                 },
             )
         )
@@ -164,6 +167,15 @@ class DaemonStateTest(unittest.TestCase):
         self.assertNotIn("cpu-buffer", snapshot["buffers"])
         self.assertIn("detached-job", snapshot["jobs"])
         self.assertIn("detached-buffer", snapshot["buffers"])
+
+    def test_register_job_rejects_unknown_session(self) -> None:
+        daemon = TurboBusDaemon(relay_gpus=[1])
+
+        registered = daemon.register_job("job-1", session_id="missing-session")
+
+        self.assertFalse(registered.ok)
+        self.assertIn("unknown session", registered.error)
+        self.assertEqual(daemon.describe().payload["jobs"], {})
 
     def test_cleanup_session_reports_removed_jobs_and_buffers(self) -> None:
         daemon = TurboBusDaemon(relay_gpus=[1])

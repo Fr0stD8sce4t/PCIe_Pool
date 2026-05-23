@@ -167,6 +167,8 @@ class TurboBusDaemon:
             process_id=process_id,
         )
         with self._lock:
+            if job.session_id is not None and job.session_id not in self._sessions:
+                return DaemonResponse(ok=False, error="unknown session")
             self._jobs[job.job_id] = job
             return DaemonResponse(ok=True, payload={"job": asdict(job)})
 

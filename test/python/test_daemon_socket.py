@@ -114,6 +114,34 @@ class DaemonSocketTest(unittest.TestCase):
         self.assertEqual(client.requests[0].payload, {"now": 12.5})
 
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
+    def test_socket_register_job_rejects_unknown_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            socket_path = os.path.join(tmpdir, "turbobusd.sock")
+            daemon = TurboBusDaemon(relay_gpus=[1], max_sessions_per_relay=1)
+            thread = threading.Thread(
+                target=daemon.serve_forever,
+                args=(socket_path,),
+                daemon=True,
+            )
+            thread.start()
+
+            for _ in range(100):
+                if os.path.exists(socket_path):
+                    break
+                time.sleep(0.01)
+            self.assertTrue(os.path.exists(socket_path))
+
+            client = TurboBusDaemonClient(socket_path)
+            registered = client.register_job(
+                job_id="job-1",
+                session_id="missing-session",
+            )
+
+            self.assertFalse(registered.ok)
+            self.assertIn("unknown session", registered.error)
+            self.assertEqual(daemon.describe().payload["jobs"], {})
+
+    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
     def test_socket_session_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             socket_path = os.path.join(tmpdir, "turbobusd.sock")
