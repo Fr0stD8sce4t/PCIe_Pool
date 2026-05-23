@@ -561,6 +561,53 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(staging_pool.describe(), {"active_slots": {}})
         self.assertEqual(daemon_client.cleanup_requests[0]["target_id"], "lease-1")
 
+    def test_worker_client_rejects_out_of_bounds_daemon_plan_before_staging(
+        self,
+    ) -> None:
+        payload = authorization_payload()
+        payload["authorization"]["plan"] = {
+            "total_bytes": 24,
+            "chunk_bytes": 16,
+            "assignments": [
+                {
+                    "path": {
+                        "kind": "direct",
+                        "direction": "h2d",
+                        "target_device": 0,
+                        "relay_device": -1,
+                        "enabled": True,
+                    },
+                    "chunks": [{"src_offset": 60, "dst_offset": 0, "bytes": 8}],
+                    "bytes": 8,
+                    "chunk_count": 1,
+                },
+                {
+                    "path": {
+                        "kind": "relay",
+                        "direction": "h2d",
+                        "target_device": 0,
+                        "relay_device": 1,
+                        "enabled": True,
+                    },
+                    "chunks": [{"src_offset": 0, "dst_offset": 0, "bytes": 16}],
+                    "bytes": 16,
+                    "chunk_count": 1,
+                },
+            ],
+        }
+        daemon_client = FakeDaemonClient(DaemonResponse(ok=True, payload=payload))
+        staging_pool = WorkerStagingPool()
+        client = WorkerTransferClient(daemon_client, staging_pool=staging_pool)
+
+        lifecycle = client.submit_report_cleanup_lifecycle(authorization_request())
+
+        self.assertEqual(lifecycle.final_state, "authorization_failed")
+        self.assertIn("daemon plan chunk exceeds src buffer size", lifecycle.error)
+        self.assertIsNone(lifecycle.worker_request)
+        self.assertIsNone(lifecycle.staging_slot)
+        self.assertEqual(staging_pool.describe(), {"active_slots": {}})
+        self.assertEqual(daemon_client.cleanup_requests[0]["target_id"], "lease-1")
+
     def test_worker_client_rejects_handle_mismatch_before_staging(self) -> None:
         payload = authorization_payload()
         payload["authorization"]["src_buffer"] = dict(payload["authorization"]["dst_buffer"])

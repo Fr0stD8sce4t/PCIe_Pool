@@ -124,6 +124,10 @@ transfer request objects:
   daemon-issued plan byte count before daemon status reporting and relay
   reservation release, so a partial worker copy is converted into a failed
   transfer instead of being masked by reservation release;
+- worker data-plane request construction now validates every daemon-issued
+  direct or relay plan chunk against the registered source and destination
+  buffer sizes before worker staging allocation, so pooled plans cannot pass
+  an out-of-bounds direct chunk into native CUDA execution;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -362,6 +366,8 @@ transfer request objects:
   CPU and CUDA IPC handle metadata.
 - Added worker-helper and worker-managed client coverage proving partial
   `complete` results fail before relay reservation release.
+- Added schema and worker-helper coverage proving out-of-bounds daemon-plan
+  chunks fail before worker staging allocation.
 
 ## Immediate Goal
 
@@ -552,6 +558,10 @@ phase:
     does not match the daemon-issued plan. Partial worker copies are reported
     as failed transfers and clean up the relay reservation instead of releasing
     it as a successful completion.
+61. worker data-plane request construction now validates all daemon-plan
+    chunks against registered buffer sizes before staging allocation. This
+    covers pooled direct-plus-relay plans where the relay-authorized ranges are
+    valid but a direct chunk would otherwise reach native CUDA out of bounds.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

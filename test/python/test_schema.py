@@ -521,6 +521,76 @@ class SchemaTest(unittest.TestCase):
                 )
             )
 
+    def test_worker_data_plane_request_rejects_plan_chunks_outside_registered_buffers(self) -> None:
+        with self.assertRaisesRegex(ValueError, "daemon plan chunk exceeds src buffer size"):
+            WorkerDataPlaneRequest.from_authorization(
+                WorkerTransferAuthorization(
+                    transfer_id="transfer-1",
+                    lease_id="lease-1",
+                    session_id="session-1",
+                    job_id="job-1",
+                    src_buffer=BufferRegistration(
+                        buffer_id="cpu-buffer",
+                        job_id="job-1",
+                        kind="cpu_pinned",
+                        size_bytes=64,
+                        pinned=True,
+                        handle_type="shared_pinned_cpu",
+                        metadata={
+                            "shared_memory_name": "tb-job-1-src",
+                            "offset_bytes": 0,
+                            "shared_memory_size_bytes": 64,
+                        },
+                    ),
+                    dst_buffer=BufferRegistration(
+                        buffer_id="gpu-buffer",
+                        job_id="job-1",
+                        kind="gpu",
+                        size_bytes=64,
+                        device_index=0,
+                        handle_type="cuda_ipc_device",
+                        metadata={"cuda_ipc_handle": "ipc-target"},
+                    ),
+                    direction="h2d",
+                    ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
+                    relay_gpu=1,
+                    plan={
+                        "total_bytes": 24,
+                        "chunk_bytes": 16,
+                        "assignments": [
+                            {
+                                "path": {
+                                    "kind": "direct",
+                                    "direction": "h2d",
+                                    "target_device": 0,
+                                    "relay_device": -1,
+                                    "enabled": True,
+                                },
+                                "chunks": [
+                                    {"src_offset": 60, "dst_offset": 0, "bytes": 8}
+                                ],
+                                "bytes": 8,
+                                "chunk_count": 1,
+                            },
+                            {
+                                "path": {
+                                    "kind": "relay",
+                                    "direction": "h2d",
+                                    "target_device": 0,
+                                    "relay_device": 1,
+                                    "enabled": True,
+                                },
+                                "chunks": [
+                                    {"src_offset": 0, "dst_offset": 0, "bytes": 16}
+                                ],
+                                "bytes": 16,
+                                "chunk_count": 1,
+                            },
+                        ],
+                    },
+                )
+            )
+
     def test_worker_data_plane_request_rejects_direction_handle_mismatch(self) -> None:
         with self.assertRaisesRegex(ValueError, "h2d worker source"):
             WorkerDataPlaneRequest.from_authorization(

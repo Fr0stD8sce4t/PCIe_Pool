@@ -511,6 +511,11 @@ class WorkerDataPlaneRequest:
             src_size_bytes=self.src_handle.size_bytes,
             dst_size_bytes=self.dst_handle.size_bytes,
         )
+        _validate_worker_plan_chunk_bounds(
+            self.plan,
+            src_size_bytes=self.src_handle.size_bytes,
+            dst_size_bytes=self.dst_handle.size_bytes,
+        )
         object.__setattr__(self, "transfer_id", str(self.transfer_id))
         object.__setattr__(self, "lease_id", str(self.lease_id))
         object.__setattr__(self, "session_id", str(self.session_id))
@@ -606,6 +611,36 @@ def _validate_worker_handle_direction(
         raise ValueError("d2h worker source must be cuda_ipc_device")
     if dst_handle.handle_type != "shared_pinned_cpu":
         raise ValueError("d2h worker destination must be shared_pinned_cpu")
+
+
+def _validate_worker_plan_chunk_bounds(
+    plan: Mapping[str, Any],
+    *,
+    src_size_bytes: int,
+    dst_size_bytes: int,
+) -> None:
+    assignments = plan.get("assignments", ()) or ()
+    if not assignments:
+        return
+    src_size = int(src_size_bytes)
+    dst_size = int(dst_size_bytes)
+    for assignment in assignments:
+        if not isinstance(assignment, Mapping):
+            raise ValueError("daemon plan assignment must be a mapping")
+        for chunk in assignment.get("chunks", ()) or ():
+            if not isinstance(chunk, Mapping):
+                raise ValueError("daemon plan chunk must be a mapping")
+            src_offset = int(chunk["src_offset"])
+            dst_offset = int(chunk["dst_offset"])
+            bytes_count = int(chunk["bytes"])
+            if src_offset < 0 or dst_offset < 0:
+                raise ValueError("daemon plan chunk offsets must be non-negative")
+            if bytes_count <= 0:
+                raise ValueError("daemon plan chunk bytes must be positive")
+            if src_offset + bytes_count > src_size:
+                raise ValueError("daemon plan chunk exceeds src buffer size")
+            if dst_offset + bytes_count > dst_size:
+                raise ValueError("daemon plan chunk exceeds dst buffer size")
 
 
 def _normalize_buffer_handle_metadata(

@@ -162,6 +162,10 @@ Completed current code cut:
 - Reject worker `complete` results whose byte count does not match the
   daemon-issued plan before reporting completion or releasing the relay
   reservation, so partial CUDA copies cannot be masked as successful transfers.
+- Reject daemon-issued worker plans whose direct or relay chunks exceed the
+  registered source or destination buffer sizes before staging allocation, so
+  pooled direct-plus-relay plans cannot pass an out-of-bounds direct chunk into
+  native CUDA execution.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -181,6 +185,8 @@ Completed current code cut:
      allocation.
    - Validate completed byte counts against the daemon-issued plan before
      releasing relay reservations.
+   - Validate all daemon-plan chunks against registered buffer sizes before
+     worker staging allocation.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor
