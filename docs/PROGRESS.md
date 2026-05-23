@@ -159,6 +159,9 @@ transfer request objects:
 - `turbobus.worker.codec` now provides JSON-safe request and response envelope
   encoders/decoders for the future worker helper process boundary while
   staying in process.
+- `handle_worker_service_message` now connects the worker message codec to
+  `WorkerTransferService.handle_envelope`, returning encoded response messages
+  for successful worker requests and parse failures without adding a transport.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -255,12 +258,15 @@ phase:
 32. worker process message codecs now round-trip request and response
     envelopes as JSON-safe strings while preserving completion envelopes and
     malformed-message errors.
+33. the in-process worker service message handler now decodes encoded requests,
+    runs the existing worker service envelope path, and returns encoded
+    responses while preserving completion envelopes.
 
-The next immediate goal is to add an in-process worker service message handler
-that accepts encoded worker request messages, decodes them through the worker
-message codec, runs the existing worker service envelope path, and returns an
-encoded worker response message. It should still avoid sockets, IPC, CUDA IPC,
-real data movement, and hardware discovery.
+The next immediate goal is to add a transport-neutral worker service endpoint
+object that owns a `WorkerTransferService`, accepts encoded messages through
+the existing in-process message handler, and exposes a single `handle_message`
+entry point that a future socket or IPC transport can call. It should still
+avoid sockets, IPC, CUDA IPC, real data movement, and hardware discovery.
 
 ## Verification
 
@@ -333,7 +339,10 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
 - add a minimal worker process message codec for request and response
   envelopes; done through `turbobus.worker.codec`;
 - add an in-process worker service message handler that uses the codec before
-  any socket or IPC transport exists;
+  any socket or IPC transport exists; done through
+  `handle_worker_service_message`;
+- add a transport-neutral worker service endpoint object for future socket or
+  IPC transports;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

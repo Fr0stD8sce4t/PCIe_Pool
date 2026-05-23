@@ -27,6 +27,7 @@ from .codec import (
     decode_worker_response_envelope,
     encode_worker_request_envelope,
     encode_worker_response_envelope,
+    handle_worker_service_message,
 )
 from .staging_pool import (
     WorkerStagingPool,
@@ -62,6 +63,7 @@ __all__ = [
     "decode_worker_response_envelope",
     "encode_worker_request_envelope",
     "encode_worker_response_envelope",
+    "handle_worker_service_message",
     "parse_worker_authorization_request_payload",
     "run_worker_service_control_plane_smoke",
 ]

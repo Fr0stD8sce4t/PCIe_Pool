@@ -42,6 +42,7 @@ from turbobus.worker import (
     decode_worker_response_envelope,
     encode_worker_request_envelope,
     encode_worker_response_envelope,
+    handle_worker_service_message,
     parse_worker_authorization_request_payload,
     run_worker_service_control_plane_smoke,
 )
@@ -1207,6 +1208,63 @@ class WorkerHelperTest(unittest.TestCase):
     def test_worker_response_message_codec_rejects_bad_json(self) -> None:
         with self.assertRaises(WorkerMessageCodecError):
             decode_worker_response_envelope("[]")
+
+    def test_worker_service_message_handler_returns_encoded_success_response(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        service = WorkerTransferService(daemon_client)
+        request_message = encode_worker_request_envelope(
+            WorkerServiceRequestEnvelope(payload=authorization_request_payload())
+        )
+
+        response_message = handle_worker_service_message(service, request_message)
+        response = decode_worker_response_envelope(response_message).as_dict()
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["final_state"], "unsupported")
+        self.assertEqual(response["lifecycle"]["result"]["state"], "unsupported")
+        self.assertEqual(response["completion"]["worker_result"]["state"], "unsupported")
+        self.assertEqual(response["completion"]["staging_release"]["slot_id"], "staging-1")
+        self.assertFalse(response["completion"]["staging_release"]["active"])
+        self.assertEqual(daemon_client.status_updates[0]["state"], "failed")
+        self.assertEqual(daemon_client.cleanup_requests[0]["target_id"], "lease-1")
+
+    def test_worker_service_message_handler_returns_encoded_parse_error(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        service = WorkerTransferService(daemon_client)
+
+        response_message = handle_worker_service_message(service, "{not-json")
+        response = decode_worker_response_envelope(response_message).as_dict()
+
+        self.assertFalse(response["ok"])
+        self.assertEqual(response["final_state"], "parse_failed")
+        self.assertIn("Expecting property name", response["error"])
+        self.assertIsNone(response["lifecycle"])
+        self.assertIsNone(response["completion"])
+        self.assertEqual(daemon_client.requests, [])
+
+    def test_worker_service_message_handler_preserves_status_failure_completion(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload()),
+            status_response=DaemonResponse(ok=False, error="unknown transfer"),
+        )
+        service = WorkerTransferService(daemon_client)
+        request_message = encode_worker_request_envelope(
+            WorkerServiceRequestEnvelope(payload=authorization_request_payload())
+        )
+
+        response_message = handle_worker_service_message(service, request_message)
+        response = decode_worker_response_envelope(response_message).as_dict()
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["final_state"], "status_failed")
+        self.assertIn("unknown transfer", response["error"])
+        self.assertEqual(response["completion"]["daemon_status_update"]["state"], "failed")
+        self.assertIsNone(response["completion"]["daemon_status_response"])
+        self.assertFalse(response["completion"]["staging_release"]["active"])
 
     def test_worker_service_returns_malformed_payload_envelope(self) -> None:
         daemon_client = FakeDaemonClient(

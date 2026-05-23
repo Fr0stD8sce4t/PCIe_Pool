@@ -154,17 +154,22 @@ Current status:
   in process, preserving completion envelopes and malformed-message errors
   without adding sockets, IPC, CUDA IPC, real data movement, or hardware
   discovery.
+- an in-process worker service message handler now accepts encoded worker
+  request messages, decodes them through the worker message codec, runs the
+  existing `WorkerTransferService.handle_envelope` path, and returns encoded
+  worker response messages without adding sockets, IPC, CUDA IPC, real data
+  movement, or hardware discovery.
 
 Next code cut:
 
-- add an in-process worker service message handler that accepts encoded worker
-  request messages, decodes them through the worker message codec, runs the
-  existing `WorkerTransferService.handle_envelope` path, and returns an encoded
-  worker response message;
+- add a transport-neutral worker service endpoint object that owns a
+  `WorkerTransferService`, accepts encoded messages through the existing
+  in-process message handler, and exposes a single `handle_message` entry point
+  that a future socket or IPC transport can call;
 - keep it in process only, with no CUDA IPC, sockets, real data movement, or
   hardware discovery yet;
-- add focused tests for encoded success responses, malformed encoded requests,
-  and preservation of the completion envelope.
+- add focused tests that endpoint success, parse-error, and status-failure
+  responses match the lower-level message handler output.
 
 ## Upcoming
 

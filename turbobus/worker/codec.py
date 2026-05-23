@@ -55,6 +55,20 @@ def decode_worker_response_envelope(
         raise WorkerMessageCodecError(str(exc)) from exc
 
 
+def handle_worker_service_message(
+    service,
+    message: str | bytes,
+) -> str:
+    try:
+        request = decode_worker_request_envelope(message)
+    except WorkerMessageCodecError as exc:
+        return encode_worker_response_envelope(
+            WorkerServiceResponseEnvelope.from_error(str(exc))
+        )
+    response = service.handle_envelope(request)
+    return encode_worker_response_envelope(response)
+
+
 def _encode_json(payload: Mapping[str, object]) -> str:
     try:
         return json.dumps(dict(payload), sort_keys=True, separators=(",", ":"))
@@ -104,4 +118,5 @@ __all__ = [
     "decode_worker_response_envelope",
     "encode_worker_request_envelope",
     "encode_worker_response_envelope",
+    "handle_worker_service_message",
 ]
