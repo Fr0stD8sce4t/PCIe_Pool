@@ -145,6 +145,10 @@ transfer request objects:
 - worker request lifecycle records now include staging slot allocation and
   release metadata, and `WorkerTransferClient` releases staging slots after
   unsupported execution, daemon status failure, and daemon cleanup failure.
+- worker data-plane executors now receive both the daemon-authorized
+  `WorkerTransferRequest` and its allocated `WorkerStagingSlot`. The default
+  executor still returns explicit unsupported execution without CUDA IPC,
+  sockets, real data movement, or hardware discovery.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -230,11 +234,14 @@ phase:
     authorization and releases it across unsupported, status-failed, and
     cleanup-failed paths without adding CUDA IPC, sockets, real data movement,
     or hardware discovery.
+29. worker data-plane executor calls now receive the allocated staging slot
+    alongside the worker request, while preserving the unsupported default
+    executor path.
 
-The next immediate goal is to define the worker data-plane executor interface.
-The lifecycle should pass both the daemon-authorized `WorkerTransferRequest` and
-the allocated `WorkerStagingSlot` into the executor while keeping the default
-executor on the explicit unsupported path.
+The next immediate goal is to add a worker data-plane completion envelope for
+future helper process boundaries. It should serialize the staging slot, worker
+result, daemon status update, daemon cleanup response, and staging release from
+existing lifecycle records.
 
 ## Verification
 
@@ -298,7 +305,10 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
 - wire the in-memory staging pool into the worker service lifecycle; done by
   allocating and releasing staging slots inside `WorkerTransferClient`;
 - define the worker data-plane executor interface that receives both the worker
-  request and allocated staging slot;
+  request and allocated staging slot; done in `WorkerTransferUnsupportedExecutor`
+  and the worker lifecycle call path;
+- add a worker data-plane completion envelope for future helper process
+  boundaries;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

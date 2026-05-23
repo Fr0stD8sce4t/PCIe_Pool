@@ -138,16 +138,19 @@ Current status:
 - worker service lifecycle now allocates an in-memory staging slot after daemon
   authorization and releases it on unsupported execution, status failure, and
   cleanup failure paths without leaking staging slots.
+- worker data-plane executors now receive both the daemon-authorized
+  `WorkerTransferRequest` and its allocated `WorkerStagingSlot`, while the
+  default executor remains on the explicit unsupported path.
 
 Next code cut:
 
-- define a worker data-plane executor interface that receives a
-  `WorkerTransferRequest` plus its allocated `WorkerStagingSlot` and returns a
-  `WorkerTransferResult`;
-- keep the default executor on the explicit unsupported path, with no CUDA IPC,
-  sockets, real data movement, or hardware discovery yet;
-- add focused tests proving the lifecycle passes the allocated staging slot to
-  the executor and still releases it after unsupported execution.
+- add a worker data-plane completion envelope that serializes the allocated
+  staging slot, worker result, daemon status update, daemon cleanup response,
+  and staging release in one stable worker-process-facing shape;
+- keep it in process only, with no CUDA IPC, sockets, real data movement, or
+  hardware discovery yet;
+- add focused tests that success, status-failed, and cleanup-failed lifecycle
+  records produce completion envelopes without dropping staging release data.
 
 ## Upcoming
 

@@ -25,6 +25,7 @@ from turbobus.worker import (
     WorkerServiceResponseEnvelope,
     WorkerStatusReportError,
     WorkerStagingPool,
+    WorkerStagingSlot,
     WorkerTransferAuthorizer,
     WorkerTransferClient,
     WorkerTransferCleanupCoordinator,
@@ -292,14 +293,18 @@ class WorkerHelperTest(unittest.TestCase):
     def test_unsupported_executor_reports_no_data_movement(self) -> None:
         request = WorkerTransferRequest.from_authorization_payload(authorization_payload())
         executor = WorkerTransferUnsupportedExecutor()
+        staging_pool = WorkerStagingPool(slot_id_factory=lambda: "staging-1")
+        staging_slot = staging_pool.allocate(request.data_plane)
 
-        result = executor.execute(request)
+        result = executor.execute(request, staging_slot)
 
         self.assertEqual(result.state, WorkerTransferState.UNSUPPORTED)
         self.assertEqual(result.bytes_completed, 0)
         self.assertIn("not implemented", result.error)
         self.assertEqual(result.metadata["relay_gpu"], 1)
         self.assertEqual(result.metadata["src_buffer_id"], "cpu-buffer")
+        self.assertEqual(result.metadata["staging_slot_id"], "staging-1")
+        self.assertEqual(result.metadata["staging_allocated_bytes"], 256)
 
     def test_worker_result_builds_data_plane_completion_report(self) -> None:
         result = WorkerTransferResult(
@@ -320,9 +325,26 @@ class WorkerHelperTest(unittest.TestCase):
     def test_unsupported_executor_can_raise_explicit_error(self) -> None:
         request = WorkerTransferRequest.from_authorization_payload(authorization_payload())
         executor = WorkerTransferUnsupportedExecutor()
+        staging_slot = WorkerStagingPool().allocate(request.data_plane)
 
         with self.assertRaises(UnsupportedWorkerExecution):
-            executor.execute_or_raise(request)
+            executor.execute_or_raise(request, staging_slot)
+
+    def test_unsupported_executor_rejects_mismatched_staging_slot(self) -> None:
+        request = WorkerTransferRequest.from_authorization_payload(authorization_payload())
+        other_request = WorkerTransferRequest.from_authorization_payload(
+            {
+                "authorization": {
+                    **authorization_payload()["authorization"],
+                    "transfer_id": "transfer-2",
+                }
+            }
+        )
+        staging_slot = WorkerStagingPool().allocate(other_request.data_plane)
+        executor = WorkerTransferUnsupportedExecutor()
+
+        with self.assertRaisesRegex(ValueError, "transfer"):
+            executor.execute(request, staging_slot)
 
     def test_authorizer_builds_worker_request_from_daemon_response(self) -> None:
         daemon_client = FakeDaemonClient(
@@ -348,7 +370,8 @@ class WorkerHelperTest(unittest.TestCase):
         daemon_client = FakeDaemonClient(
             DaemonResponse(ok=True, payload=authorization_payload())
         )
-        client = WorkerTransferClient(daemon_client)
+        staging_pool = WorkerStagingPool()
+        client = WorkerTransferClient(daemon_client, staging_pool=staging_pool)
 
         result = client.submit(authorization_request())
 
@@ -356,6 +379,8 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(result.state, WorkerTransferState.UNSUPPORTED)
         self.assertEqual(result.bytes_completed, 0)
         self.assertIn("not implemented", result.error)
+        self.assertEqual(result.metadata["staging_slot_id"], "staging-1")
+        self.assertEqual(staging_pool.describe(), {"active_slots": {}})
 
     def test_status_reporter_maps_unsupported_to_daemon_failed_status(self) -> None:
         daemon_client = FakeDaemonClient(
@@ -726,6 +751,45 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(daemon_client.status_updates[0]["state"], "failed")
         self.assertEqual(daemon_client.cleanup_requests[0]["target_id"], "lease-1")
 
+    def test_worker_client_lifecycle_passes_staging_slot_to_executor(self) -> None:
+        class RecordingExecutor:
+            def __init__(self) -> None:
+                self.calls: list[tuple[WorkerTransferRequest, WorkerStagingSlot]] = []
+
+            def execute(
+                self,
+                request: WorkerTransferRequest,
+                staging_slot: WorkerStagingSlot,
+            ) -> WorkerTransferResult:
+                self.calls.append((request, staging_slot))
+                return WorkerTransferResult(
+                    transfer_id=request.transfer_id,
+                    state=WorkerTransferState.UNSUPPORTED,
+                    error="recorded unsupported",
+                    metadata={"staging_slot_id": staging_slot.slot_id},
+                )
+
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        staging_pool = WorkerStagingPool()
+        executor = RecordingExecutor()
+        client = WorkerTransferClient(
+            daemon_client,
+            executor=executor,
+            staging_pool=staging_pool,
+        )
+
+        lifecycle = client.submit_report_cleanup_lifecycle(authorization_request())
+
+        self.assertEqual(len(executor.calls), 1)
+        recorded_request, recorded_slot = executor.calls[0]
+        self.assertEqual(recorded_request.transfer_id, "transfer-1")
+        self.assertEqual(recorded_slot.slot_id, lifecycle.staging_slot.slot_id)
+        self.assertEqual(lifecycle.result.metadata["staging_slot_id"], recorded_slot.slot_id)
+        self.assertFalse(lifecycle.staging_release.active)
+        self.assertEqual(staging_pool.describe(), {"active_slots": {}})
+
     def test_worker_client_lifecycle_authorization_failure_does_not_allocate_staging(self) -> None:
         daemon_client = FakeDaemonClient(DaemonResponse(ok=False, error="denied"))
         staging_pool = WorkerStagingPool()
@@ -791,7 +855,11 @@ class WorkerHelperTest(unittest.TestCase):
 
     def test_worker_client_lifecycle_skips_cleanup_for_complete_result(self) -> None:
         class CompleteExecutor:
-            def execute(self, request: WorkerTransferRequest) -> WorkerTransferResult:
+            def execute(
+                self,
+                request: WorkerTransferRequest,
+                staging_slot: WorkerStagingSlot,
+            ) -> WorkerTransferResult:
                 return WorkerTransferResult(
                     transfer_id=request.transfer_id,
                     state=WorkerTransferState.COMPLETE,

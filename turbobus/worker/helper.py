@@ -332,9 +332,21 @@ class WorkerServiceResponseEnvelope:
 
 
 class WorkerTransferUnsupportedExecutor:
-    def execute(self, request: WorkerTransferRequest) -> WorkerTransferResult:
+    def execute(
+        self,
+        request: WorkerTransferRequest,
+        staging_slot: WorkerStagingSlot,
+    ) -> WorkerTransferResult:
         if not isinstance(request, WorkerTransferRequest):
             raise TypeError("request must be a WorkerTransferRequest")
+        if not isinstance(staging_slot, WorkerStagingSlot):
+            raise TypeError("staging_slot must be a WorkerStagingSlot")
+        if staging_slot.transfer_id != request.transfer_id:
+            raise ValueError("staging slot transfer does not match request")
+        if staging_slot.lease_id != request.authorization.lease_id:
+            raise ValueError("staging slot lease does not match request")
+        if staging_slot.relay_gpu != request.authorization.relay_gpu:
+            raise ValueError("staging slot relay does not match request")
         return WorkerTransferResult(
             transfer_id=request.transfer_id,
             state=WorkerTransferState.UNSUPPORTED,
@@ -344,11 +356,17 @@ class WorkerTransferUnsupportedExecutor:
                 "relay_gpu": request.authorization.relay_gpu,
                 "src_buffer_id": request.authorization.src_buffer.buffer_id,
                 "dst_buffer_id": request.authorization.dst_buffer.buffer_id,
+                "staging_slot_id": staging_slot.slot_id,
+                "staging_allocated_bytes": staging_slot.allocated_bytes,
             },
         )
 
-    def execute_or_raise(self, request: WorkerTransferRequest) -> WorkerTransferResult:
-        result = self.execute(request)
+    def execute_or_raise(
+        self,
+        request: WorkerTransferRequest,
+        staging_slot: WorkerStagingSlot,
+    ) -> WorkerTransferResult:
+        result = self.execute(request, staging_slot)
         raise UnsupportedWorkerExecution(result.error or "worker execution is unsupported")
 
 
@@ -497,7 +515,11 @@ class WorkerTransferClient:
         request: WorkerTransferAuthorizationRequest,
     ) -> WorkerTransferResult:
         worker_request = self.authorize(request)
-        return self.executor.execute(worker_request)
+        staging_slot = self.staging_pool.allocate(worker_request.data_plane)
+        try:
+            return self.executor.execute(worker_request, staging_slot)
+        finally:
+            self.staging_pool.release(staging_slot.slot_id, worker_request.data_plane)
 
     def submit_and_report(
         self,
@@ -565,7 +587,7 @@ class WorkerTransferClient:
                 error=str(exc),
             )
         staging_slot = self.staging_pool.allocate(worker_request.data_plane)
-        result = self.executor.execute(worker_request)
+        result = self.executor.execute(worker_request, staging_slot)
         status_update = _daemon_status_update_for_result(result)
         try:
             status_response = self.status_reporter.report(result)
