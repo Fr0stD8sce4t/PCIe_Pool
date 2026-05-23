@@ -150,6 +150,15 @@ class WorkerServiceEndpoint:
             ),
         }
 
+    def observability_snapshot(self) -> dict[str, object]:
+        description = self.describe()
+        return {
+            "describe": description,
+            "events": description["events"],
+            "health": description["health"],
+            "metrics": description["metrics"],
+        }
+
     def _trim_events(self) -> None:
         if self.max_events is None:
             return

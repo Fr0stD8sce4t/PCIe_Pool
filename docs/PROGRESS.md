@@ -185,6 +185,8 @@ transfer request objects:
   readiness from retained events, and `describe()` includes it under `health`.
 - `WorkerServiceEndpoint.metrics_snapshot()` now reports retained request and
   response byte counts, and `describe()` includes it under `metrics`.
+- `WorkerServiceEndpoint.observability_snapshot()` now combines `describe()`,
+  retained events, health, and metrics under one stable in-process payload.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -309,11 +311,12 @@ phase:
 43. worker endpoint metrics snapshots now summarize retained request and
     response byte counts and surface the same metrics block through
     `describe()`.
+44. worker endpoint observability snapshots now combine `describe()`, retained
+    events, health, and metrics under one stable in-process payload.
 
-The next immediate goal is to add an in-process worker endpoint observability
-snapshot that combines `describe()`, retained events, health, and metrics under
-one stable payload for future socket or IPC observability clients while keeping
-encoded responses unchanged.
+The next immediate goal is to add a JSON-safe worker endpoint observability
+payload encoder/decoder for future socket or IPC observability clients while
+keeping encoded worker response payloads unchanged.
 
 ## Verification
 
@@ -411,7 +414,10 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
 - add an in-process worker endpoint metrics snapshot for retained request and
   response byte counts; done through `WorkerServiceEndpoint.metrics_snapshot()`;
 - add a combined worker endpoint observability snapshot for future transport
-  observability clients;
+  observability clients; done through
+  `WorkerServiceEndpoint.observability_snapshot()`;
+- add a JSON-safe worker endpoint observability payload codec for future
+  transport observability clients;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

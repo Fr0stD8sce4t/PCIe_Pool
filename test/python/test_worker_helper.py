@@ -1751,6 +1751,50 @@ class WorkerHelperTest(unittest.TestCase):
             len(status_response.encode("utf-8")),
         )
 
+    def test_worker_service_endpoint_observability_snapshot_empty(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        endpoint = WorkerServiceEndpoint(daemon_client=daemon_client)
+
+        observability = endpoint.observability_snapshot()
+
+        self.assertEqual(observability["describe"], endpoint.describe())
+        self.assertEqual(observability["events"], ())
+        self.assertEqual(observability["health"], endpoint.health_snapshot())
+        self.assertEqual(observability["metrics"], endpoint.metrics_snapshot())
+        self.assertEqual(observability["describe"]["retained_event_count"], 0)
+
+    def test_worker_service_endpoint_observability_snapshot_populated(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        endpoint = WorkerServiceEndpoint(daemon_client=daemon_client)
+        request_message = encode_worker_request_envelope(
+            WorkerServiceRequestEnvelope(payload=authorization_request_payload())
+        )
+
+        success_response = endpoint.handle_message(request_message)
+        parse_error_response = endpoint.handle_message("{not-json")
+        observability = endpoint.observability_snapshot()
+        success_payload = decode_worker_response_envelope(success_response).as_dict()
+        parse_error_payload = decode_worker_response_envelope(
+            parse_error_response
+        ).as_dict()
+
+        self.assertEqual(observability["describe"], endpoint.describe())
+        self.assertEqual(observability["events"], endpoint.event_snapshot())
+        self.assertEqual(observability["health"], endpoint.health_snapshot())
+        self.assertEqual(observability["metrics"], endpoint.metrics_snapshot())
+        self.assertEqual(
+            [event["final_state"] for event in observability["events"]],
+            ["unsupported", "parse_failed"],
+        )
+        self.assertEqual(observability["health"]["status"], "degraded")
+        self.assertEqual(observability["metrics"]["retained_event_count"], 2)
+        self.assertEqual(success_payload["final_state"], "unsupported")
+        self.assertEqual(parse_error_payload["final_state"], "parse_failed")
+
     def test_worker_service_endpoint_clear_events_resets_snapshot(self) -> None:
         daemon_client = FakeDaemonClient(
             DaemonResponse(ok=True, payload=authorization_payload())

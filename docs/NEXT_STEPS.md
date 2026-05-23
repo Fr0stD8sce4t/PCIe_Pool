@@ -187,17 +187,19 @@ Current status:
   retained events and are included in `describe()` under `health`.
 - worker endpoint metrics snapshots now summarize retained request/response
   byte counts and are included in `describe()` under `metrics`.
+- worker endpoint observability snapshots now combine `describe()`, retained
+  events, health, and metrics under one stable in-process payload for future
+  transports.
 
 Next code cut:
 
-- add an in-process worker endpoint observability snapshot that combines
-  `describe()`, retained events, health, and metrics under one stable payload
-  for future socket or IPC observability clients;
+- add a JSON-safe worker endpoint observability payload encoder/decoder for
+  future socket or IPC observability clients, reusing the existing in-process
+  snapshot shape;
 - keep it in process only, with no CUDA IPC, sockets, real data movement, or
   hardware discovery yet;
-- add focused tests that the combined snapshot matches the existing describe,
-  events, health, and metrics outputs for empty and populated endpoints while
-  keeping encoded response payloads unchanged.
+- add focused tests that empty and populated observability snapshots round-trip
+  through the codec while encoded worker response payloads stay unchanged.
 
 ## Upcoming
 
