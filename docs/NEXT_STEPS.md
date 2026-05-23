@@ -201,10 +201,18 @@ Completed current code cut:
   planner, so helper execution receives exact source and destination offsets
   instead of replanning every request from offset 0. The daemon socket
   round-trip also preserves those offsets through worker authorization.
+- Extend the CUDA-server helper-socket verifier to nonzero transfer offsets.
+  `python -m turbobus.verification` now accepts `--src-offset`,
+  `--dst-offset`, `--source-buffer-bytes`, and
+  `--destination-buffer-bytes`, initializes larger real source/destination
+  buffers, submits the offset range through the worker-managed path, and checks
+  that bytes land at the daemon-approved destination offset.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
    - Run `python -m turbobus.verification --direction h2d --target-gpu 0 --relay-gpu 1`.
+   - Also run an offset-range verifier, for example
+     `python -m turbobus.verification --direction h2d --target-gpu 0 --relay-gpu 1 --bytes 1048576 --chunk-bytes 262144 --src-offset 4096 --dst-offset 8192`.
    - If it fails, fix the failing real data-path layer first: shared CPU
      binding, CUDA IPC target opening, relay runtime execution, daemon status,
      or reservation release.

@@ -166,6 +166,11 @@ transfer request objects:
   and destination offsets requested by the application. The daemon socket
   client path preserves the same offsets through planning and worker
   authorization;
+- `turbobus.verification` can now run the CUDA-server helper-socket verifier
+  against nonzero transfer offsets. It accepts source and destination offsets,
+  sizes larger real source/destination buffers around those ranges, sends the
+  offset range through the daemon-approved worker-managed path, and verifies
+  that destination bytes land at the requested offset;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -642,6 +647,12 @@ phase:
     chunks are stored in the daemon plan, and worker authorization receives
     those exact offsets instead of chunks regenerated from offset 0. Socket
     client planning and worker authorization keep the same range offsets.
+71. the CUDA-server helper-socket verifier now exercises nonzero range
+    offsets. `python -m turbobus.verification` accepts `--src-offset`,
+    `--dst-offset`, `--source-buffer-bytes`, and
+    `--destination-buffer-bytes`, uses larger real buffers for the source and
+    destination, submits the range through the worker-managed call, and checks
+    that the destination buffer matches the expected offset placement.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

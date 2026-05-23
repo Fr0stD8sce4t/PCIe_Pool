@@ -33,6 +33,10 @@ class WorkerManagedRelayVerificationResult:
     job_id: str
     bytes_requested: int
     bytes_completed: int
+    src_offset: int
+    dst_offset: int
+    source_buffer_bytes: int
+    destination_buffer_bytes: int
     target_gpu: int
     relay_gpu: int
     state: str
@@ -66,6 +70,10 @@ def verify_worker_managed_h2d_relay(
     bytes_to_copy: int = 1024 * 1024,
     chunk_bytes: int = 1024 * 1024,
     mode: str = "relay",
+    src_offset: int = 0,
+    dst_offset: int = 0,
+    source_buffer_bytes: int | None = None,
+    destination_buffer_bytes: int | None = None,
     max_inflight_chunks: int = 8,
     socket_dir: str | None = None,
     startup_timeout_seconds: float = 10.0,
@@ -85,6 +93,10 @@ def verify_worker_managed_h2d_relay(
         bytes_to_copy=bytes_to_copy,
         chunk_bytes=chunk_bytes,
         mode=mode,
+        src_offset=src_offset,
+        dst_offset=dst_offset,
+        source_buffer_bytes=source_buffer_bytes,
+        destination_buffer_bytes=destination_buffer_bytes,
         max_inflight_chunks=max_inflight_chunks,
         socket_dir=socket_dir,
         startup_timeout_seconds=startup_timeout_seconds,
@@ -98,6 +110,10 @@ def verify_worker_managed_d2h_relay(
     bytes_to_copy: int = 1024 * 1024,
     chunk_bytes: int = 1024 * 1024,
     mode: str = "relay",
+    src_offset: int = 0,
+    dst_offset: int = 0,
+    source_buffer_bytes: int | None = None,
+    destination_buffer_bytes: int | None = None,
     max_inflight_chunks: int = 8,
     socket_dir: str | None = None,
     startup_timeout_seconds: float = 10.0,
@@ -112,6 +128,10 @@ def verify_worker_managed_d2h_relay(
         bytes_to_copy=bytes_to_copy,
         chunk_bytes=chunk_bytes,
         mode=mode,
+        src_offset=src_offset,
+        dst_offset=dst_offset,
+        source_buffer_bytes=source_buffer_bytes,
+        destination_buffer_bytes=destination_buffer_bytes,
         max_inflight_chunks=max_inflight_chunks,
         socket_dir=socket_dir,
         startup_timeout_seconds=startup_timeout_seconds,
@@ -127,6 +147,10 @@ def _verify_worker_managed_relay(
     bytes_to_copy: int,
     chunk_bytes: int,
     mode: str,
+    src_offset: int,
+    dst_offset: int,
+    source_buffer_bytes: int | None,
+    destination_buffer_bytes: int | None,
     max_inflight_chunks: int,
     socket_dir: str | None,
     startup_timeout_seconds: float,
@@ -150,6 +174,15 @@ def _verify_worker_managed_relay(
         raise ValueError("pool verification requires at least two chunks")
     if int(max_inflight_chunks) <= 0:
         raise ValueError("max_inflight_chunks must be positive")
+    src_offset = int(src_offset)
+    dst_offset = int(dst_offset)
+    source_size, destination_size = _resolve_verification_buffer_sizes(
+        bytes_to_copy=total_bytes,
+        src_offset=src_offset,
+        dst_offset=dst_offset,
+        source_buffer_bytes=source_buffer_bytes,
+        destination_buffer_bytes=destination_buffer_bytes,
+    )
 
     torch = _require_cuda_environment(target, relay)
     pattern = _make_pattern(total_bytes)
@@ -200,11 +233,12 @@ def _verify_worker_managed_relay(
                 cpu_buffer = allocator.allocate(
                     "verify-cpu-source",
                     job_id,
-                    total_bytes,
+                    source_size,
                 )
-                cpu_buffer.write(pattern)
+                _zero_shared_cpu_buffer(cpu_buffer)
+                cpu_buffer.write(pattern, offset=src_offset)
                 target_tensor = torch.empty(
-                    total_bytes,
+                    destination_size,
                     dtype=torch.uint8,
                     device=f"cuda:{target}",
                 )
@@ -214,7 +248,7 @@ def _verify_worker_managed_relay(
                     buffer_id="verify-gpu-target",
                     job_id=job_id,
                     device_index=target,
-                    size_bytes=total_bytes,
+                    size_bytes=destination_size,
                     device_ptr=int(target_tensor.data_ptr()),
                     backend=default_cuda_backend,
                 )
@@ -222,43 +256,71 @@ def _verify_worker_managed_relay(
                 transfer = transfer_client.fetch_shared_cpu_to_cuda_ipc(
                     cpu_buffer,
                     gpu_buffer,
-                    ranges=({"src_offset": 0, "dst_offset": 0, "bytes": total_bytes},),
+                    ranges=(
+                        {
+                            "src_offset": src_offset,
+                            "dst_offset": dst_offset,
+                            "bytes": total_bytes,
+                        },
+                    ),
                     chunk_bytes=chunk_size,
                     mode=mode,
                     job_id=job_id,
                 )
                 torch.cuda.synchronize(target)
-                _assert_target_matches(torch, target_tensor, pattern)
+                _assert_target_matches(
+                    torch,
+                    target_tensor,
+                    _expected_payload(destination_size, pattern, dst_offset),
+                )
             else:
-                source_tensor = _expected_tensor(torch, pattern).to(
+                source_tensor = torch.empty(
+                    source_size,
+                    dtype=torch.uint8,
+                    device=f"cuda:{target}",
+                )
+                source_tensor.zero_()
+                source_pattern = _expected_tensor(torch, pattern).to(
                     device=f"cuda:{target}"
+                )
+                source_tensor[src_offset : src_offset + total_bytes].copy_(
+                    source_pattern
                 )
                 torch.cuda.synchronize(target)
                 gpu_buffer = CudaIpcDeviceBuffer.from_device_pointer(
                     buffer_id="verify-gpu-source",
                     job_id=job_id,
                     device_index=target,
-                    size_bytes=total_bytes,
+                    size_bytes=source_size,
                     device_ptr=int(source_tensor.data_ptr()),
                     backend=default_cuda_backend,
                 )
                 cpu_buffer = allocator.allocate(
                     "verify-cpu-destination",
                     job_id,
-                    total_bytes,
+                    destination_size,
                 )
-                cpu_buffer.write(bytes(total_bytes))
+                _zero_shared_cpu_buffer(cpu_buffer)
 
                 transfer = transfer_client.offload_cuda_ipc_to_shared_cpu(
                     gpu_buffer,
                     cpu_buffer,
-                    ranges=({"src_offset": 0, "dst_offset": 0, "bytes": total_bytes},),
+                    ranges=(
+                        {
+                            "src_offset": src_offset,
+                            "dst_offset": dst_offset,
+                            "bytes": total_bytes,
+                        },
+                    ),
                     chunk_bytes=chunk_size,
                     mode=mode,
                     job_id=job_id,
                 )
                 torch.cuda.synchronize(target)
-                _assert_shared_cpu_matches(cpu_buffer, pattern)
+                _assert_shared_cpu_matches(
+                    cpu_buffer,
+                    _expected_payload(destination_size, pattern, dst_offset),
+                )
             _assert_transfer_complete(transfer, total_bytes)
 
             daemon_profile = daemon_client.describe()
@@ -301,6 +363,10 @@ def _verify_worker_managed_relay(
                 job_id=job_id,
                 bytes_requested=total_bytes,
                 bytes_completed=transfer.bytes_completed,
+                src_offset=src_offset,
+                dst_offset=dst_offset,
+                source_buffer_bytes=source_size,
+                destination_buffer_bytes=destination_size,
                 target_gpu=target,
                 relay_gpu=relay,
                 state=transfer.state,
@@ -337,6 +403,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--relay-gpu", type=int, default=1)
     parser.add_argument("--bytes", type=int, default=1024 * 1024)
     parser.add_argument("--chunk-bytes", type=int, default=1024 * 1024)
+    parser.add_argument("--src-offset", type=int, default=0)
+    parser.add_argument("--dst-offset", type=int, default=0)
+    parser.add_argument("--source-buffer-bytes", type=int, default=None)
+    parser.add_argument("--destination-buffer-bytes", type=int, default=None)
     parser.add_argument("--max-inflight-chunks", type=int, default=8)
     parser.add_argument("--socket-dir", default=None)
     parser.add_argument("--startup-timeout-seconds", type=float, default=10.0)
@@ -353,6 +423,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         bytes_to_copy=args.bytes,
         chunk_bytes=args.chunk_bytes,
         mode=args.mode,
+        src_offset=args.src_offset,
+        dst_offset=args.dst_offset,
+        source_buffer_bytes=args.source_buffer_bytes,
+        destination_buffer_bytes=args.destination_buffer_bytes,
         max_inflight_chunks=args.max_inflight_chunks,
         socket_dir=args.socket_dir,
         startup_timeout_seconds=args.startup_timeout_seconds,
@@ -479,14 +553,73 @@ def _make_pattern(size_bytes: int) -> bytearray:
     return pattern
 
 
-def _assert_target_matches(torch, target_tensor, pattern: bytearray) -> None:
+def _resolve_verification_buffer_sizes(
+    *,
+    bytes_to_copy: int,
+    src_offset: int,
+    dst_offset: int,
+    source_buffer_bytes: int | None,
+    destination_buffer_bytes: int | None,
+) -> tuple[int, int]:
+    total = int(bytes_to_copy)
+    src_offset = int(src_offset)
+    dst_offset = int(dst_offset)
+    if src_offset < 0 or dst_offset < 0:
+        raise ValueError("range offsets must be non-negative")
+    required_source = src_offset + total
+    required_destination = dst_offset + total
+    source_size = (
+        required_source
+        if source_buffer_bytes is None
+        else int(source_buffer_bytes)
+    )
+    destination_size = (
+        required_destination
+        if destination_buffer_bytes is None
+        else int(destination_buffer_bytes)
+    )
+    if source_size < required_source:
+        raise ValueError("source_buffer_bytes must cover src_offset + bytes_to_copy")
+    if destination_size < required_destination:
+        raise ValueError(
+            "destination_buffer_bytes must cover dst_offset + bytes_to_copy"
+        )
+    return source_size, destination_size
+
+
+def _expected_payload(
+    size_bytes: int,
+    pattern: bytearray,
+    offset: int,
+) -> bytearray:
+    expected = bytearray(int(size_bytes))
+    offset = int(offset)
+    expected[offset : offset + len(pattern)] = pattern
+    return expected
+
+
+def _zero_shared_cpu_buffer(cpu_buffer) -> None:
+    view = cpu_buffer.view
+    try:
+        block_size = min(len(view), 1024 * 1024)
+        if block_size <= 0:
+            return
+        block = b"\x00" * block_size
+        for offset in range(0, len(view), block_size):
+            size = min(block_size, len(view) - offset)
+            view[offset : offset + size] = block[:size]
+    finally:
+        view.release()
+
+
+def _assert_target_matches(torch, target_tensor, expected: bytearray) -> None:
     actual = target_tensor.detach().cpu().contiguous()
-    expected = _expected_tensor(torch, pattern)
-    if torch.equal(actual, expected):
+    expected_tensor = _expected_tensor(torch, expected)
+    if torch.equal(actual, expected_tensor):
         return
-    mismatch = (actual != expected).nonzero(as_tuple=False)
+    mismatch = (actual != expected_tensor).nonzero(as_tuple=False)
     index = int(mismatch[0].item()) if mismatch.numel() else -1
-    expected_value = int(expected[index].item()) if index >= 0 else -1
+    expected_value = int(expected_tensor[index].item()) if index >= 0 else -1
     actual_value = int(actual[index].item()) if index >= 0 else -1
     raise AssertionError(
         "worker-managed H2D relay verification failed at byte "
@@ -494,22 +627,22 @@ def _assert_target_matches(torch, target_tensor, pattern: bytearray) -> None:
     )
 
 
-def _assert_shared_cpu_matches(cpu_buffer, pattern: bytearray) -> None:
+def _assert_shared_cpu_matches(cpu_buffer, expected: bytearray) -> None:
     actual = cpu_buffer.read()
-    expected = bytes(pattern)
-    if actual == expected:
+    expected_bytes = bytes(expected)
+    if actual == expected_bytes:
         return
     mismatch_index = -1
     expected_value = -1
     actual_value = -1
-    for index, (actual_byte, expected_byte) in enumerate(zip(actual, expected)):
+    for index, (actual_byte, expected_byte) in enumerate(zip(actual, expected_bytes)):
         if actual_byte != expected_byte:
             mismatch_index = index
             expected_value = expected_byte
             actual_value = actual_byte
             break
-    if mismatch_index < 0 and len(actual) != len(expected):
-        mismatch_index = min(len(actual), len(expected))
+    if mismatch_index < 0 and len(actual) != len(expected_bytes):
+        mismatch_index = min(len(actual), len(expected_bytes))
     raise AssertionError(
         "worker-managed D2H relay verification failed at byte "
         f"{mismatch_index}: expected {expected_value}, got {actual_value}"
