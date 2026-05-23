@@ -171,6 +171,8 @@ transfer request objects:
 - `WorkerServiceEndpoint.describe()` now summarizes recorded endpoint events
   with total request count, last event, final-state counts, error count, and
   completion count.
+- `WorkerServiceEndpoint.clear_events()` now returns the current describe
+  snapshot, clears recorded endpoint events, and resets `last_event`.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -278,11 +280,13 @@ phase:
     responses.
 36. worker endpoint describe snapshots now summarize recorded message events
     without changing encoded responses.
+37. worker endpoint event reset now clears recorded events after returning the
+    current snapshot.
 
-The next immediate goal is to add a worker endpoint `clear_events()` helper
-that resets recorded request/response events and `last_event` after a snapshot
-has been collected. This should stay in process and leave future encoded
-responses unchanged.
+The next immediate goal is to add an optional worker endpoint event history
+limit so long-running helper processes can bound in-memory observability state.
+The limit should keep the newest retained events, preserve `last_event`, and
+leave encoded responses unchanged.
 
 ## Verification
 
@@ -363,7 +367,9 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
   encoded message handling; done through `WorkerEndpointEvent`;
 - add a worker endpoint describe snapshot for recorded message events; done
   through `WorkerServiceEndpoint.describe()`;
-- add a worker endpoint event reset helper;
+- add a worker endpoint event reset helper; done through
+  `WorkerServiceEndpoint.clear_events()`;
+- add an optional worker endpoint event history limit;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

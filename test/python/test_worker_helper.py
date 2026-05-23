@@ -1447,6 +1447,39 @@ class WorkerHelperTest(unittest.TestCase):
             "parse_failed",
         )
 
+    def test_worker_service_endpoint_clear_events_resets_snapshot(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        endpoint = WorkerServiceEndpoint(daemon_client=daemon_client)
+        request_message = encode_worker_request_envelope(
+            WorkerServiceRequestEnvelope(payload=authorization_request_payload())
+        )
+
+        first_response = endpoint.handle_message(request_message)
+        snapshot = endpoint.clear_events()
+        cleared = endpoint.describe()
+        second_response = endpoint.handle_message(request_message)
+        first_payload = decode_worker_response_envelope(first_response).as_dict()
+        second_payload = decode_worker_response_envelope(second_response).as_dict()
+
+        self.assertEqual(snapshot["total_requests"], 1)
+        self.assertEqual(snapshot["final_state_counts"], {"unsupported": 1})
+        self.assertEqual(snapshot["completion_count"], 1)
+        self.assertEqual(cleared["total_requests"], 0)
+        self.assertIsNone(cleared["last_event"])
+        self.assertEqual(cleared["final_state_counts"], {})
+        self.assertEqual(len(endpoint.events), 1)
+        self.assertEqual(endpoint.last_event.final_state, "unsupported")
+        self.assertEqual(
+            first_payload["final_state"],
+            second_payload["final_state"],
+        )
+        self.assertEqual(
+            first_payload["completion"]["worker_result"]["state"],
+            second_payload["completion"]["worker_result"]["state"],
+        )
+
     def test_worker_service_endpoint_requires_service_or_daemon_client(self) -> None:
         with self.assertRaisesRegex(ValueError, "daemon_client"):
             WorkerServiceEndpoint()

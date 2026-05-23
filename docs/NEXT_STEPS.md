@@ -169,15 +169,19 @@ Current status:
 - worker endpoint `describe()` snapshots now summarize recorded message events,
   including total request count, last event, final-state counts, error count,
   and completion count while staying in process.
+- worker endpoint `clear_events()` now returns the current event snapshot,
+  clears recorded request/response events, and resets `last_event` while
+  leaving future encoded responses unchanged.
 
 Next code cut:
 
-- add a worker endpoint `clear_events()` helper that resets recorded
-  request/response events and `last_event` after a snapshot has been collected;
+- add an optional worker endpoint event history limit so long-running helper
+  processes can bound in-memory observability state while preserving
+  `last_event` and `describe()` summaries for retained events;
 - keep it in process only, with no CUDA IPC, sockets, real data movement, or
   hardware discovery yet;
-- add focused tests that event snapshots remain accurate before reset and that
-  reset does not change future encoded response payloads.
+- add focused tests that the limit drops the oldest retained events, keeps the
+  newest event visible, and does not change encoded response payloads.
 
 ## Upcoming
 

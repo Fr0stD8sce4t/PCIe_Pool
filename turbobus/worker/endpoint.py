@@ -72,6 +72,12 @@ class WorkerServiceEndpoint:
             "completion_count": completion_count,
         }
 
+    def clear_events(self) -> dict[str, object]:
+        snapshot = self.describe()
+        self.events.clear()
+        self.last_event = None
+        return snapshot
+
 
 def _message_size(message: str | bytes) -> int:
     if isinstance(message, bytes):
