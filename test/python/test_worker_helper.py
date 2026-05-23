@@ -1323,6 +1323,7 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertIsNone(snapshot["max_events"])
         self.assertFalse(snapshot["history_bounded"])
         self.assertIsNone(snapshot["last_event"])
+        self.assertEqual(snapshot["events"], ())
         self.assertEqual(snapshot["final_state_counts"], {})
         self.assertEqual(snapshot["error_count"], 0)
         self.assertEqual(snapshot["completion_count"], 0)
@@ -1445,6 +1446,13 @@ class WorkerHelperTest(unittest.TestCase):
             len(status_response.encode("utf-8")),
         )
         self.assertEqual(
+            [event["final_state"] for event in snapshot["events"]],
+            ["unsupported", "parse_failed", "status_failed"],
+        )
+        self.assertTrue(snapshot["events"][0]["has_completion"])
+        self.assertFalse(snapshot["events"][1]["has_completion"])
+        self.assertTrue(snapshot["events"][2]["has_completion"])
+        self.assertEqual(
             decode_worker_response_envelope(success_response).as_dict()["final_state"],
             "unsupported",
         )
@@ -1561,6 +1569,7 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertIsNone(cleared["max_events"])
         self.assertFalse(cleared["history_bounded"])
         self.assertIsNone(cleared["last_event"])
+        self.assertEqual(cleared["events"], ())
         self.assertEqual(cleared["final_state_counts"], {})
         self.assertEqual(len(endpoint.events), 1)
         self.assertEqual(endpoint.last_event.final_state, "unsupported")
@@ -1618,6 +1627,12 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(snapshot["retained_event_count"], 2)
         self.assertEqual(snapshot["max_events"], 2)
         self.assertTrue(snapshot["history_bounded"])
+        self.assertEqual(
+            [event["final_state"] for event in snapshot["events"]],
+            ["parse_failed", "status_failed"],
+        )
+        self.assertFalse(snapshot["events"][0]["has_completion"])
+        self.assertTrue(snapshot["events"][1]["has_completion"])
 
     def test_worker_service_endpoint_rejects_invalid_event_limit(self) -> None:
         daemon_client = FakeDaemonClient(

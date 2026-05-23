@@ -181,15 +181,17 @@ Current status:
 - worker endpoint event snapshots now expose retained `WorkerEndpointEvent`
   records as copied dictionaries for future transports without exposing the
   mutable internal event list.
+- worker endpoint `describe()` snapshots now include retained event records
+  under the stable `events` field for future transport observability clients.
 
 Next code cut:
 
-- include the retained worker endpoint event snapshot inside `describe()` under
-  a stable field for future socket or IPC observability clients;
+- add an in-process worker endpoint health snapshot that summarizes service
+  readiness from retained events for future socket or IPC observability clients;
 - keep it in process only, with no CUDA IPC, sockets, real data movement, or
   hardware discovery yet;
-- add focused tests that empty, bounded, and unbounded describe snapshots expose
-  event records consistently while encoded response payloads stay unchanged.
+- add focused tests for empty endpoints, success-only endpoints, and endpoints
+  with parse/status errors while keeping encoded response payloads unchanged.
 
 ## Upcoming
 

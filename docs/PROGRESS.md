@@ -179,6 +179,8 @@ transfer request objects:
   for `max_events`, retained event count, and whether event history is bounded.
 - `WorkerServiceEndpoint.event_snapshot()` now returns retained endpoint event
   records as copied dictionaries for future transport observability.
+- `WorkerServiceEndpoint.describe()` now includes retained event records under
+  the stable `events` field for future transport observability clients.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -296,9 +298,11 @@ phase:
 40. worker endpoint event snapshots now expose retained events as copied
     dictionaries without giving callers direct access to the mutable event
     list.
+41. worker endpoint describe snapshots now include retained event records under
+    a stable `events` field without changing encoded worker response payloads.
 
-The next immediate goal is to include the retained worker endpoint event
-snapshot inside `describe()` under a stable field for future socket or IPC
+The next immediate goal is to add an in-process worker endpoint health snapshot
+that summarizes service readiness from retained events for future socket or IPC
 observability clients while keeping encoded responses unchanged.
 
 ## Verification
@@ -390,7 +394,10 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
   without giving callers direct access to the mutable event list; done through
   `WorkerServiceEndpoint.event_snapshot()`;
 - include retained endpoint event snapshots in `WorkerServiceEndpoint.describe()`
-  under a stable field for future transport observability clients;
+  under a stable field for future transport observability clients; done through
+  the `events` field;
+- add an in-process worker endpoint health snapshot for future transport
+  observability clients;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

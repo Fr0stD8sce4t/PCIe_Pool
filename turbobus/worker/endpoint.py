@@ -78,6 +78,7 @@ class WorkerServiceEndpoint:
             "last_event": (
                 self.last_event.as_dict() if self.last_event is not None else None
             ),
+            "events": self.event_snapshot(),
             "final_state_counts": final_state_counts,
             "error_count": error_count,
             "completion_count": completion_count,
