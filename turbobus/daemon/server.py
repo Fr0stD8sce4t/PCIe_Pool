@@ -424,6 +424,11 @@ class TurboBusDaemon:
                 return DaemonResponse(ok=False, error="lease expired")
             if lease.lease_id not in self._reservations:
                 return DaemonResponse(ok=False, error="lease is not active")
+            transfer_id = self._reservation_transfers.get(lease.lease_id)
+            if transfer_id is not None:
+                status = self._transfer_statuses.get(transfer_id)
+                if status is not None and status.state in _TERMINAL_TRANSFER_STATES:
+                    return DaemonResponse(ok=False, error="transfer is terminal")
             return DaemonResponse(ok=True, payload={"lease_token": asdict(lease)})
 
     def authorize_worker_transfer(

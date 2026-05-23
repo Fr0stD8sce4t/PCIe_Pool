@@ -277,6 +277,9 @@ Completed current code cut:
 - Reject worker authorization after a daemon transfer has reached a terminal
   state. Failed, canceled, or completed transfers can no longer receive a
   helper execution context even if the relay lease has not been cleaned yet.
+- Reject lease validation after a daemon transfer has reached a terminal
+  state. A failed, canceled, or completed transfer can no longer present its
+  still-active lease as valid while reservation cleanup is pending.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -321,6 +324,7 @@ Completed current code cut:
      worker-handle construction time.
    - Reject malformed CUDA IPC handles again at backend export/open time before
      native CUDA IPC calls.
+   - Reject lease validation after the daemon-owned transfer status is terminal.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor

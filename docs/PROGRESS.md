@@ -252,6 +252,10 @@ transfer request objects:
 - daemon worker authorization now refuses transfers whose daemon-owned status
   is already terminal, preventing failed, canceled, or completed transfers from
   receiving a helper execution context.
+- daemon lease validation now also refuses leases for transfers whose
+  daemon-owned status is already terminal. A failed, canceled, or completed
+  worker-managed transfer cannot keep validating its lease while relay
+  reservation cleanup is still pending.
 
 ## What Was Updated
 
@@ -798,6 +802,9 @@ phase:
     lease or handle authorization. A failed, canceled, or completed transfer
     cannot receive a helper execution context even if relay cleanup has not
     finished yet.
+90. daemon lease validation now rejects terminal transfer statuses too. This
+    keeps failed, canceled, and completed transfers from presenting a still-
+    active lease as valid before cleanup releases the relay reservation.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
