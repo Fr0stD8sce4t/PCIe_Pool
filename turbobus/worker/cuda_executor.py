@@ -92,26 +92,34 @@ class CudaWorkerExecutor:
         except Exception as exc:
             return _failed_result(request, staging_slot, str(exc))
 
-        bytes_completed = _stats_int(stats, "bytes", request.data_plane.staging.total_bytes)
+        bytes_completed = _stats_int(stats, "bytes", int(plan_payload["total_bytes"]))
+        direct_chunks = _stats_int(
+            stats,
+            "direct_chunks",
+            _assignment_chunk_count(plan_payload, "direct"),
+        )
+        relay_chunks = _stats_int(
+            stats,
+            "relay_chunks",
+            _assignment_chunk_count(plan_payload, "relay"),
+        )
         return WorkerTransferResult(
             transfer_id=request.transfer_id,
             state=WorkerTransferState.COMPLETE,
             bytes_completed=bytes_completed,
             metadata={
                 "executor": "cuda_worker",
-                "path": "relay_h2d",
+                "path": "pool_h2d" if direct_chunks > 0 else "relay_h2d",
                 "plan_source": "daemon",
                 "relay_gpu": request.data_plane.relay_gpu,
                 "target_device": int(target_device),
                 "src_buffer_id": request.data_plane.src_handle.buffer_id,
                 "dst_buffer_id": request.data_plane.dst_handle.buffer_id,
                 "staging_slot_id": staging_slot.slot_id,
+                "direct_bytes": _stats_int(stats, "direct_bytes", 0),
+                "direct_chunks": direct_chunks,
                 "relay_bytes": _stats_int(stats, "relay_bytes", bytes_completed),
-                "relay_chunks": _stats_int(
-                    stats,
-                    "relay_chunks",
-                    len(request.data_plane.ranges),
-                ),
+                "relay_chunks": relay_chunks,
             },
         )
 
@@ -151,19 +159,23 @@ def _relay_scoped_daemon_plan_payload(
         path = assignment.get("path")
         if not isinstance(path, dict):
             raise ValueError("daemon plan assignment path must be a mapping")
-        if str(path.get("kind", "")).lower() != "relay":
-            raise ValueError("CUDA worker executor currently requires a relay-only daemon plan")
+        path_kind = str(path.get("kind", "")).lower()
+        if path_kind not in {"direct", "relay"}:
+            raise ValueError("daemon plan path must be direct or relay")
         if str(path.get("direction", "")).lower() != request.data_plane.direction:
             raise ValueError("daemon plan direction does not match worker request")
-        if int(path.get("relay_device", -1)) != relay_gpu:
-            raise ValueError("daemon plan relay does not match worker lease")
-        relay_path = dict(path)
-        if int(relay_path.get("target_device", target_device)) != int(target_device):
+        plan_path = dict(path)
+        if int(plan_path.get("target_device", target_device)) != int(target_device):
             raise ValueError("daemon plan target does not match worker target")
-        if not bool(relay_path.get("enabled", True)):
+        if not bool(plan_path.get("enabled", True)):
             raise ValueError("daemon plan path is disabled")
-        relay_path["relay_device"] = relay_gpu
-        relay_path["enabled"] = True
+        if path_kind == "relay":
+            if int(plan_path.get("relay_device", -1)) != relay_gpu:
+                raise ValueError("daemon plan relay does not match worker lease")
+            plan_path["relay_device"] = relay_gpu
+        else:
+            plan_path["relay_device"] = -1
+        plan_path["enabled"] = True
         chunks = []
         for chunk in assignment.get("chunks", ()) or ():
             if not isinstance(chunk, dict):
@@ -179,10 +191,11 @@ def _relay_scoped_daemon_plan_payload(
             continue
         chunk_bytes = sum(int(chunk["bytes"]) for chunk in chunks)
         total_bytes += chunk_bytes
-        relay_ranges.extend(chunks)
+        if path_kind == "relay":
+            relay_ranges.extend(chunks)
         assignments.append(
             {
-                "path": relay_path,
+                "path": plan_path,
                 "chunks": chunks,
                 "bytes": chunk_bytes,
                 "chunk_count": len(chunks),
@@ -199,6 +212,18 @@ def _relay_scoped_daemon_plan_payload(
         ),
         "assignments": assignments,
     }
+
+
+def _assignment_chunk_count(plan_payload: dict[str, object], path_kind: str) -> int:
+    total = 0
+    for assignment in plan_payload.get("assignments", ()) or ():
+        path = assignment.get("path") if isinstance(assignment, dict) else None
+        if not isinstance(path, dict):
+            continue
+        if str(path.get("kind", "")).lower() != path_kind:
+            continue
+        total += len(assignment.get("chunks", ()) or ())
+    return total
 
 
 def _validate_request_and_slot(

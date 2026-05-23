@@ -18,11 +18,23 @@ class FakeRuntime:
 
 class FakeStats:
     bytes = 16
+    direct_bytes = 0
+    direct_chunks = 0
     relay_bytes = 16
     relay_chunks = 1
 
 
+class FakePoolStats:
+    bytes = 64
+    direct_bytes = 16
+    direct_chunks = 1
+    relay_bytes = 48
+    relay_chunks = 3
+
+
 class FakeBackend:
+    stats_result = FakeStats()
+
     def __init__(self) -> None:
         self.plan_payloads = []
         self.create_runtime_options = []
@@ -61,7 +73,7 @@ class FakeBackend:
 
     def stats(self, runtime, handle):
         self.stats_calls.append((runtime, handle))
-        return FakeStats()
+        return self.stats_result
 
 
 class FakeCpuBuffer:
@@ -93,10 +105,48 @@ def relay_plan(direction: str = "h2d") -> dict[str, object]:
     }
 
 
+def pool_plan() -> dict[str, object]:
+    return {
+        "total_bytes": 64,
+        "chunk_bytes": 16,
+        "assignments": [
+            {
+                "path": {
+                    "kind": "direct",
+                    "direction": "h2d",
+                    "target_device": 0,
+                    "relay_device": -1,
+                    "enabled": True,
+                },
+                "chunks": [{"src_offset": 0, "dst_offset": 0, "bytes": 16}],
+                "bytes": 16,
+                "chunk_count": 1,
+            },
+            {
+                "path": {
+                    "kind": "relay",
+                    "direction": "h2d",
+                    "target_device": 0,
+                    "relay_device": 1,
+                    "enabled": True,
+                },
+                "chunks": [
+                    {"src_offset": 16, "dst_offset": 16, "bytes": 16},
+                    {"src_offset": 32, "dst_offset": 32, "bytes": 16},
+                    {"src_offset": 48, "dst_offset": 48, "bytes": 16},
+                ],
+                "bytes": 48,
+                "chunk_count": 3,
+            },
+        ],
+    }
+
+
 def worker_request(
     direction: str = "h2d",
     *,
     plan: dict[str, object] | None = None,
+    ranges=({"src_offset": 4, "dst_offset": 8, "bytes": 16},),
 ) -> WorkerTransferRequest:
     if plan is None:
         plan = relay_plan(direction)
@@ -128,7 +178,7 @@ def worker_request(
             metadata={"cuda_ipc_handle": (b"t" * 64).hex()},
         ),
         direction=direction,
-        ranges=({"src_offset": 4, "dst_offset": 8, "bytes": 16},),
+        ranges=ranges,
         relay_gpu=1,
         plan=plan,
     )
@@ -196,6 +246,41 @@ class CudaWorkerExecutorTest(unittest.TestCase):
 
         self.assertEqual(result.state, WorkerTransferState.FAILED)
         self.assertIn("daemon-issued transfer plan", result.error)
+
+    def test_executor_runs_h2d_pool_plan_and_waits(self) -> None:
+        request = worker_request(
+            plan=pool_plan(),
+            ranges=(
+                {"src_offset": 16, "dst_offset": 16, "bytes": 16},
+                {"src_offset": 32, "dst_offset": 32, "bytes": 16},
+                {"src_offset": 48, "dst_offset": 48, "bytes": 16},
+            ),
+        )
+        slot = WorkerStagingPool(slot_id_factory=lambda: "staging-1").allocate(
+            request.data_plane
+        )
+        resources = WorkerDataPlaneResources(
+            request=request.data_plane,
+            source_cpu_buffer=FakeCpuBuffer(),
+            target_device_ptr=2000,
+            target_device_bytes=64,
+            cuda_host_registered=True,
+        )
+        backend = FakeBackend()
+        backend.stats_result = FakePoolStats()
+        executor = CudaWorkerExecutor(backend=backend)
+
+        result = executor.execute_bound(request, slot, resources)
+
+        self.assertEqual(result.state, WorkerTransferState.COMPLETE)
+        self.assertEqual(result.bytes_completed, 64)
+        self.assertEqual(result.metadata["path"], "pool_h2d")
+        self.assertEqual(result.metadata["direct_bytes"], 16)
+        self.assertEqual(result.metadata["direct_chunks"], 1)
+        self.assertEqual(result.metadata["relay_bytes"], 48)
+        self.assertEqual(result.metadata["relay_chunks"], 3)
+        self.assertEqual(backend.plan_payloads, [pool_plan()])
+        self.assertEqual(backend.initialize_calls[0][1:], (0, [1]))
 
     def test_executor_rejects_d2h_until_worker_path_exists(self) -> None:
         request = worker_request(direction="d2h")

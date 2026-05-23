@@ -117,6 +117,11 @@ Completed current code cut:
   ranges from that plan during authorization, returns the plan with the worker
   context, and the CUDA worker executor refuses to execute without a
   daemon-issued plan.
+- Extend the worker-managed H2D path to daemon-issued pool plans. The client
+  accepts a single-relay `direct + relay` daemon plan, the daemon still derives
+  only relay authorization ranges from its stored plan, and the CUDA worker
+  executor submits the complete daemon plan so direct and relay chunks run in
+  one native exact-plan transfer.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -134,7 +139,9 @@ Completed current code cut:
 
 3. Extend the worker executor only after the functional call works.
    - Add D2H through the same resource binding path.
-   - Add pooled direct-plus-relay execution through daemon-issued chunks.
+   - Add pooled direct-plus-relay execution through daemon-issued chunks; done
+     for the narrow H2D single-relay worker-managed path, pending CUDA-server
+     byte verification.
    - Keep the executor limited to daemon-authorized plans and handles.
 
 ## Defer For Now

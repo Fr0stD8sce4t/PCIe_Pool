@@ -242,13 +242,14 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
         )
         self.assertEqual(executor.requests[0].data_plane.plan, result.plan["plan"])
 
-    def test_worker_managed_transfer_rejects_pool_plan_and_releases_lease(self) -> None:
+    def test_worker_managed_transfer_accepts_pool_plan_from_daemon(self) -> None:
         daemon = daemon_with_relay_path()
+        executor = CompleteExecutor()
         transfer_client = make_worker_managed_transfer_client(
             daemon,
             target_gpu=0,
             relay_gpus=[1],
-            worker_client=WorkerTransferClient(daemon, executor=CompleteExecutor()),
+            worker_client=WorkerTransferClient(daemon, executor=executor),
             max_inflight_chunks=8,
         )
         allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-client-worker-test")
@@ -263,15 +264,32 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
                 backend=FakeCudaBackend(),
             )
 
-            with self.assertRaisesRegex(RuntimeError, "relay-only daemon plan"):
-                transfer_client.fetch_shared_cpu_to_cuda_ipc(
-                    source,
-                    target,
-                    ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 64},),
-                    chunk_bytes=16,
-                    mode="pool",
-                )
+            result = transfer_client.fetch_shared_cpu_to_cuda_ipc(
+                source,
+                target,
+                ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 64},),
+                chunk_bytes=16,
+                mode="pool",
+            )
 
+        self.assertEqual(result.state, "complete")
+        self.assertEqual(result.plan["stats"]["resolved_mode"], "pool")
+        self.assertEqual(result.authorization_request.ranges, ())
+        self.assertEqual(
+            tuple(executor.requests[0].authorization.ranges),
+            tuple(
+                chunk
+                for assignment in result.plan["plan"]["assignments"]
+                if assignment["path"]["kind"] == "relay"
+                for chunk in _worker_ranges(assignment["chunks"])
+            ),
+        )
+        self.assertTrue(
+            any(
+                assignment["path"]["kind"] == "direct"
+                for assignment in executor.requests[0].data_plane.plan["assignments"]
+            )
+        )
         profile = daemon.describe().payload
         self.assertEqual(profile["reservations"], {})
         self.assertEqual(profile["relay_quotas"][1]["active_chunks"], 0)
@@ -476,6 +494,17 @@ def daemon_with_relay_path() -> TurboBusDaemon:
         },
     )
     return daemon
+
+
+def _worker_ranges(chunks) -> tuple[dict[str, int], ...]:
+    return tuple(
+        {
+            "src_offset": int(chunk["src_offset"]),
+            "dst_offset": int(chunk["dst_offset"]),
+            "bytes": int(chunk["bytes"]),
+        }
+        for chunk in chunks
+    )
 
 
 def _wait_for_socket(test_case: unittest.TestCase, socket_path: str) -> None:

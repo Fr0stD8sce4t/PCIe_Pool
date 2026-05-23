@@ -78,6 +78,10 @@ transfer request objects:
 - `CudaWorkerExecutor` now requires a daemon-issued plan in the worker
   data-plane request and builds its native H2D relay plan from the authorized
   daemon-plan chunks instead of reconstructing a relay plan from worker ranges;
+- the worker-managed H2D path now accepts a daemon-issued single-relay pool
+  plan. The daemon still authorizes only the relay chunks for the lease, while
+  the worker CUDA executor submits the complete daemon plan so direct and relay
+  H2D chunks can execute together through the native exact-plan path;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -291,6 +295,9 @@ transfer request objects:
   daemon-stored transfer plans flowing through worker authorization into the
   data-plane executor, with client-supplied worker ranges no longer acting as
   authority.
+- Added worker CUDA executor and worker-managed client coverage for
+  daemon-issued H2D pool plans that contain both direct chunks and the leased
+  relay chunks.
 
 ## Immediate Goal
 
@@ -439,6 +446,10 @@ phase:
     derives the authorized relay chunks from its own plan, returns that plan to
     the worker data-plane request, and the CUDA worker executor requires that
     daemon-issued plan before submitting native H2D relay work.
+50. the worker-managed H2D path now handles a narrow pooled plan. A single
+    daemon lease still scopes the relay chunks, but the worker CUDA executor
+    consumes the complete daemon-issued direct-plus-relay plan and submits it
+    as one native exact-plan H2D transfer.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
@@ -449,7 +460,8 @@ The next code should verify the worker-managed H2D relay call on a CUDA server
 through the helper socket by running `python -m turbobus.verification`. If it
 fails, the next code should fix the failing real data-path layer before adding
 new functionality. If it passes, the next functional expansion should be
-pooled direct-plus-relay worker execution through the same daemon plan path.
+deeper direct-plus-relay verification and then D2H support through the same
+daemon plan path.
 
 ## Verification
 

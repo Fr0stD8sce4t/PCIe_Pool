@@ -124,7 +124,7 @@ class WorkerManagedTransferClient:
         _require_ok(planned, "daemon transfer planning failed")
         lease_token = _single_lease_token(self.daemon_client, planned)
         try:
-            _require_relay_only_worker_h2d_plan(planned.payload, lease_token)
+            _require_single_relay_worker_h2d_plan(planned.payload, lease_token)
         except Exception:
             _cleanup_planned_relay_lease(self.daemon_client, lease_token)
             raise
@@ -228,7 +228,7 @@ def _single_lease_token(daemon_client, response: DaemonResponse) -> Mapping[str,
     return dict(lease_tokens[0])
 
 
-def _require_relay_only_worker_h2d_plan(
+def _require_single_relay_worker_h2d_plan(
     plan_payload: Mapping[str, object],
     lease_token: Mapping[str, object],
 ) -> None:
@@ -246,14 +246,16 @@ def _require_relay_only_worker_h2d_plan(
         path_kind = str(path.get("kind", "")).lower()
         path_direction = str(path.get("direction", "")).lower()
         assignment_relay = int(path.get("relay_device", -1))
-        if (
-            path_kind != "relay"
-            or path_direction != "h2d"
-            or assignment_relay != relay_gpu
-        ):
+        if path_direction != "h2d":
             raise RuntimeError(
-                "worker-managed H2D transfer currently requires a relay-only "
-                "daemon plan for the leased relay"
+                "worker-managed transfer currently supports only daemon H2D plans"
+            )
+        if path_kind == "direct":
+            continue
+        if path_kind != "relay" or assignment_relay != relay_gpu:
+            raise RuntimeError(
+                "worker-managed H2D transfer currently supports direct chunks "
+                "plus the leased relay only"
             )
         if assignment.get("chunks"):
             found_relay_chunks = True
