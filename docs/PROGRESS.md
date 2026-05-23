@@ -293,6 +293,11 @@ transfer request objects:
   reservation. A helper response that reports copied bytes and daemon status
   but omits reservation release evidence is rejected before the client accepts
   the transfer as complete.
+- worker-managed client completion handling now also requires complete helper
+  envelopes to carry a matching inactive staging release record. A helper
+  response that proves daemon completion and reservation release but omits
+  worker-local relay staging cleanup evidence is rejected before client
+  completion.
 
 ## What Was Updated
 
@@ -873,6 +878,11 @@ phase:
     release evidence for complete helper results. A helper completion envelope
     that omits the release response, reports a failed release, or reports a
     release for another reservation is rejected before the client accepts the
+    transfer as complete.
+98. worker-managed client completion envelopes now require worker-local staging
+    release evidence for complete helper results. A helper completion envelope
+    that omits the staging release, leaves it active, or reports release for
+    another transfer or lease is rejected before the client accepts the
     transfer as complete.
 
 The next immediate goal has changed: stop extending the unsupported

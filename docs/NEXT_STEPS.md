@@ -314,6 +314,10 @@ Completed current code cut:
   daemon release response for the relay reservation. A helper response that
   reports copied bytes and daemon status but omits reservation release evidence
   is rejected before the client accepts the transfer as complete.
+- Require complete worker/helper completion envelopes to include a matching
+  inactive staging release record. A helper response that reports daemon
+  completion and reservation release but does not prove the worker-local relay
+  staging slot was released is rejected before client completion.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -374,6 +378,8 @@ Completed current code cut:
      execution.
    - Reject complete worker/helper completion envelopes that do not include a
      successful daemon release response for the relay reservation.
+   - Reject complete worker/helper completion envelopes that do not include a
+     matching inactive worker staging release record.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor

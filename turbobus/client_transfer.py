@@ -742,6 +742,10 @@ def _require_worker_completion_matches_request(
             completion.daemon_cleanup_response,
             request,
         )
+        _require_worker_staging_release_matches_request(
+            completion.staging_release,
+            request,
+        )
 
 
 def _require_worker_mapping_matches_request(
@@ -819,6 +823,24 @@ def _require_worker_release_response_matches_request(
         raise _WorkerCompletionEnvelopeError(
             "worker daemon release response reservation mismatch"
         )
+
+
+def _require_worker_staging_release_matches_request(
+    release: Mapping[str, object] | None,
+    request: WorkerTransferAuthorizationRequest,
+) -> None:
+    if release is None:
+        raise _WorkerCompletionEnvelopeError(
+            "worker completion missing staging release"
+        )
+    if bool(release.get("active", True)):
+        raise _WorkerCompletionEnvelopeError("worker staging release is still active")
+    transfer_id = release.get("transfer_id")
+    if transfer_id is not None and str(transfer_id) != request.transfer_id:
+        raise _WorkerCompletionEnvelopeError("worker staging release transfer mismatch")
+    lease_id = release.get("lease_id")
+    if lease_id is not None and str(lease_id) != request.lease_id:
+        raise _WorkerCompletionEnvelopeError("worker staging release lease mismatch")
 
 
 def _require_worker_completed_bytes(
