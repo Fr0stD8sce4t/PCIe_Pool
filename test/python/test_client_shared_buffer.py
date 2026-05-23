@@ -67,14 +67,18 @@ class SharedPinnedCpuBufferTest(unittest.TestCase):
         backend = FakeCudaBackend()
 
         with allocator.allocate("cpu-buffer", "job-1", 64) as buffer:
+            self.assertFalse(buffer.closed)
             buffer.register_for_cuda(backend)
             first_address = backend.register_calls[0][0]
+            self.assertTrue(buffer.cuda_registered)
             buffer.register_for_cuda(backend)
             buffer.unregister_from_cuda()
 
             self.assertGreater(first_address, 0)
+            self.assertFalse(buffer.cuda_registered)
             self.assertEqual(backend.register_calls, [(first_address, 64)])
             self.assertEqual(backend.unregister_calls, [first_address])
+        self.assertTrue(buffer.closed)
 
     def test_buffer_can_register_itself_with_daemon(self) -> None:
         allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-test")

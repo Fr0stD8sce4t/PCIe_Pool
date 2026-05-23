@@ -116,6 +116,14 @@ class SharedPinnedCpuBuffer:
             del char
             view.release()
 
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    @property
+    def cuda_registered(self) -> bool:
+        return self._cuda_registered
+
     def write(self, data: bytes | bytearray | memoryview, offset: int = 0) -> None:
         payload = bytes(data)
         offset = int(offset)

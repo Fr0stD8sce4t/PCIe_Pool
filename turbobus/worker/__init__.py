@@ -20,6 +20,12 @@ from .helper import (
     WorkerTransferUnsupportedExecutor,
     parse_worker_authorization_request_payload,
 )
+from .resources import (
+    WorkerDataPlaneResourceBinder,
+    WorkerDataPlaneResourceBinding,
+    WorkerDataPlaneResourceError,
+    WorkerDataPlaneResources,
+)
 from .codec import (
     WorkerMessageCodecError,
     decode_worker_request_envelope,
@@ -54,6 +60,10 @@ __all__ = [
     "build_worker_helper_transport",
     "WorkerDataPlaneCompletion",
     "WorkerDataPlaneCompletionEnvelope",
+    "WorkerDataPlaneResourceBinder",
+    "WorkerDataPlaneResourceBinding",
+    "WorkerDataPlaneResourceError",
+    "WorkerDataPlaneResources",
     "WorkerDataPlaneRequest",
     "WorkerTransferAuthorizer",
     "WorkerTransferClient",

@@ -79,11 +79,14 @@ Completed current code cut:
   cross-process shared-memory backing, emits daemon-ready `shared_pinned_cpu`
   registration metadata, can reopen the same backing from that metadata, and
   exposes CUDA host-register/unregister hooks through the CUDA backend.
+- Open shared pinned CPU handles inside the worker/helper execution lifecycle.
+  A worker data-plane resource binder now reopens the daemon-authorized shared
+  CPU source, registers it with CUDA before executor invocation, and closes it
+  after execution or binding failure.
 
 1. Define the first registered buffer handles.
-   - Open shared pinned CPU handles inside the worker/helper execution path.
-   - Register the opened shared memory for CUDA access before worker copies.
    - Add the first target GPU CUDA IPC handle producer/consumer path.
+   - Pass bound target GPU resources to the future CUDA worker executor.
 
 2. Implement a CUDA worker executor.
    - Replace the default unsupported executor for one narrow path.

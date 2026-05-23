@@ -13,6 +13,11 @@ from ..schema import (
     WorkerTransferAuthorization,
     WorkerTransferAuthorizationRequest,
 )
+from .resources import (
+    WorkerDataPlaneResourceBinder,
+    WorkerDataPlaneResourceError,
+    WorkerDataPlaneResources,
+)
 from .staging_pool import WorkerStagingPool, WorkerStagingSlot
 
 
@@ -594,6 +599,7 @@ class WorkerTransferClient:
         status_reporter: WorkerTransferStatusReporter | None = None,
         cleanup_coordinator: WorkerTransferCleanupCoordinator | None = None,
         staging_pool: WorkerStagingPool | None = None,
+        resource_binder: WorkerDataPlaneResourceBinder | None = None,
     ) -> None:
         self.authorizer = WorkerTransferAuthorizer(daemon_client)
         self.executor = executor or WorkerTransferUnsupportedExecutor()
@@ -604,6 +610,7 @@ class WorkerTransferClient:
             daemon_client
         )
         self.staging_pool = staging_pool or WorkerStagingPool()
+        self.resource_binder = resource_binder
 
     def authorize(
         self,
@@ -618,7 +625,7 @@ class WorkerTransferClient:
         worker_request = self.authorize(request)
         staging_slot = self.staging_pool.allocate(worker_request.data_plane)
         try:
-            return self.executor.execute(worker_request, staging_slot)
+            return self._execute(worker_request, staging_slot)
         finally:
             self.staging_pool.release(staging_slot.slot_id, worker_request.data_plane)
 
@@ -688,7 +695,21 @@ class WorkerTransferClient:
                 error=str(exc),
             )
         staging_slot = self.staging_pool.allocate(worker_request.data_plane)
-        result = self.executor.execute(worker_request, staging_slot)
+        try:
+            result = self._execute(worker_request, staging_slot)
+        except WorkerDataPlaneResourceError as exc:
+            result = WorkerTransferResult(
+                transfer_id=worker_request.transfer_id,
+                state=WorkerTransferState.FAILED,
+                error=str(exc),
+                bytes_completed=0,
+                metadata={
+                    "relay_gpu": worker_request.authorization.relay_gpu,
+                    "src_buffer_id": worker_request.authorization.src_buffer.buffer_id,
+                    "dst_buffer_id": worker_request.authorization.dst_buffer.buffer_id,
+                    "staging_slot_id": staging_slot.slot_id,
+                },
+            )
         status_update = _daemon_status_update_for_result(result)
         try:
             status_response = self.status_reporter.report(result)
@@ -756,6 +777,21 @@ class WorkerTransferClient:
             final_state=result.state.value,
             error=result.error,
         )
+
+    def _execute(
+        self,
+        worker_request: WorkerTransferRequest,
+        staging_slot: WorkerStagingSlot,
+    ) -> WorkerTransferResult:
+        if self.resource_binder is None:
+            return self.executor.execute(worker_request, staging_slot)
+        with self.resource_binder.bind(worker_request.data_plane) as resources:
+            return _execute_worker_transfer(
+                self.executor,
+                worker_request,
+                staging_slot,
+                resources,
+            )
 
 
 class WorkerTransferService:
@@ -888,6 +924,18 @@ def _cleanup_target_id(target_kind: str, lease_id: str, session_id: str) -> str:
     raise ValueError("worker cleanup target must be reservation or session")
 
 
+def _execute_worker_transfer(
+    executor,
+    request: WorkerTransferRequest,
+    staging_slot: WorkerStagingSlot,
+    resources: WorkerDataPlaneResources,
+) -> WorkerTransferResult:
+    execute_bound = getattr(executor, "execute_bound", None)
+    if callable(execute_bound):
+        return execute_bound(request, staging_slot, resources)
+    return executor.execute(request, staging_slot)
+
+
 def _lifecycle_transfer_id(lifecycle: WorkerTransferLifecycleRecord) -> str:
     if lifecycle.result is not None:
         return lifecycle.result.transfer_id
@@ -908,6 +956,9 @@ __all__ = [
     "WorkerCleanupError",
     "WorkerDataPlaneCompletion",
     "WorkerDataPlaneCompletionEnvelope",
+    "WorkerDataPlaneResourceBinder",
+    "WorkerDataPlaneResourceError",
+    "WorkerDataPlaneResources",
     "WorkerDataPlaneRequest",
     "WorkerServiceRequestEnvelope",
     "WorkerServiceResponseEnvelope",

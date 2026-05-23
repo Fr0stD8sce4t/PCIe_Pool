@@ -9,6 +9,7 @@ from turbobus.schema import (
     WorkerTransferAuthorization,
     WorkerTransferAuthorizationRequest,
 )
+from turbobus.client import SharedPinnedCpuBuffer, SharedPinnedCpuBufferAllocator
 from turbobus.daemon.server import TurboBusDaemon
 from turbobus.daemon.topology import (
     DaemonResourceInventory,
@@ -22,6 +23,8 @@ from turbobus.worker import (
     WorkerAuthorizationError,
     WorkerCleanupError,
     WorkerDataPlaneCompletionEnvelope,
+    WorkerDataPlaneResourceBinder,
+    WorkerDataPlaneResources,
     WorkerMessageCodecError,
     WorkerServiceRequestEnvelope,
     WorkerServiceResponseEnvelope,
@@ -48,6 +51,18 @@ from turbobus.worker import (
 )
 
 
+class FakeCudaBackend:
+    def __init__(self) -> None:
+        self.register_calls: list[tuple[int, int]] = []
+        self.unregister_calls: list[int] = []
+
+    def register_host_memory(self, host_ptr: int, bytes_: int) -> None:
+        self.register_calls.append((int(host_ptr), int(bytes_)))
+
+    def unregister_host_memory(self, host_ptr: int) -> None:
+        self.unregister_calls.append(int(host_ptr))
+
+
 def authorization_payload() -> dict:
     authorization = WorkerTransferAuthorization(
         transfer_id="transfer-1",
@@ -67,6 +82,31 @@ def authorization_payload() -> dict:
                 "shared_memory_size_bytes": 64,
             },
         ),
+        dst_buffer=BufferRegistration(
+            buffer_id="gpu-buffer",
+            job_id="job-1",
+            kind="gpu",
+            size_bytes=64,
+            device_index=0,
+            handle_type="cuda_ipc_device",
+            metadata={"cuda_ipc_handle": "ipc-target"},
+        ),
+        direction="h2d",
+        ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
+        relay_gpu=1,
+    )
+    return WorkerTransferRequest(authorization=authorization).as_dict()
+
+
+def authorization_payload_for_shared_cpu(
+    source_buffer: SharedPinnedCpuBuffer,
+) -> dict:
+    authorization = WorkerTransferAuthorization(
+        transfer_id="transfer-1",
+        lease_id="lease-1",
+        session_id="session-1",
+        job_id="job-1",
+        src_buffer=source_buffer.buffer_registration(),
         dst_buffer=BufferRegistration(
             buffer_id="gpu-buffer",
             job_id="job-1",
@@ -777,6 +817,85 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(lifecycle.result.metadata["staging_slot_id"], recorded_slot.slot_id)
         self.assertFalse(lifecycle.staging_release.active)
         self.assertEqual(staging_pool.describe(), {"active_slots": {}})
+
+    def test_worker_client_binds_shared_cpu_source_before_bound_executor(self) -> None:
+        class BoundExecutor:
+            def __init__(self, backend: FakeCudaBackend) -> None:
+                self.backend = backend
+                self.resources: list[WorkerDataPlaneResources] = []
+                self.readbacks: list[bytes] = []
+
+            def execute_bound(
+                self,
+                request: WorkerTransferRequest,
+                staging_slot: WorkerStagingSlot,
+                resources: WorkerDataPlaneResources,
+            ) -> WorkerTransferResult:
+                self.resources.append(resources)
+                self.assert_ready(resources)
+                self.readbacks.append(resources.source_cpu_buffer.read(8))
+                return WorkerTransferResult(
+                    transfer_id=request.transfer_id,
+                    state=WorkerTransferState.COMPLETE,
+                    bytes_completed=16,
+                    metadata={
+                        "source_host_ptr": resources.source_host_ptr,
+                        "staging_slot_id": staging_slot.slot_id,
+                    },
+                )
+
+            def assert_ready(self, resources: WorkerDataPlaneResources) -> None:
+                if not resources.source_cpu_buffer.cuda_registered:
+                    raise AssertionError("shared CPU source was not CUDA registered")
+                if len(self.backend.register_calls) != 1:
+                    raise AssertionError("CUDA host registration did not run first")
+                if self.backend.unregister_calls:
+                    raise AssertionError("CUDA host memory was unregistered too early")
+
+        allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-worker-test")
+        backend = FakeCudaBackend()
+        with allocator.allocate("cpu-buffer", "job-1", 64) as source_buffer:
+            source_buffer.write(b"TurboBus data path")
+            daemon_client = FakeDaemonClient(
+                DaemonResponse(
+                    ok=True,
+                    payload=authorization_payload_for_shared_cpu(source_buffer),
+                )
+            )
+            executor = BoundExecutor(backend)
+            client = WorkerTransferClient(
+                daemon_client,
+                executor=executor,
+                resource_binder=WorkerDataPlaneResourceBinder(backend=backend),
+            )
+
+            lifecycle = client.submit_report_cleanup_lifecycle(authorization_request())
+
+        self.assertEqual(lifecycle.final_state, "complete")
+        self.assertEqual(executor.readbacks, [b"TurboBus"])
+        self.assertEqual(len(executor.resources), 1)
+        self.assertTrue(executor.resources[0].source_cpu_buffer.closed)
+        self.assertEqual(backend.unregister_calls, [backend.register_calls[0][0]])
+        self.assertEqual(lifecycle.status_update["state"], "complete")
+        self.assertEqual(daemon_client.cleanup_requests, [])
+
+    def test_worker_client_reports_resource_binding_failure(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        client = WorkerTransferClient(
+            daemon_client,
+            resource_binder=WorkerDataPlaneResourceBinder(backend=FakeCudaBackend()),
+        )
+
+        lifecycle = client.submit_report_cleanup_lifecycle(authorization_request())
+
+        self.assertEqual(lifecycle.final_state, "failed")
+        self.assertIn("failed to bind shared CPU source buffer", lifecycle.error)
+        self.assertEqual(lifecycle.status_update["state"], "failed")
+        self.assertEqual(daemon_client.status_updates[0]["state"], "failed")
+        self.assertEqual(daemon_client.cleanup_requests[0]["target_id"], "lease-1")
+        self.assertFalse(lifecycle.staging_release.active)
 
     def test_worker_client_lifecycle_authorization_failure_does_not_allocate_staging(self) -> None:
         daemon_client = FakeDaemonClient(DaemonResponse(ok=False, error="denied"))
