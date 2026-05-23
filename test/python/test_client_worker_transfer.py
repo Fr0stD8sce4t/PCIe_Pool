@@ -673,6 +673,51 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
         self.assertEqual(profile["reservations"], {})
         self.assertEqual(profile["relay_quotas"][1]["active_chunks"], 0)
 
+    def test_worker_managed_transfer_cleans_daemon_reservation_on_incomplete_worker_envelope(self) -> None:
+        class IncompleteEnvelopeWorkerClient:
+            def submit_envelope(self, envelope):
+                return WorkerDataPlaneCompletionEnvelope(
+                    ok=True,
+                    transfer_id=str(envelope.payload["transfer_id"]),
+                    lease_id=str(envelope.payload["lease_id"]),
+                    final_state="failed",
+                    error="worker helper did not execute",
+                )
+
+        daemon = daemon_with_relay_path()
+        transfer_client = make_worker_managed_transfer_client(
+            daemon,
+            target_gpu=0,
+            relay_gpus=[1],
+            worker_client=IncompleteEnvelopeWorkerClient(),
+        )
+        allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-client-worker-test")
+
+        with allocator.allocate("cpu-buffer", "job-1", 64) as source:
+            target = CudaIpcDeviceBuffer.from_device_pointer(
+                buffer_id="gpu-buffer",
+                job_id="job-1",
+                device_index=0,
+                size_bytes=64,
+                device_ptr=4096,
+                backend=FakeCudaBackend(),
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "worker helper did not execute"):
+                transfer_client.fetch_shared_cpu_to_cuda_ipc(
+                    source,
+                    target,
+                    ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
+                    chunk_bytes=16,
+                    mode="relay",
+                )
+
+        profile = daemon.describe().payload
+        self.assertEqual(profile["reservations"], {})
+        self.assertEqual(profile["relay_quotas"][1]["active_chunks"], 0)
+        cleanup_events = profile["cleanup_events"]
+        self.assertEqual(cleanup_events[-1]["reason"], "worker_completion_not_complete")
+
     def test_factory_defaults_to_cuda_worker_executor_with_resource_binding(self) -> None:
         daemon = daemon_with_relay_path()
 

@@ -212,6 +212,12 @@ class WorkerManagedTransferClient:
         _require_ok(status, "daemon transfer status query failed")
         final_status = dict(status.payload["status"])
         if worker_execution.final_state != "complete":
+            _cleanup_planned_relay_lease(
+                self.daemon_client,
+                lease_token,
+                reason="worker_completion_not_complete",
+                strict=False,
+            )
             raise RuntimeError(
                 worker_execution.error
                 or final_status.get("error")

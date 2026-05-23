@@ -180,6 +180,10 @@ Completed current code cut:
 - Remove the old daemon benchmark smoke wrapper. The deleted helper only
   launched the legacy daemon plus benchmark clients and parsed status lines; it
   did not exercise the daemon-approved worker/helper data path.
+- Clean daemon relay reservations when the helper boundary returns a
+  non-complete worker completion envelope without raising an exception. The
+  client now treats that as a failed worker-managed transfer and best-effort
+  cleans the daemon reservation with `worker_completion_not_complete`.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -205,6 +209,8 @@ Completed current code cut:
    - Require client-side final status checks after worker/helper completion.
    - Clean daemon relay reservations when worker status reporting fails after
      helper execution.
+   - Clean daemon relay reservations when helper completion envelopes report a
+     non-complete final state.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor

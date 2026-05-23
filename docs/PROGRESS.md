@@ -143,6 +143,10 @@ transfer request objects:
 - the old daemon benchmark smoke wrapper has been removed. It only started the
   legacy daemon plus benchmark clients and parsed status lines, so it no longer
   belongs on the main path toward daemon-approved worker/helper data movement;
+- worker-managed client cleanup now covers helper-boundary completion envelopes
+  that return without raising but report a non-complete final state. The client
+  best-effort cleans the daemon reservation with
+  `worker_completion_not_complete` before surfacing the worker failure;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -596,6 +600,11 @@ phase:
     removed. The remaining verification direction is the worker-managed
     helper-socket path in `turbobus.verification`, not the legacy benchmark
     client loop.
+66. worker-managed client cleanup now covers non-complete helper completion
+    envelopes that return normally. The client cleans the daemon reservation
+    with `worker_completion_not_complete` before raising the worker failure,
+    preventing an active relay lease from being left behind by a failed helper
+    response.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
