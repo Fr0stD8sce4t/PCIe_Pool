@@ -251,6 +251,24 @@ class DaemonSocketTest(unittest.TestCase):
             )
             self.assertTrue(registered.ok)
             session_id = registered.payload["session"]["session_id"]
+            job = client.register_job(job_id="job-1", session_id=session_id)
+            self.assertTrue(job.ok)
+            cpu_buffer = client.register_buffer(
+                buffer_id="cpu-buffer",
+                job_id="job-1",
+                kind="cpu_pinned",
+                size_bytes=64,
+                pinned=True,
+            )
+            gpu_buffer = client.register_buffer(
+                buffer_id="gpu-buffer",
+                job_id="job-1",
+                kind="gpu",
+                size_bytes=64,
+                device_index=0,
+            )
+            self.assertTrue(cpu_buffer.ok)
+            self.assertTrue(gpu_buffer.ok)
             stored = client.put_profile(
                 target_gpu=0,
                 relay_gpus=[1],
@@ -281,6 +299,8 @@ class DaemonSocketTest(unittest.TestCase):
                     chunk_bytes=16,
                     mode="pool",
                     direction="h2d",
+                    job_id="job-1",
+                    metadata={"buffer_ids": ["cpu-buffer", "gpu-buffer"]},
                 ),
             )
 
@@ -299,6 +319,8 @@ class DaemonSocketTest(unittest.TestCase):
                 token=lease_token["token"],
                 session_id=session_id,
                 relay_gpu=1,
+                job_id="job-1",
+                buffer_ids=["cpu-buffer", "gpu-buffer"],
             )
             self.assertTrue(validated.ok)
 

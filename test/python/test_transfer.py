@@ -100,6 +100,18 @@ class TransferRequestTest(unittest.TestCase):
         self.assertEqual(resolved.ranges, request.ranges)
         self.assertEqual(resolved.as_dict()["metadata"], {"adapter": "vllm"})
 
+    def test_daemon_payload_includes_registered_buffer_ids_from_metadata(self) -> None:
+        request = TransferRequest(
+            total_bytes=16,
+            chunk_bytes=16,
+            direction="h2d",
+            metadata={"buffer_ids": ("cpu-buffer", "gpu-buffer")},
+        )
+
+        payload = request.daemon_payload()
+
+        self.assertEqual(payload["buffer_ids"], ["cpu-buffer", "gpu-buffer"])
+
 
 if __name__ == "__main__":
     unittest.main()

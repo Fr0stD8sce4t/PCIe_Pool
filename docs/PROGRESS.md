@@ -69,6 +69,9 @@ transfer request objects:
   relay leases, stores them internally, invalidates them on release or cleanup,
   and validates them through a `VALIDATE_LEASE` request for future worker/helper
   use.
+- `TransferRequest` can now send registered buffer ids to the daemon, and
+  `VALIDATE_LEASE` can check those buffer ids against the lease token plus the
+  owning job and session.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -103,10 +106,13 @@ phase:
 9. daemon-issued relay reservations now have lease tokens that can be validated
    without exposing the daemon's internal lease-token table through profile
    snapshots.
+10. lease validation now ties relay permission to registered transfer buffers,
+    job ownership, and session ownership.
 
-The next immediate goal is to connect lease validation to registered transfer
-buffers and job/session ownership. This continues the privileged-daemon work,
-but does not add worker execution yet.
+The next immediate goal is to add a worker-facing transfer authorization request
+shape that carries the validated lease token, transfer id, buffer ids,
+direction, and range metadata. This continues the privileged-daemon work, but
+does not add worker execution yet.
 
 ## Verification
 
@@ -137,7 +143,8 @@ $env:PYTHONPATH='.'; python test/python/test_vllm_kv_connector_sweep.py
 
 - define daemon protocol records for job identity, buffer registration,
   lease tokens, and worker-facing cleanup;
-- tie lease validation to registered CPU/GPU buffers and ownership checks;
+- add a worker-facing authorization request/response shape for future helper
+  execution;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

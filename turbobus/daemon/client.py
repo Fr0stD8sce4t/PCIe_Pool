@@ -60,6 +60,58 @@ class TurboBusDaemonClient:
             )
         )
 
+    def register_job(
+        self,
+        job_id: str,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        container_id: str | None = None,
+        process_id: int | None = None,
+    ) -> DaemonResponse:
+        payload: dict[str, object] = {"job_id": str(job_id)}
+        if user_id is not None:
+            payload["user_id"] = str(user_id)
+        if session_id is not None:
+            payload["session_id"] = str(session_id)
+        if container_id is not None:
+            payload["container_id"] = str(container_id)
+        if process_id is not None:
+            payload["process_id"] = int(process_id)
+        return self.send(
+            DaemonRequest(
+                request_type=RequestType.REGISTER_JOB,
+                payload=payload,
+            )
+        )
+
+    def register_buffer(
+        self,
+        buffer_id: str,
+        job_id: str,
+        kind: str,
+        size_bytes: int,
+        device_index: int | None = None,
+        address: int | None = None,
+        pinned: bool = False,
+    ) -> DaemonResponse:
+        payload: dict[str, object] = {
+            "buffer_id": str(buffer_id),
+            "job_id": str(job_id),
+            "kind": str(kind),
+            "size_bytes": int(size_bytes),
+            "pinned": bool(pinned),
+        }
+        if device_index is not None:
+            payload["device_index"] = int(device_index)
+        if address is not None:
+            payload["address"] = int(address)
+        return self.send(
+            DaemonRequest(
+                request_type=RequestType.REGISTER_BUFFER,
+                payload=payload,
+            )
+        )
+
     def reserve_transfer(
         self,
         session_id: str,
@@ -149,6 +201,7 @@ class TurboBusDaemonClient:
         session_id: str | None = None,
         relay_gpu: int | None = None,
         job_id: str | None = None,
+        buffer_ids: list[str] | None = None,
     ) -> DaemonResponse:
         payload: dict[str, object] = {
             "lease_id": str(lease_id),
@@ -160,6 +213,8 @@ class TurboBusDaemonClient:
             payload["relay_gpu"] = int(relay_gpu)
         if job_id is not None:
             payload["job_id"] = str(job_id)
+        if buffer_ids is not None:
+            payload["buffer_ids"] = [str(buffer_id) for buffer_id in buffer_ids]
         return self.send(
             DaemonRequest(
                 request_type=RequestType.VALIDATE_LEASE,

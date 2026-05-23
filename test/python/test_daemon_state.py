@@ -540,6 +540,162 @@ class DaemonStateTest(unittest.TestCase):
         self.assertFalse(inactive.ok)
         self.assertIn("unknown lease", inactive.error)
 
+    def test_plan_transfer_lease_validation_checks_registered_buffer_ownership(self) -> None:
+        daemon = TurboBusDaemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=1,
+            max_inflight_chunks_per_relay=8,
+        )
+        register = daemon.register_session(
+            target_gpu=0,
+            requested_relays=[1],
+            max_inflight_chunks=8,
+        )
+        session_id = register.payload["session"]["session_id"]
+        job = daemon.register_job(job_id="job-1", session_id=session_id)
+        self.assertTrue(job.ok)
+        cpu_buffer = daemon.register_buffer(
+            buffer_id="cpu-buffer",
+            job_id="job-1",
+            kind="cpu_pinned",
+            size_bytes=64,
+            pinned=True,
+        )
+        gpu_buffer = daemon.register_buffer(
+            buffer_id="gpu-buffer",
+            job_id="job-1",
+            kind="gpu",
+            size_bytes=64,
+            device_index=0,
+        )
+        self.assertTrue(cpu_buffer.ok)
+        self.assertTrue(gpu_buffer.ok)
+        daemon.register_job(job_id="other-job", session_id=session_id)
+        other_buffer = daemon.register_buffer(
+            buffer_id="other-buffer",
+            job_id="other-job",
+            kind="cpu_pinned",
+            size_bytes=64,
+            pinned=True,
+        )
+        self.assertTrue(other_buffer.ok)
+        daemon.put_profile(
+            target_gpu=0,
+            relay_gpus=[1],
+            profile={
+                "target_device": 0,
+                "direct_h2d_bw_gbps": 7.5,
+                "direct_d2h_bw_gbps": 6.5,
+                "relays": [
+                    {
+                        "relay_device": 1,
+                        "target_device": 0,
+                        "h2d_bw_gbps": 7.5,
+                        "d2h_bw_gbps": 6.5,
+                        "p2p_bw_gbps": 40.0,
+                        "effective_bw_gbps": 7.5,
+                        "effective_d2h_bw_gbps": 6.5,
+                        "p2p_enabled": True,
+                    }
+                ],
+            },
+        )
+
+        planned = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.PLAN_TRANSFER,
+                session_id=session_id,
+                payload={
+                    "total_bytes": 64,
+                    "chunk_bytes": 16,
+                    "mode": "pool",
+                    "direction": "h2d",
+                    "job_id": "job-1",
+                    "buffer_ids": ["cpu-buffer", "gpu-buffer"],
+                },
+            )
+        )
+
+        self.assertTrue(planned.ok)
+        lease_token = planned.payload["lease_tokens"][0]
+        self.assertEqual(
+            lease_token["buffer_ids"],
+            ("cpu-buffer", "gpu-buffer"),
+        )
+        validated = daemon.validate_lease(
+            lease_id=lease_token["lease_id"],
+            token=lease_token["token"],
+            session_id=session_id,
+            relay_gpu=1,
+            job_id="job-1",
+            buffer_ids=["cpu-buffer", "gpu-buffer"],
+        )
+        self.assertTrue(validated.ok)
+
+        wrong_buffer = daemon.validate_lease(
+            lease_id=lease_token["lease_id"],
+            token=lease_token["token"],
+            session_id=session_id,
+            relay_gpu=1,
+            job_id="job-1",
+            buffer_ids=["other-buffer"],
+        )
+        self.assertFalse(wrong_buffer.ok)
+        self.assertIn("lease buffer mismatch", wrong_buffer.error)
+
+        wrong_owner = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.PLAN_TRANSFER,
+                session_id=session_id,
+                payload={
+                    "total_bytes": 64,
+                    "chunk_bytes": 16,
+                    "mode": "pool",
+                    "direction": "h2d",
+                    "job_id": "job-1",
+                    "buffer_ids": ["other-buffer"],
+                },
+            )
+        )
+        self.assertFalse(wrong_owner.ok)
+        self.assertIn("buffer owner", wrong_owner.error)
+
+        other_session = daemon.register_session(
+            target_gpu=2,
+            requested_relays=[],
+            max_inflight_chunks=8,
+        )
+        other_session_id = other_session.payload["session"]["session_id"]
+        cross_session_job = daemon.register_job(
+            job_id="cross-session-job",
+            session_id=other_session_id,
+        )
+        self.assertTrue(cross_session_job.ok)
+        cross_session_buffer = daemon.register_buffer(
+            buffer_id="cross-session-buffer",
+            job_id="cross-session-job",
+            kind="cpu_pinned",
+            size_bytes=64,
+            pinned=True,
+        )
+        self.assertTrue(cross_session_buffer.ok)
+        wrong_session = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.PLAN_TRANSFER,
+                session_id=session_id,
+                payload={
+                    "total_bytes": 64,
+                    "chunk_bytes": 16,
+                    "mode": "pool",
+                    "direction": "h2d",
+                    "job_id": "cross-session-job",
+                    "buffer_ids": ["cross-session-buffer"],
+                },
+            )
+        )
+        self.assertFalse(wrong_session.ok)
+        self.assertIn("job session", wrong_session.error)
+
     def test_plan_transfer_records_and_completes_transfer_status(self) -> None:
         daemon = TurboBusDaemon(
             relay_gpus=[1],

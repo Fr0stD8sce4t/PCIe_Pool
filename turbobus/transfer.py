@@ -124,6 +124,9 @@ class TransferRequest:
             payload["job_id"] = self.job_id
         if self.ranges:
             payload["ranges"] = [item.as_dict() for item in self.ranges]
+        buffer_ids = self.metadata.get("buffer_ids")
+        if buffer_ids is not None:
+            payload["buffer_ids"] = [str(buffer_id) for buffer_id in buffer_ids]
         return payload
 
     def as_dict(self) -> dict[str, object]:

@@ -114,6 +114,7 @@ class LeaseToken:
     session_id: str
     relay_gpu: int
     token: str
+    buffer_ids: tuple[str, ...] = field(default_factory=tuple)
     job_id: str | None = None
     issued_at: float = 0.0
     expires_at: float = 0.0
@@ -128,6 +129,9 @@ class LeaseToken:
         token = str(self.token)
         if not token.strip():
             raise ValueError("token must be non-empty")
+        buffer_ids = tuple(str(buffer_id) for buffer_id in self.buffer_ids)
+        if any(not buffer_id.strip() for buffer_id in buffer_ids):
+            raise ValueError("buffer_ids must be non-empty when provided")
         issued_at = float(self.issued_at)
         expires_at = float(self.expires_at)
         if expires_at and expires_at < issued_at:
@@ -136,6 +140,7 @@ class LeaseToken:
         object.__setattr__(self, "session_id", str(self.session_id))
         object.__setattr__(self, "relay_gpu", int(self.relay_gpu))
         object.__setattr__(self, "token", token)
+        object.__setattr__(self, "buffer_ids", buffer_ids)
         if self.job_id is not None:
             object.__setattr__(self, "job_id", str(self.job_id))
         object.__setattr__(self, "issued_at", issued_at)

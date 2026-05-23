@@ -130,6 +130,7 @@ class SchemaTest(unittest.TestCase):
             session_id="session-1",
             relay_gpu=1,
             token="token-1",
+            buffer_ids=("cpu-buffer", "gpu-buffer"),
             job_id="job-1",
             issued_at=1.5,
             expires_at=2.5,
@@ -165,6 +166,7 @@ class SchemaTest(unittest.TestCase):
         self.assertEqual(payload["buffer_registration"]["kind"], "cpu_pinned")
         self.assertEqual(payload["lease"]["relay_gpu"], 1)
         self.assertEqual(payload["lease"]["token"], "token-1")
+        self.assertEqual(payload["lease"]["buffer_ids"], ["cpu-buffer", "gpu-buffer"])
         self.assertEqual(payload["status"]["state"], "running")
         self.assertTrue(payload["cleanup"]["force"])
 
@@ -193,6 +195,14 @@ class SchemaTest(unittest.TestCase):
                 session_id="session-1",
                 relay_gpu=1,
                 token="",
+            )
+        with self.assertRaises(ValueError):
+            LeaseToken(
+                lease_id="lease-1",
+                session_id="session-1",
+                relay_gpu=1,
+                token="token-1",
+                buffer_ids=("",),
             )
         with self.assertRaises(ValueError):
             TransferStatus(

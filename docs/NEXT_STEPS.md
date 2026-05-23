@@ -66,11 +66,15 @@ Current status:
 - daemon-issued relay reservations now carry unguessable lease tokens, and the
   daemon exposes a `VALIDATE_LEASE` request that future worker/helper code can
   use before touching relay resources.
+- transfer requests can now carry registered buffer ids, and daemon lease
+  validation checks the lease token, job, session, relay, and authorized buffer
+  ids together.
 
 Next code cut:
 
-- connect lease validation to registered transfer buffers and job/session
-  ownership so worker/helper code can check more than the bearer token;
+- add a worker-facing transfer authorization request shape that packages the
+  validated lease token, transfer id, source/destination buffer ids, direction,
+  and range metadata without adding worker execution yet;
 - keep the daemon as the owner of planning/control decisions;
 - do not add worker execution yet, but shape the protocol so worker/helper
   execution can consume the same `TransferRequest` and lease records later.
