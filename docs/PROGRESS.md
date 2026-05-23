@@ -82,6 +82,12 @@ transfer request objects:
   plan. The daemon still authorizes only the relay chunks for the lease, while
   the worker CUDA executor submits the complete daemon plan so direct and relay
   H2D chunks can execute together through the native exact-plan path;
+- worker data-plane resource binding is now direction-aware: H2D binds shared
+  CPU as the source and CUDA IPC GPU memory as the destination, while D2H binds
+  CUDA IPC GPU memory as the source and shared CPU as the destination;
+- `CudaWorkerExecutor` now submits daemon-issued D2H plans through the native
+  exact-plan offload entry point using the same bound resource lifecycle and
+  daemon-authorized relay chunks;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -298,6 +304,9 @@ transfer request objects:
 - Added worker CUDA executor and worker-managed client coverage for
   daemon-issued H2D pool plans that contain both direct chunks and the leased
   relay chunks.
+- Added worker CUDA executor and worker helper coverage for daemon-issued D2H
+  relay plans, including direction-aware resource binding and exact-plan
+  offload submission.
 
 ## Immediate Goal
 
@@ -450,6 +459,10 @@ phase:
     daemon lease still scopes the relay chunks, but the worker CUDA executor
     consumes the complete daemon-issued direct-plus-relay plan and submits it
     as one native exact-plan H2D transfer.
+51. the worker executor now has the first D2H path. For D2H worker requests,
+    resource binding opens the CUDA IPC source and shared pinned CPU
+    destination, then `CudaWorkerExecutor` submits the daemon-issued plan
+    through `offload_plan_to_cpu`.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
@@ -460,8 +473,8 @@ The next code should verify the worker-managed H2D relay call on a CUDA server
 through the helper socket by running `python -m turbobus.verification`. If it
 fails, the next code should fix the failing real data-path layer before adding
 new functionality. If it passes, the next functional expansion should be
-deeper direct-plus-relay verification and then D2H support through the same
-daemon plan path.
+deeper direct-plus-relay and D2H verification through the same daemon plan
+path, then a client-facing D2H worker-managed call.
 
 ## Verification
 

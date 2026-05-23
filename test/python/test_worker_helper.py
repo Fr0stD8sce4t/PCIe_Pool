@@ -137,6 +137,31 @@ def authorization_payload_for_shared_cpu(
     return WorkerTransferRequest(authorization=authorization).as_dict()
 
 
+def d2h_authorization_payload_for_shared_cpu(
+    destination_buffer: SharedPinnedCpuBuffer,
+) -> dict:
+    authorization = WorkerTransferAuthorization(
+        transfer_id="transfer-1",
+        lease_id="lease-1",
+        session_id="session-1",
+        job_id="job-1",
+        src_buffer=BufferRegistration(
+            buffer_id="gpu-buffer",
+            job_id="job-1",
+            kind="gpu",
+            size_bytes=64,
+            device_index=0,
+            handle_type="cuda_ipc_device",
+            metadata={"cuda_ipc_handle": (b"t" * 64).hex()},
+        ),
+        dst_buffer=destination_buffer.buffer_registration(),
+        direction="d2h",
+        ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
+        relay_gpu=1,
+    )
+    return WorkerTransferRequest(authorization=authorization).as_dict()
+
+
 def authorization_request() -> WorkerTransferAuthorizationRequest:
     return WorkerTransferAuthorizationRequest(
         transfer_id="transfer-1",
@@ -906,6 +931,74 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(backend.close_ipc_calls, [4321])
         self.assertEqual(lifecycle.status_update["state"], "complete")
         self.assertEqual(daemon_client.cleanup_requests, [])
+        self.assertEqual(daemon_client.release_requests, ["lease-1"])
+
+    def test_worker_client_binds_d2h_gpu_source_and_shared_cpu_destination(self) -> None:
+        class BoundExecutor:
+            def __init__(self, backend: FakeCudaBackend) -> None:
+                self.backend = backend
+                self.resources: list[WorkerDataPlaneResources] = []
+
+            def execute_bound(
+                self,
+                request: WorkerTransferRequest,
+                staging_slot: WorkerStagingSlot,
+                resources: WorkerDataPlaneResources,
+            ) -> WorkerTransferResult:
+                self.resources.append(resources)
+                if resources.cpu_buffer.buffer_id != "cpu-buffer":
+                    raise AssertionError("shared CPU destination was not bound")
+                if resources.device_ptr != 4321:
+                    raise AssertionError("CUDA IPC source pointer was not passed through")
+                if resources.as_dict()["direction"] != "d2h":
+                    raise AssertionError("resource direction was not preserved")
+                return WorkerTransferResult(
+                    transfer_id=request.transfer_id,
+                    state=WorkerTransferState.COMPLETE,
+                    bytes_completed=16,
+                    metadata={
+                        "host_ptr": resources.host_ptr,
+                        "device_ptr": resources.device_ptr,
+                        "staging_slot_id": staging_slot.slot_id,
+                    },
+                )
+
+        allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-worker-test")
+        backend = FakeCudaBackend()
+        with allocator.allocate("cpu-buffer", "job-1", 64) as destination_buffer:
+            daemon_client = FakeDaemonClient(
+                DaemonResponse(
+                    ok=True,
+                    payload=d2h_authorization_payload_for_shared_cpu(destination_buffer),
+                )
+            )
+            request = WorkerTransferAuthorizationRequest(
+                transfer_id="transfer-1",
+                lease_id="lease-1",
+                token="lease-token",
+                session_id="session-1",
+                job_id="job-1",
+                src_buffer_id="gpu-buffer",
+                dst_buffer_id="cpu-buffer",
+                direction="d2h",
+                ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
+                relay_gpu=1,
+            )
+            executor = BoundExecutor(backend)
+            client = WorkerTransferClient(
+                daemon_client,
+                executor=executor,
+                resource_binder=WorkerDataPlaneResourceBinder(backend=backend),
+            )
+
+            lifecycle = client.submit_report_cleanup_lifecycle(request)
+
+        self.assertEqual(lifecycle.final_state, "complete")
+        self.assertEqual(len(executor.resources), 1)
+        self.assertTrue(executor.resources[0].cpu_buffer.closed)
+        self.assertEqual(backend.open_ipc_calls, [b"t" * 64])
+        self.assertEqual(backend.unregister_calls, [backend.register_calls[0][0]])
+        self.assertEqual(backend.close_ipc_calls, [4321])
         self.assertEqual(daemon_client.release_requests, ["lease-1"])
 
     def test_worker_client_reports_resource_binding_failure(self) -> None:

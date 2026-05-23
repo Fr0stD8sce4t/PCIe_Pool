@@ -53,22 +53,16 @@ class CudaWorkerExecutor:
                 staging_slot,
                 "bound resources do not match the worker request",
             )
-        if request.data_plane.direction != "h2d":
-            return _failed_result(
-                request,
-                staging_slot,
-                "CUDA worker executor currently supports only h2d relay transfers",
-            )
-        target_device = request.data_plane.dst_handle.device_index
+        target_device = _target_device_for_request(request)
         if target_device is None:
             return _failed_result(
                 request,
                 staging_slot,
-                "CUDA worker executor requires a target GPU device index",
+                "CUDA worker executor requires a GPU device index",
             )
 
         try:
-            plan_payload = _worker_h2d_plan_payload(request, int(target_device))
+            plan_payload = _worker_plan_payload(request, int(target_device))
             native_plan = self.backend.make_transfer_plan(plan_payload)
             runtime = self.backend.create_runtime(_runtime_options_for_request(
                 self.options,
@@ -79,14 +73,24 @@ class CudaWorkerExecutor:
                 int(target_device),
                 [request.data_plane.relay_gpu],
             )
-            handle = self.backend.fetch_plan_to_gpu(
-                runtime,
-                resources.source_host_ptr,
-                resources.source_bytes,
-                resources.target_device_ptr,
-                resources.target_device_bytes,
-                native_plan,
-            )
+            if request.data_plane.direction == "h2d":
+                handle = self.backend.fetch_plan_to_gpu(
+                    runtime,
+                    resources.host_ptr,
+                    resources.host_bytes,
+                    resources.device_ptr,
+                    resources.device_bytes,
+                    native_plan,
+                )
+            else:
+                handle = self.backend.offload_plan_to_cpu(
+                    runtime,
+                    resources.device_ptr,
+                    resources.device_bytes,
+                    resources.host_ptr,
+                    resources.host_bytes,
+                    native_plan,
+                )
             self.backend.wait(runtime, handle)
             stats = self.backend.stats(runtime, handle)
         except Exception as exc:
@@ -109,7 +113,10 @@ class CudaWorkerExecutor:
             bytes_completed=bytes_completed,
             metadata={
                 "executor": "cuda_worker",
-                "path": "pool_h2d" if direct_chunks > 0 else "relay_h2d",
+                "path": _metadata_path(
+                    direction=request.data_plane.direction,
+                    direct_chunks=direct_chunks,
+                ),
                 "plan_source": "daemon",
                 "relay_gpu": request.data_plane.relay_gpu,
                 "target_device": int(target_device),
@@ -135,7 +142,16 @@ def _runtime_options_for_request(
     )
 
 
-def _worker_h2d_plan_payload(
+def _target_device_for_request(request: WorkerTransferRequest) -> int | None:
+    handle = (
+        request.data_plane.dst_handle
+        if request.data_plane.direction == "h2d"
+        else request.data_plane.src_handle
+    )
+    return handle.device_index
+
+
+def _worker_plan_payload(
     request: WorkerTransferRequest,
     target_device: int,
 ) -> dict[str, object]:
@@ -224,6 +240,11 @@ def _assignment_chunk_count(plan_payload: dict[str, object], path_kind: str) -> 
             continue
         total += len(assignment.get("chunks", ()) or ())
     return total
+
+
+def _metadata_path(*, direction: str, direct_chunks: int) -> str:
+    prefix = "pool" if direct_chunks > 0 else "relay"
+    return f"{prefix}_{direction}"
 
 
 def _validate_request_and_slot(

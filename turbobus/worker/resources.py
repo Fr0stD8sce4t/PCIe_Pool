@@ -14,34 +14,69 @@ class WorkerDataPlaneResourceError(RuntimeError):
 @dataclass(frozen=True)
 class WorkerDataPlaneResources:
     request: WorkerDataPlaneRequest
-    source_cpu_buffer: SharedPinnedCpuBuffer
-    target_device_ptr: int
-    target_device_bytes: int
+    cpu_buffer: SharedPinnedCpuBuffer
+    device_ptr: int
+    device_bytes: int
     cuda_host_registered: bool = False
 
     @property
+    def host_ptr(self) -> int:
+        return self.cpu_buffer.address
+
+    @property
+    def host_bytes(self) -> int:
+        return self.cpu_buffer.size_bytes
+
+    @property
+    def source_cpu_buffer(self) -> SharedPinnedCpuBuffer:
+        return self.cpu_buffer
+
+    @property
     def source_host_ptr(self) -> int:
-        return self.source_cpu_buffer.address
+        return self.host_ptr
 
     @property
     def source_bytes(self) -> int:
-        return self.source_cpu_buffer.size_bytes
+        return self.host_bytes
+
+    @property
+    def target_device_ptr(self) -> int:
+        return self.device_ptr
+
+    @property
+    def target_device_bytes(self) -> int:
+        return self.device_bytes
 
     def close(self) -> None:
-        self.source_cpu_buffer.close()
+        self.cpu_buffer.close()
 
     def as_dict(self) -> dict[str, object]:
+        cpu_handle = (
+            self.request.src_handle
+            if self.request.direction == "h2d"
+            else self.request.dst_handle
+        )
+        device_handle = (
+            self.request.dst_handle
+            if self.request.direction == "h2d"
+            else self.request.src_handle
+        )
         return {
             "transfer_id": self.request.transfer_id,
             "lease_id": self.request.lease_id,
+            "direction": self.request.direction,
             "src_buffer_id": self.request.src_handle.buffer_id,
             "src_handle_type": self.request.src_handle.handle_type,
-            "source_host_ptr": self.source_host_ptr,
-            "source_bytes": self.source_bytes,
             "dst_buffer_id": self.request.dst_handle.buffer_id,
             "dst_handle_type": self.request.dst_handle.handle_type,
-            "target_device_ptr": self.target_device_ptr,
-            "target_device_bytes": self.target_device_bytes,
+            "cpu_buffer_id": cpu_handle.buffer_id,
+            "cpu_handle_type": cpu_handle.handle_type,
+            "host_ptr": self.host_ptr,
+            "host_bytes": self.host_bytes,
+            "device_buffer_id": device_handle.buffer_id,
+            "device_handle_type": device_handle.handle_type,
+            "device_ptr": self.device_ptr,
+            "device_bytes": self.device_bytes,
             "cuda_host_registered": self.cuda_host_registered,
         }
 
@@ -60,34 +95,36 @@ class WorkerDataPlaneResourceBinding:
         self.backend = backend
         self.register_cuda_host = bool(register_cuda_host)
         self._resources: WorkerDataPlaneResources | None = None
-        self._target_device_ptr: int | None = None
+        self._device_ptr: int | None = None
 
     def __enter__(self) -> WorkerDataPlaneResources:
-        source_buffer: SharedPinnedCpuBuffer | None = None
+        cpu_buffer: SharedPinnedCpuBuffer | None = None
         try:
-            source_buffer = SharedPinnedCpuBuffer.open_from_registration(
-                _registration_from_worker_handle(self.request.src_handle)
+            cpu_handle = _cpu_handle_for_request(self.request)
+            device_handle = _device_handle_for_request(self.request)
+            cpu_buffer = SharedPinnedCpuBuffer.open_from_registration(
+                _registration_from_worker_handle(cpu_handle)
             )
             if self.register_cuda_host:
-                source_buffer.register_for_cuda(self.backend)
-            self._target_device_ptr = _open_cuda_ipc_device_handle(
+                cpu_buffer.register_for_cuda(self.backend)
+            self._device_ptr = _open_cuda_ipc_device_handle(
                 self.backend,
-                self.request.dst_handle,
+                device_handle,
             )
             self._resources = WorkerDataPlaneResources(
                 request=self.request,
-                source_cpu_buffer=source_buffer,
-                target_device_ptr=self._target_device_ptr,
-                target_device_bytes=self.request.dst_handle.size_bytes,
+                cpu_buffer=cpu_buffer,
+                device_ptr=self._device_ptr,
+                device_bytes=device_handle.size_bytes,
                 cuda_host_registered=self.register_cuda_host,
             )
             return self._resources
         except Exception as exc:
-            if self._target_device_ptr is not None:
-                self.backend.close_device_ipc_handle(self._target_device_ptr)
-                self._target_device_ptr = None
-            if source_buffer is not None:
-                source_buffer.close()
+            if self._device_ptr is not None:
+                self.backend.close_device_ipc_handle(self._device_ptr)
+                self._device_ptr = None
+            if cpu_buffer is not None:
+                cpu_buffer.close()
             raise WorkerDataPlaneResourceError(
                 f"failed to bind worker data-plane resources: {exc}"
             ) from exc
@@ -98,9 +135,9 @@ class WorkerDataPlaneResourceBinding:
                 self._resources.close()
                 self._resources = None
         finally:
-            if self._target_device_ptr is not None:
-                self.backend.close_device_ipc_handle(self._target_device_ptr)
-                self._target_device_ptr = None
+            if self._device_ptr is not None:
+                self.backend.close_device_ipc_handle(self._device_ptr)
+                self._device_ptr = None
 
 
 class WorkerDataPlaneResourceBinder:
@@ -144,12 +181,20 @@ def _registration_from_worker_handle(handle: WorkerBufferHandle) -> BufferRegist
     )
 
 
+def _cpu_handle_for_request(request: WorkerDataPlaneRequest) -> WorkerBufferHandle:
+    return request.src_handle if request.direction == "h2d" else request.dst_handle
+
+
+def _device_handle_for_request(request: WorkerDataPlaneRequest) -> WorkerBufferHandle:
+    return request.dst_handle if request.direction == "h2d" else request.src_handle
+
+
 def _open_cuda_ipc_device_handle(backend, handle: WorkerBufferHandle) -> int:
     if not isinstance(handle, WorkerBufferHandle):
         raise TypeError("handle must be a WorkerBufferHandle")
     if handle.handle_type != "cuda_ipc_device":
         raise WorkerDataPlaneResourceError(
-            "worker target binding requires a cuda_ipc_device destination handle"
+            "worker device binding requires a cuda_ipc_device handle"
         )
     return backend.open_device_ipc_handle(handle.metadata["cuda_ipc_handle"])
 

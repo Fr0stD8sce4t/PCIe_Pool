@@ -122,6 +122,10 @@ Completed current code cut:
   only relay authorization ranges from its stored plan, and the CUDA worker
   executor submits the complete daemon plan so direct and relay chunks run in
   one native exact-plan transfer.
+- Add the first D2H worker executor path. Worker resource binding now treats
+  the CUDA IPC handle as the source and the shared pinned CPU handle as the
+  destination for D2H requests, and the CUDA worker executor submits
+  daemon-issued D2H plans through the native exact-plan offload entry point.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -138,7 +142,9 @@ Completed current code cut:
    - Release reservations on failure or completion.
 
 3. Extend the worker executor only after the functional call works.
-   - Add D2H through the same resource binding path.
+   - Add D2H through the same resource binding path; done for worker resource
+     binding and CUDA executor exact-plan submission, pending client API and
+     CUDA-server byte verification.
    - Add pooled direct-plus-relay execution through daemon-issued chunks; done
      for the narrow H2D single-relay worker-managed path, pending CUDA-server
      byte verification.
