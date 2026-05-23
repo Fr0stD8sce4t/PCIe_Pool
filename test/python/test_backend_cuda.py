@@ -19,12 +19,26 @@ class FakeHostRegisterNativeModule:
     def __init__(self) -> None:
         self.register_host_memory_calls = []
         self.unregister_host_memory_calls = []
+        self.export_device_ipc_handle_calls = []
+        self.open_device_ipc_handle_calls = []
+        self.close_device_ipc_handle_calls = []
 
     def register_host_memory(self, host_ptr, bytes_):
         self.register_host_memory_calls.append((host_ptr, bytes_))
 
     def unregister_host_memory(self, host_ptr):
         self.unregister_host_memory_calls.append(host_ptr)
+
+    def export_device_ipc_handle(self, device_ptr):
+        self.export_device_ipc_handle_calls.append(device_ptr)
+        return b"i" * 64
+
+    def open_device_ipc_handle(self, cuda_ipc_handle):
+        self.open_device_ipc_handle_calls.append(cuda_ipc_handle)
+        return 200
+
+    def close_device_ipc_handle(self, device_ptr):
+        self.close_device_ipc_handle_calls.append(device_ptr)
 
 
 class FakeRuntimeEngine:
@@ -214,6 +228,29 @@ class CudaNativeBackendTest(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "host memory registration"):
             backend.register_host_memory(100, 4096)
+
+    def test_backend_exports_and_opens_cuda_ipc_handles(self) -> None:
+        engine = FakeRuntimeEngine()
+        native = FakeHostRegisterNativeModule()
+        engine._turbobus = native
+        backend = CudaNativeBackend(engine)
+
+        handle = backend.export_device_ipc_handle(100)
+        ptr = backend.open_device_ipc_handle(handle.hex())
+        backend.close_device_ipc_handle(ptr)
+
+        self.assertEqual(handle, b"i" * 64)
+        self.assertEqual(native.export_device_ipc_handle_calls, [100])
+        self.assertEqual(native.open_device_ipc_handle_calls, [b"i" * 64])
+        self.assertEqual(native.close_device_ipc_handle_calls, [200])
+
+    def test_backend_rejects_missing_cuda_ipc_support(self) -> None:
+        engine = FakeRuntimeEngine()
+        engine._turbobus = object()
+        backend = CudaNativeBackend(engine)
+
+        with self.assertRaisesRegex(RuntimeError, "CUDA IPC handles"):
+            backend.export_device_ipc_handle(100)
 
 
 if __name__ == "__main__":

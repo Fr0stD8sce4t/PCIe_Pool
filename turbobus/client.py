@@ -239,7 +239,72 @@ class SharedPinnedCpuBufferAllocator:
         )
 
 
+@dataclass(frozen=True)
+class CudaIpcDeviceBuffer:
+    buffer_id: str
+    job_id: str
+    device_index: int
+    size_bytes: int
+    cuda_ipc_handle: bytes
+    device_ptr: int | None = None
+
+    @classmethod
+    def from_device_pointer(
+        cls,
+        buffer_id: str,
+        job_id: str,
+        device_index: int,
+        size_bytes: int,
+        device_ptr: int,
+        *,
+        backend=default_cuda_backend,
+    ) -> "CudaIpcDeviceBuffer":
+        size_bytes = int(size_bytes)
+        if size_bytes <= 0:
+            raise ValueError("size_bytes must be positive")
+        ptr = int(device_ptr)
+        if ptr <= 0:
+            raise ValueError("device_ptr must be positive")
+        return cls(
+            buffer_id=str(buffer_id),
+            job_id=str(job_id),
+            device_index=int(device_index),
+            size_bytes=size_bytes,
+            cuda_ipc_handle=backend.export_device_ipc_handle(ptr),
+            device_ptr=ptr,
+        )
+
+    @property
+    def metadata(self) -> dict[str, object]:
+        return {"cuda_ipc_handle": self.cuda_ipc_handle.hex()}
+
+    def buffer_registration(self) -> BufferRegistration:
+        return BufferRegistration(
+            buffer_id=self.buffer_id,
+            job_id=self.job_id,
+            kind="gpu",
+            size_bytes=self.size_bytes,
+            device_index=self.device_index,
+            address=self.device_ptr,
+            handle_type="cuda_ipc_device",
+            metadata=self.metadata,
+        )
+
+    def register_with_daemon(self, daemon_client) -> DaemonResponse:
+        return daemon_client.register_buffer(
+            buffer_id=self.buffer_id,
+            job_id=self.job_id,
+            kind="gpu",
+            size_bytes=self.size_bytes,
+            device_index=self.device_index,
+            address=self.device_ptr,
+            handle_type="cuda_ipc_device",
+            metadata=self.metadata,
+        )
+
+
 __all__ = [
+    "CudaIpcDeviceBuffer",
     "SharedPinnedCpuBuffer",
     "SharedPinnedCpuBufferAllocator",
 ]

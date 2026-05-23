@@ -55,12 +55,26 @@ class FakeCudaBackend:
     def __init__(self) -> None:
         self.register_calls: list[tuple[int, int]] = []
         self.unregister_calls: list[int] = []
+        self.open_ipc_calls: list[bytes] = []
+        self.close_ipc_calls: list[int] = []
 
     def register_host_memory(self, host_ptr: int, bytes_: int) -> None:
         self.register_calls.append((int(host_ptr), int(bytes_)))
 
     def unregister_host_memory(self, host_ptr: int) -> None:
         self.unregister_calls.append(int(host_ptr))
+
+    def open_device_ipc_handle(self, cuda_ipc_handle) -> int:
+        handle = (
+            bytes.fromhex(cuda_ipc_handle)
+            if isinstance(cuda_ipc_handle, str)
+            else bytes(cuda_ipc_handle)
+        )
+        self.open_ipc_calls.append(handle)
+        return 4321
+
+    def close_device_ipc_handle(self, device_ptr: int) -> None:
+        self.close_ipc_calls.append(int(device_ptr))
 
 
 def authorization_payload() -> dict:
@@ -89,7 +103,7 @@ def authorization_payload() -> dict:
             size_bytes=64,
             device_index=0,
             handle_type="cuda_ipc_device",
-            metadata={"cuda_ipc_handle": "ipc-target"},
+            metadata={"cuda_ipc_handle": (b"t" * 64).hex()},
         ),
         direction="h2d",
         ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
@@ -114,7 +128,7 @@ def authorization_payload_for_shared_cpu(
             size_bytes=64,
             device_index=0,
             handle_type="cuda_ipc_device",
-            metadata={"cuda_ipc_handle": "ipc-target"},
+            metadata={"cuda_ipc_handle": (b"t" * 64).hex()},
         ),
         direction="h2d",
         ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
@@ -307,7 +321,7 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(request.data_plane.dst_handle.handle_type, "cuda_ipc_device")
         self.assertEqual(
             request.data_plane.dst_handle.metadata["cuda_ipc_handle"],
-            "ipc-target",
+            (b"t" * 64).hex(),
         )
         self.assertEqual(request.data_plane.staging.relay_gpu, 1)
         self.assertEqual(request.data_plane.staging.total_bytes, 16)
@@ -840,6 +854,7 @@ class WorkerHelperTest(unittest.TestCase):
                     bytes_completed=16,
                     metadata={
                         "source_host_ptr": resources.source_host_ptr,
+                        "target_device_ptr": resources.target_device_ptr,
                         "staging_slot_id": staging_slot.slot_id,
                     },
                 )
@@ -849,8 +864,14 @@ class WorkerHelperTest(unittest.TestCase):
                     raise AssertionError("shared CPU source was not CUDA registered")
                 if len(self.backend.register_calls) != 1:
                     raise AssertionError("CUDA host registration did not run first")
+                if self.backend.open_ipc_calls != [b"t" * 64]:
+                    raise AssertionError("CUDA IPC target was not opened")
+                if resources.target_device_ptr != 4321:
+                    raise AssertionError("bound target pointer was not passed through")
                 if self.backend.unregister_calls:
                     raise AssertionError("CUDA host memory was unregistered too early")
+                if self.backend.close_ipc_calls:
+                    raise AssertionError("CUDA IPC target closed too early")
 
         allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-worker-test")
         backend = FakeCudaBackend()
@@ -876,6 +897,7 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(len(executor.resources), 1)
         self.assertTrue(executor.resources[0].source_cpu_buffer.closed)
         self.assertEqual(backend.unregister_calls, [backend.register_calls[0][0]])
+        self.assertEqual(backend.close_ipc_calls, [4321])
         self.assertEqual(lifecycle.status_update["state"], "complete")
         self.assertEqual(daemon_client.cleanup_requests, [])
 
@@ -891,7 +913,7 @@ class WorkerHelperTest(unittest.TestCase):
         lifecycle = client.submit_report_cleanup_lifecycle(authorization_request())
 
         self.assertEqual(lifecycle.final_state, "failed")
-        self.assertIn("failed to bind shared CPU source buffer", lifecycle.error)
+        self.assertIn("failed to bind worker data-plane resources", lifecycle.error)
         self.assertEqual(lifecycle.status_update["state"], "failed")
         self.assertEqual(daemon_client.status_updates[0]["state"], "failed")
         self.assertEqual(daemon_client.cleanup_requests[0]["target_id"], "lease-1")

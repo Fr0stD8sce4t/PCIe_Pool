@@ -4,6 +4,7 @@
 #include <cuda_runtime.h>
 
 #include <cstdint>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 
@@ -84,6 +85,42 @@ PYBIND11_MODULE(_turbobus, m) {
                     "cudaHostUnregister failed");
         },
         py::arg("host_ptr"), py::call_guard<py::gil_scoped_release>());
+  m.def("export_device_ipc_handle",
+        [](std::uintptr_t device_ptr) {
+          if (device_ptr == 0) {
+            throw std::invalid_argument("device_ptr must not be null");
+          }
+          cudaIpcMemHandle_t handle;
+          CheckCuda(
+              cudaIpcGetMemHandle(&handle, reinterpret_cast<void*>(device_ptr)),
+              "cudaIpcGetMemHandle failed");
+          return py::bytes(reinterpret_cast<const char*>(&handle), sizeof(handle));
+        },
+        py::arg("device_ptr"), py::call_guard<py::gil_scoped_release>());
+  m.def("open_device_ipc_handle",
+        [](py::bytes cuda_ipc_handle) {
+          std::string raw = cuda_ipc_handle;
+          if (raw.size() != sizeof(cudaIpcMemHandle_t)) {
+            throw std::invalid_argument("cuda IPC handle has invalid size");
+          }
+          cudaIpcMemHandle_t handle;
+          std::memcpy(&handle, raw.data(), sizeof(handle));
+          void* device_ptr = nullptr;
+          CheckCuda(cudaIpcOpenMemHandle(&device_ptr, handle,
+                                         cudaIpcMemLazyEnablePeerAccess),
+                    "cudaIpcOpenMemHandle failed");
+          return reinterpret_cast<std::uintptr_t>(device_ptr);
+        },
+        py::arg("cuda_ipc_handle"), py::call_guard<py::gil_scoped_release>());
+  m.def("close_device_ipc_handle",
+        [](std::uintptr_t device_ptr) {
+          if (device_ptr == 0) {
+            throw std::invalid_argument("device_ptr must not be null");
+          }
+          CheckCuda(cudaIpcCloseMemHandle(reinterpret_cast<void*>(device_ptr)),
+                    "cudaIpcCloseMemHandle failed");
+        },
+        py::arg("device_ptr"), py::call_guard<py::gil_scoped_release>());
 
   py::enum_<turbobus::TransferMode>(m, "TransferMode")
       .value("Pool", turbobus::TransferMode::Pool)

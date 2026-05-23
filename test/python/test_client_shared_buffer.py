@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from turbobus.client import SharedPinnedCpuBuffer, SharedPinnedCpuBufferAllocator
+from turbobus.client import (
+    CudaIpcDeviceBuffer,
+    SharedPinnedCpuBuffer,
+    SharedPinnedCpuBufferAllocator,
+)
 from turbobus.schema import DaemonResponse
 
 
@@ -10,12 +14,17 @@ class FakeCudaBackend:
     def __init__(self) -> None:
         self.register_calls: list[tuple[int, int]] = []
         self.unregister_calls: list[int] = []
+        self.export_ipc_calls: list[int] = []
 
     def register_host_memory(self, host_ptr: int, bytes_: int) -> None:
         self.register_calls.append((int(host_ptr), int(bytes_)))
 
     def unregister_host_memory(self, host_ptr: int) -> None:
         self.unregister_calls.append(int(host_ptr))
+
+    def export_device_ipc_handle(self, device_ptr: int) -> bytes:
+        self.export_ipc_calls.append(int(device_ptr))
+        return b"c" * 64
 
 
 class FakeDaemonClient:
@@ -99,6 +108,31 @@ class SharedPinnedCpuBufferTest(unittest.TestCase):
                 payload["metadata"]["shared_memory_name"],
                 buffer.shared_memory_name,
             )
+
+    def test_cuda_ipc_device_buffer_builds_daemon_registration(self) -> None:
+        backend = FakeCudaBackend()
+        daemon_client = FakeDaemonClient()
+
+        buffer = CudaIpcDeviceBuffer.from_device_pointer(
+            buffer_id="gpu-buffer",
+            job_id="job-1",
+            device_index=0,
+            size_bytes=64,
+            device_ptr=1234,
+            backend=backend,
+        )
+        registration = buffer.buffer_registration()
+        response = buffer.register_with_daemon(daemon_client)
+
+        self.assertEqual(backend.export_ipc_calls, [1234])
+        self.assertEqual(registration.handle_type, "cuda_ipc_device")
+        self.assertEqual(registration.metadata["cuda_ipc_handle"], (b"c" * 64).hex())
+        self.assertEqual(registration.address, 1234)
+        self.assertTrue(response.ok)
+        self.assertEqual(
+            daemon_client.register_buffer_calls[0]["metadata"]["cuda_ipc_handle"],
+            (b"c" * 64).hex(),
+        )
 
     def test_allocator_rejects_empty_buffers(self) -> None:
         allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-test")

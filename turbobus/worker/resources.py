@@ -15,6 +15,8 @@ class WorkerDataPlaneResourceError(RuntimeError):
 class WorkerDataPlaneResources:
     request: WorkerDataPlaneRequest
     source_cpu_buffer: SharedPinnedCpuBuffer
+    target_device_ptr: int
+    target_device_bytes: int
     cuda_host_registered: bool = False
 
     @property
@@ -36,6 +38,10 @@ class WorkerDataPlaneResources:
             "src_handle_type": self.request.src_handle.handle_type,
             "source_host_ptr": self.source_host_ptr,
             "source_bytes": self.source_bytes,
+            "dst_buffer_id": self.request.dst_handle.buffer_id,
+            "dst_handle_type": self.request.dst_handle.handle_type,
+            "target_device_ptr": self.target_device_ptr,
+            "target_device_bytes": self.target_device_bytes,
             "cuda_host_registered": self.cuda_host_registered,
         }
 
@@ -54,6 +60,7 @@ class WorkerDataPlaneResourceBinding:
         self.backend = backend
         self.register_cuda_host = bool(register_cuda_host)
         self._resources: WorkerDataPlaneResources | None = None
+        self._target_device_ptr: int | None = None
 
     def __enter__(self) -> WorkerDataPlaneResources:
         source_buffer: SharedPinnedCpuBuffer | None = None
@@ -63,23 +70,37 @@ class WorkerDataPlaneResourceBinding:
             )
             if self.register_cuda_host:
                 source_buffer.register_for_cuda(self.backend)
+            self._target_device_ptr = _open_cuda_ipc_device_handle(
+                self.backend,
+                self.request.dst_handle,
+            )
             self._resources = WorkerDataPlaneResources(
                 request=self.request,
                 source_cpu_buffer=source_buffer,
+                target_device_ptr=self._target_device_ptr,
+                target_device_bytes=self.request.dst_handle.size_bytes,
                 cuda_host_registered=self.register_cuda_host,
             )
             return self._resources
         except Exception as exc:
+            if self._target_device_ptr is not None:
+                self.backend.close_device_ipc_handle(self._target_device_ptr)
+                self._target_device_ptr = None
             if source_buffer is not None:
                 source_buffer.close()
             raise WorkerDataPlaneResourceError(
-                f"failed to bind shared CPU source buffer: {exc}"
+                f"failed to bind worker data-plane resources: {exc}"
             ) from exc
 
     def __exit__(self, exc_type, exc, traceback) -> None:
-        if self._resources is not None:
-            self._resources.close()
-            self._resources = None
+        try:
+            if self._resources is not None:
+                self._resources.close()
+                self._resources = None
+        finally:
+            if self._target_device_ptr is not None:
+                self.backend.close_device_ipc_handle(self._target_device_ptr)
+                self._target_device_ptr = None
 
 
 class WorkerDataPlaneResourceBinder:
@@ -121,6 +142,16 @@ def _registration_from_worker_handle(handle: WorkerBufferHandle) -> BufferRegist
         handle_type=handle.handle_type,
         metadata=handle.metadata,
     )
+
+
+def _open_cuda_ipc_device_handle(backend, handle: WorkerBufferHandle) -> int:
+    if not isinstance(handle, WorkerBufferHandle):
+        raise TypeError("handle must be a WorkerBufferHandle")
+    if handle.handle_type != "cuda_ipc_device":
+        raise WorkerDataPlaneResourceError(
+            "worker target binding requires a cuda_ipc_device destination handle"
+        )
+    return backend.open_device_ipc_handle(handle.metadata["cuda_ipc_handle"])
 
 
 __all__ = [

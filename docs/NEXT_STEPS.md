@@ -83,10 +83,14 @@ Completed current code cut:
   A worker data-plane resource binder now reopens the daemon-authorized shared
   CPU source, registers it with CUDA before executor invocation, and closes it
   after execution or binding failure.
+- Add the first CUDA IPC target GPU handle producer/consumer path. Client-side
+  code can export a target device pointer as daemon registration metadata, and
+  worker resources can open and close that target device pointer before
+  invoking a bound executor.
 
 1. Define the first registered buffer handles.
-   - Add the first target GPU CUDA IPC handle producer/consumer path.
-   - Pass bound target GPU resources to the future CUDA worker executor.
+   - Pass bound source and target resources into the future CUDA worker
+     executor.
 
 2. Implement a CUDA worker executor.
    - Replace the default unsupported executor for one narrow path.

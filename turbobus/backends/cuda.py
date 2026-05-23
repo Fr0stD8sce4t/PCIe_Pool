@@ -67,6 +67,49 @@ class CudaNativeBackend:
             raise RuntimeError("native runtime does not support host memory registration")
         unregister(ptr)
 
+    def export_device_ipc_handle(self, device_ptr: int) -> bytes:
+        ptr = int(device_ptr)
+        if ptr <= 0:
+            raise ValueError("device_ptr must be positive")
+        self.require_available()
+        exporter = getattr(
+            self._runtime_engine._turbobus,
+            "export_device_ipc_handle",
+            None,
+        )
+        if not callable(exporter):
+            raise RuntimeError("native runtime does not support CUDA IPC handles")
+        return bytes(exporter(ptr))
+
+    def open_device_ipc_handle(self, cuda_ipc_handle: bytes | bytearray | str) -> int:
+        handle = _coerce_cuda_ipc_handle(cuda_ipc_handle)
+        self.require_available()
+        opener = getattr(
+            self._runtime_engine._turbobus,
+            "open_device_ipc_handle",
+            None,
+        )
+        if not callable(opener):
+            raise RuntimeError("native runtime does not support CUDA IPC handles")
+        ptr = int(opener(handle))
+        if ptr <= 0:
+            raise RuntimeError("native runtime returned an invalid CUDA IPC pointer")
+        return ptr
+
+    def close_device_ipc_handle(self, device_ptr: int) -> None:
+        ptr = int(device_ptr)
+        if ptr <= 0:
+            raise ValueError("device_ptr must be positive")
+        self.require_available()
+        closer = getattr(
+            self._runtime_engine._turbobus,
+            "close_device_ipc_handle",
+            None,
+        )
+        if not callable(closer):
+            raise RuntimeError("native runtime does not support CUDA IPC handles")
+        closer(ptr)
+
     def fetch_plan_to_gpu(
         self,
         runtime: Any,
@@ -97,6 +140,15 @@ class CudaNativeBackend:
 
 
 default_cuda_backend = CudaNativeBackend()
+
+
+def _coerce_cuda_ipc_handle(handle: bytes | bytearray | str) -> bytes:
+    if isinstance(handle, str):
+        try:
+            return bytes.fromhex(handle)
+        except ValueError as exc:
+            raise ValueError("cuda_ipc_handle string must be hex encoded") from exc
+    return bytes(handle)
 
 
 __all__ = ["CudaNativeBackend", "default_cuda_backend"]
