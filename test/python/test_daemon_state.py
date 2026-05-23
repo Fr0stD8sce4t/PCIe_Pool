@@ -18,6 +18,23 @@ from turbobus.daemon.topology import (
 )
 
 
+def _relay_ranges(plan: dict, relay_gpu: int) -> tuple[dict[str, int], ...]:
+    ranges = []
+    for assignment in plan["assignments"]:
+        path = assignment["path"]
+        if path["kind"] != "relay" or int(path["relay_device"]) != int(relay_gpu):
+            continue
+        ranges.extend(
+            {
+                "src_offset": int(chunk["src_offset"]),
+                "dst_offset": int(chunk["dst_offset"]),
+                "bytes": int(chunk["bytes"]),
+            }
+            for chunk in assignment["chunks"]
+        )
+    return tuple(ranges)
+
+
 class DaemonStateTest(unittest.TestCase):
     def test_session_lifecycle_releases_quota(self) -> None:
         daemon = TurboBusDaemon(relay_gpus=[1], max_sessions_per_relay=1)
@@ -1291,7 +1308,6 @@ class DaemonStateTest(unittest.TestCase):
                 dst_buffer_id="gpu-buffer",
                 direction="h2d",
                 relay_gpu=1,
-                ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
             )
         )
 
@@ -1310,8 +1326,9 @@ class DaemonStateTest(unittest.TestCase):
             authorization["dst_buffer"]["metadata"]["cuda_ipc_handle"],
             "ipc-target",
         )
-        self.assertEqual(authorization["ranges"][0]["bytes"], 16)
+        self.assertEqual(authorization["ranges"], _relay_ranges(planned.payload["plan"], 1))
         self.assertEqual(authorization["relay_gpu"], 1)
+        self.assertEqual(authorization["plan"], planned.payload["plan"])
 
         wrong_transfer = daemon.authorize_worker_transfer(
             WorkerTransferAuthorizationRequest(
@@ -1348,7 +1365,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertFalse(wrong_buffer.ok)
         self.assertIn("lease buffer mismatch", wrong_buffer.error)
 
-        too_large = daemon.authorize_worker_transfer(
+        mismatched_ranges = daemon.authorize_worker_transfer(
             WorkerTransferAuthorizationRequest(
                 transfer_id=transfer_id,
                 lease_id=lease_token["lease_id"],
@@ -1359,11 +1376,11 @@ class DaemonStateTest(unittest.TestCase):
                 dst_buffer_id="gpu-buffer",
                 direction="h2d",
                 relay_gpu=1,
-                ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 128},),
+                ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
             )
         )
-        self.assertFalse(too_large.ok)
-        self.assertIn("exceeds reservation bytes", too_large.error)
+        self.assertFalse(mismatched_ranges.ok)
+        self.assertIn("worker ranges do not match daemon plan", mismatched_ranges.error)
 
     def test_plan_transfer_records_and_completes_transfer_status(self) -> None:
         daemon = TurboBusDaemon(

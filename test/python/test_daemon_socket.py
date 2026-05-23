@@ -700,13 +700,16 @@ class DaemonSocketTest(unittest.TestCase):
                     dst_buffer_id="gpu-buffer",
                     direction="h2d",
                     relay_gpu=1,
-                    ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
                 )
             )
             self.assertTrue(authorized.ok)
             self.assertEqual(
                 authorized.payload["authorization"]["src_buffer"]["buffer_id"],
                 "cpu-buffer",
+            )
+            self.assertEqual(
+                authorized.payload["authorization"]["plan"],
+                planned.payload["plan"],
             )
 
             released = client.release_transfer(reservation_id)

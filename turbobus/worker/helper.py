@@ -67,6 +67,7 @@ class WorkerTransferRequest:
                 direction=str(authorization_payload["direction"]),
                 ranges=tuple(authorization_payload.get("ranges", ())),
                 relay_gpu=authorization_payload.get("relay_gpu"),
+                plan=dict(authorization_payload.get("plan") or {}),
             )
         )
 
@@ -106,6 +107,8 @@ class WorkerTransferRequest:
             raise ValueError("data-plane dst handle does not match authorization")
         if data_plane.ranges != self.authorization.ranges:
             raise ValueError("data-plane ranges do not match authorization")
+        if data_plane.plan != self.authorization.plan:
+            raise ValueError("data-plane plan does not match authorization")
         object.__setattr__(self, "data_plane", data_plane)
 
     @property

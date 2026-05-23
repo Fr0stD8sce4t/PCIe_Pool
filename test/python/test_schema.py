@@ -197,6 +197,26 @@ class SchemaTest(unittest.TestCase):
             direction="h2d",
             relay_gpu=1,
             ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 4096},),
+            plan={
+                "total_bytes": 4096,
+                "chunk_bytes": 4096,
+                "assignments": [
+                    {
+                        "path": {
+                            "kind": "relay",
+                            "direction": "h2d",
+                            "target_device": 0,
+                            "relay_device": 1,
+                            "enabled": True,
+                        },
+                        "chunks": [
+                            {"src_offset": 0, "dst_offset": 0, "bytes": 4096}
+                        ],
+                        "bytes": 4096,
+                        "chunk_count": 1,
+                    }
+                ],
+            },
         )
         data_plane_request = WorkerDataPlaneRequest.from_authorization(
             worker_authorization
@@ -270,6 +290,7 @@ class SchemaTest(unittest.TestCase):
             payload["data_plane_request"]["staging"]["total_bytes"],
             4096,
         )
+        self.assertEqual(payload["data_plane_request"]["plan"]["total_bytes"], 4096)
         self.assertEqual(payload["data_plane_completion"]["state"], "complete")
 
     def test_daemon_baseline_message_validation_rejects_invalid_values(self) -> None:

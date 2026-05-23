@@ -68,7 +68,7 @@ class CudaWorkerExecutor:
             )
 
         try:
-            plan_payload = _relay_h2d_plan_payload(request, int(target_device))
+            plan_payload = _worker_h2d_plan_payload(request, int(target_device))
             native_plan = self.backend.make_transfer_plan(plan_payload)
             runtime = self.backend.create_runtime(_runtime_options_for_request(
                 self.options,
@@ -100,6 +100,7 @@ class CudaWorkerExecutor:
             metadata={
                 "executor": "cuda_worker",
                 "path": "relay_h2d",
+                "plan_source": "daemon",
                 "relay_gpu": request.data_plane.relay_gpu,
                 "target_device": int(target_device),
                 "src_buffer_id": request.data_plane.src_handle.buffer_id,
@@ -126,29 +127,77 @@ def _runtime_options_for_request(
     )
 
 
-def _relay_h2d_plan_payload(
+def _worker_h2d_plan_payload(
     request: WorkerTransferRequest,
     target_device: int,
 ) -> dict[str, object]:
-    ranges = [dict(item) for item in request.data_plane.ranges]
-    total_bytes = sum(int(item["bytes"]) for item in ranges)
+    if not request.data_plane.plan:
+        raise ValueError("CUDA worker executor requires a daemon-issued transfer plan")
+    return _relay_scoped_daemon_plan_payload(request, int(target_device))
+
+
+def _relay_scoped_daemon_plan_payload(
+    request: WorkerTransferRequest,
+    target_device: int,
+) -> dict[str, object]:
+    source_plan = dict(request.data_plane.plan)
+    assignments: list[dict[str, object]] = []
+    relay_ranges: list[dict[str, int]] = []
+    total_bytes = 0
+    relay_gpu = int(request.data_plane.relay_gpu)
+    for assignment in source_plan.get("assignments", ()) or ():
+        if not isinstance(assignment, dict):
+            raise ValueError("daemon plan assignment must be a mapping")
+        path = assignment.get("path")
+        if not isinstance(path, dict):
+            raise ValueError("daemon plan assignment path must be a mapping")
+        if str(path.get("kind", "")).lower() != "relay":
+            raise ValueError("CUDA worker executor currently requires a relay-only daemon plan")
+        if str(path.get("direction", "")).lower() != request.data_plane.direction:
+            raise ValueError("daemon plan direction does not match worker request")
+        if int(path.get("relay_device", -1)) != relay_gpu:
+            raise ValueError("daemon plan relay does not match worker lease")
+        relay_path = dict(path)
+        if int(relay_path.get("target_device", target_device)) != int(target_device):
+            raise ValueError("daemon plan target does not match worker target")
+        if not bool(relay_path.get("enabled", True)):
+            raise ValueError("daemon plan path is disabled")
+        relay_path["relay_device"] = relay_gpu
+        relay_path["enabled"] = True
+        chunks = []
+        for chunk in assignment.get("chunks", ()) or ():
+            if not isinstance(chunk, dict):
+                raise ValueError("daemon plan chunk must be a mapping")
+            chunks.append(
+                {
+                    "src_offset": int(chunk["src_offset"]),
+                    "dst_offset": int(chunk["dst_offset"]),
+                    "bytes": int(chunk["bytes"]),
+                }
+            )
+        if not chunks:
+            continue
+        chunk_bytes = sum(int(chunk["bytes"]) for chunk in chunks)
+        total_bytes += chunk_bytes
+        relay_ranges.extend(chunks)
+        assignments.append(
+            {
+                "path": relay_path,
+                "chunks": chunks,
+                "bytes": chunk_bytes,
+                "chunk_count": len(chunks),
+            }
+        )
+    if not assignments:
+        raise ValueError("daemon plan has no authorized relay chunks")
+    if tuple(relay_ranges) != request.data_plane.ranges:
+        raise ValueError("authorized ranges do not match daemon plan")
     return {
         "total_bytes": total_bytes,
-        "chunk_bytes": request.data_plane.staging.max_chunk_bytes,
-        "assignments": [
-            {
-                "path": {
-                    "kind": "relay",
-                    "direction": "h2d",
-                    "target_device": int(target_device),
-                    "relay_device": request.data_plane.relay_gpu,
-                    "enabled": True,
-                },
-                "chunks": ranges,
-                "bytes": total_bytes,
-                "chunk_count": len(ranges),
-            }
-        ],
+        "chunk_bytes": int(
+            source_plan.get("chunk_bytes", request.data_plane.staging.max_chunk_bytes)
+        ),
+        "assignments": assignments,
     }
 
 

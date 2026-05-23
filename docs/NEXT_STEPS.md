@@ -112,6 +112,11 @@ Completed current code cut:
   assignment for the leased relay instead of the original client request range.
   Plans that include direct chunks or another relay are rejected for this
   narrow worker path and their relay reservation is released.
+- Anchor worker authorization to the daemon-stored transfer plan. The daemon
+  now keeps the exact plan for each planned transfer, derives worker relay
+  ranges from that plan during authorization, returns the plan with the worker
+  context, and the CUDA worker executor refuses to execute without a
+  daemon-issued plan.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.

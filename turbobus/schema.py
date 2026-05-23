@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Mapping
 
 
 class TransferMode(str, Enum):
@@ -256,6 +256,7 @@ class WorkerTransferAuthorization:
     direction: str
     ranges: tuple[dict[str, int], ...] = field(default_factory=tuple)
     relay_gpu: int | None = None
+    plan: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not str(self.transfer_id).strip():
@@ -274,12 +275,15 @@ class WorkerTransferAuthorization:
             raise ValueError("src buffer job does not match authorization job")
         if self.dst_buffer.job_id != str(self.job_id):
             raise ValueError("dst buffer job does not match authorization job")
+        if not isinstance(self.plan, Mapping):
+            raise TypeError("plan must be a mapping")
         object.__setattr__(self, "transfer_id", str(self.transfer_id))
         object.__setattr__(self, "lease_id", str(self.lease_id))
         object.__setattr__(self, "session_id", str(self.session_id))
         object.__setattr__(self, "job_id", str(self.job_id))
         object.__setattr__(self, "direction", direction)
         object.__setattr__(self, "ranges", tuple(normalized_ranges))
+        object.__setattr__(self, "plan", dict(self.plan))
         if self.relay_gpu is not None:
             object.__setattr__(self, "relay_gpu", int(self.relay_gpu))
             if self.relay_gpu < 0:
@@ -412,6 +416,7 @@ class WorkerDataPlaneRequest:
     dst_handle: WorkerBufferHandle
     staging: WorkerStagingBufferRequirement
     ranges: tuple[dict[str, int], ...] = field(default_factory=tuple)
+    plan: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -453,6 +458,7 @@ class WorkerDataPlaneRequest:
                 alignment_bytes=staging_alignment_bytes,
             ),
             ranges=ranges,
+            plan=authorization.plan,
             metadata={} if metadata is None else metadata,
         )
 
@@ -477,6 +483,8 @@ class WorkerDataPlaneRequest:
             raise TypeError("dst_handle must be a WorkerBufferHandle")
         if not isinstance(self.staging, WorkerStagingBufferRequirement):
             raise TypeError("staging must be a WorkerStagingBufferRequirement")
+        if not isinstance(self.plan, Mapping):
+            raise TypeError("plan must be a mapping")
         ranges = _normalize_worker_ranges(self.ranges)
         if not ranges:
             raise ValueError("worker data-plane request requires chunk ranges")
@@ -500,6 +508,7 @@ class WorkerDataPlaneRequest:
         object.__setattr__(self, "relay_gpu", relay_gpu)
         object.__setattr__(self, "direction", direction)
         object.__setattr__(self, "ranges", tuple(ranges))
+        object.__setattr__(self, "plan", dict(self.plan))
         object.__setattr__(self, "metadata", dict(self.metadata))
 
 

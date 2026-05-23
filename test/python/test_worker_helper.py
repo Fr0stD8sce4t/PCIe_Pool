@@ -682,7 +682,6 @@ class WorkerHelperTest(unittest.TestCase):
                 dst_buffer_id="gpu-buffer",
                 direction="h2d",
                 relay_gpu=1,
-                ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
             )
         )
 

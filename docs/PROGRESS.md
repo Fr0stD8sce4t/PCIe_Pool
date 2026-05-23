@@ -72,6 +72,12 @@ transfer request objects:
   the worker/helper instead of reusing the original client request range. The
   current H2D worker path rejects direct or mixed pooled daemon plans and
   releases the relay reservation before returning the error;
+- daemon worker authorization now stores and returns the exact daemon transfer
+  plan, derives worker relay chunk ranges from that stored plan, and rejects
+  worker requests whose supplied ranges do not match the daemon plan;
+- `CudaWorkerExecutor` now requires a daemon-issued plan in the worker
+  data-plane request and builds its native H2D relay plan from the authorized
+  daemon-plan chunks instead of reconstructing a relay plan from worker ranges;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -281,6 +287,10 @@ transfer request objects:
 - Added worker-managed client coverage proving that worker authorization uses
   daemon plan chunks, and that an unsupported mixed pool plan releases its
   daemon relay reservation.
+- Added daemon, worker-managed client, and CUDA worker executor coverage for
+  daemon-stored transfer plans flowing through worker authorization into the
+  data-plane executor, with client-supplied worker ranges no longer acting as
+  authority.
 
 ## Immediate Goal
 
@@ -424,6 +434,11 @@ phase:
     relay chunk list for the leased relay. The narrow worker path refuses mixed
     direct-plus-relay plans until pooled worker execution exists, and it asks
     the daemon to release the relay reservation before surfacing that error.
+49. worker authorization is now anchored to the daemon-stored transfer plan.
+    The client no longer sends locally derived worker ranges, the daemon
+    derives the authorized relay chunks from its own plan, returns that plan to
+    the worker data-plane request, and the CUDA worker executor requires that
+    daemon-issued plan before submitting native H2D relay work.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

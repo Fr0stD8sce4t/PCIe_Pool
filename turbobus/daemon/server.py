@@ -53,6 +53,7 @@ class TurboBusDaemon:
         self._sessions: dict[str, Session] = {}
         self._reservations: dict[str, TransferReservation] = {}
         self._reservation_transfers: dict[str, str] = {}
+        self._transfer_plans: dict[str, dict[str, object]] = {}
         self._lease_tokens: dict[str, LeaseToken] = {}
         self._transfer_statuses: dict[str, TransferStatus] = {}
         self._cleanup_events: list[CleanupRequest] = []
@@ -423,11 +424,20 @@ class TurboBusDaemon:
             reservation = self._reservations[lease.lease_id]
             if reservation.direction not in {"unknown", request.direction}:
                 return DaemonResponse(ok=False, error="reservation direction mismatch")
-            requested_bytes = (
-                sum(item["bytes"] for item in request.ranges)
-                if request.ranges
-                else reservation.bytes
-            )
+            plan = self._transfer_plans.get(request.transfer_id)
+            if plan is None:
+                return DaemonResponse(ok=False, error="transfer plan is unavailable")
+            try:
+                authorized_ranges = _relay_ranges_from_plan(
+                    plan,
+                    relay_gpu=lease.relay_gpu,
+                    direction=request.direction,
+                )
+            except ValueError as exc:
+                return DaemonResponse(ok=False, error=str(exc))
+            if request.ranges and request.ranges != authorized_ranges:
+                return DaemonResponse(ok=False, error="worker ranges do not match daemon plan")
+            requested_bytes = sum(item["bytes"] for item in authorized_ranges)
             if requested_bytes > reservation.bytes:
                 return DaemonResponse(ok=False, error="authorization exceeds reservation bytes")
             required_buffers = (request.src_buffer_id, request.dst_buffer_id)
@@ -446,8 +456,9 @@ class TurboBusDaemon:
                 src_buffer=src_buffer,
                 dst_buffer=dst_buffer,
                 direction=request.direction,
-                ranges=request.ranges,
+                ranges=authorized_ranges,
                 relay_gpu=lease.relay_gpu,
+                plan=plan,
             )
             return DaemonResponse(
                 ok=True,
@@ -531,6 +542,7 @@ class TurboBusDaemon:
                 session_id=session.session_id,
             )
             self._transfer_statuses[transfer_id] = status
+            self._transfer_plans[transfer_id] = decision.plan.as_dict()
             self._touch_session_locked(session.session_id, now)
             payload = decision.as_dict()
             payload["transfer_id"] = transfer_id
@@ -1376,3 +1388,41 @@ def reserve_socket(path: str) -> socket.socket:
     sock.bind(path)
     sock.listen()
     return sock
+
+
+def _relay_ranges_from_plan(
+    plan: dict[str, object],
+    *,
+    relay_gpu: int,
+    direction: str,
+) -> tuple[dict[str, int], ...]:
+    if not isinstance(plan, dict):
+        raise ValueError("transfer plan is unavailable")
+    ranges: list[dict[str, int]] = []
+    relay = int(relay_gpu)
+    requested_direction = str(direction).lower()
+    for assignment in plan.get("assignments", ()) or ():
+        if not isinstance(assignment, dict):
+            raise ValueError("transfer plan assignment must be an object")
+        path = assignment.get("path")
+        if not isinstance(path, dict):
+            raise ValueError("transfer plan assignment path must be an object")
+        if str(path.get("kind", "")).lower() != "relay":
+            continue
+        if str(path.get("direction", "")).lower() != requested_direction:
+            continue
+        if int(path.get("relay_device", -1)) != relay:
+            continue
+        for chunk in assignment.get("chunks", ()) or ():
+            if not isinstance(chunk, dict):
+                raise ValueError("transfer plan chunk must be an object")
+            ranges.append(
+                {
+                    "src_offset": int(chunk["src_offset"]),
+                    "dst_offset": int(chunk["dst_offset"]),
+                    "bytes": int(chunk["bytes"]),
+                }
+            )
+    if not ranges:
+        raise ValueError("daemon plan has no authorized relay chunks")
+    return tuple(ranges)

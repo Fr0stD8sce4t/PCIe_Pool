@@ -124,10 +124,7 @@ class WorkerManagedTransferClient:
         _require_ok(planned, "daemon transfer planning failed")
         lease_token = _single_lease_token(self.daemon_client, planned)
         try:
-            worker_ranges = _relay_chunks_from_daemon_plan(
-                planned.payload,
-                lease_token,
-            )
+            _require_relay_only_worker_h2d_plan(planned.payload, lease_token)
         except Exception:
             _cleanup_planned_relay_lease(self.daemon_client, lease_token)
             raise
@@ -140,7 +137,7 @@ class WorkerManagedTransferClient:
             src_buffer_id=source.buffer_id,
             dst_buffer_id=target.buffer_id,
             direction="h2d",
-            ranges=worker_ranges,
+            ranges=(),
             relay_gpu=int(lease_token["relay_gpu"]),
         )
         worker_execution = _submit_worker_execution(
@@ -231,15 +228,15 @@ def _single_lease_token(daemon_client, response: DaemonResponse) -> Mapping[str,
     return dict(lease_tokens[0])
 
 
-def _relay_chunks_from_daemon_plan(
+def _require_relay_only_worker_h2d_plan(
     plan_payload: Mapping[str, object],
     lease_token: Mapping[str, object],
-) -> tuple[dict[str, int], ...]:
+) -> None:
     plan = plan_payload.get("plan")
     if not isinstance(plan, Mapping):
         raise RuntimeError("daemon response did not include a transfer plan")
     relay_gpu = int(lease_token["relay_gpu"])
-    chunks: list[dict[str, int]] = []
+    found_relay_chunks = False
     for assignment in plan.get("assignments", ()) or ():
         if not isinstance(assignment, Mapping):
             raise RuntimeError("daemon transfer plan assignment must be a mapping")
@@ -258,19 +255,10 @@ def _relay_chunks_from_daemon_plan(
                 "worker-managed H2D transfer currently requires a relay-only "
                 "daemon plan for the leased relay"
             )
-        for chunk in assignment.get("chunks", ()) or ():
-            if not isinstance(chunk, Mapping):
-                raise RuntimeError("daemon transfer plan chunk must be a mapping")
-            chunks.append(
-                {
-                    "src_offset": int(chunk["src_offset"]),
-                    "dst_offset": int(chunk["dst_offset"]),
-                    "bytes": int(chunk["bytes"]),
-                }
-            )
-    if not chunks:
+        if assignment.get("chunks"):
+            found_relay_chunks = True
+    if not found_relay_chunks:
         raise RuntimeError("daemon relay plan did not include worker chunks")
-    return tuple(chunks)
 
 
 def _cleanup_planned_relay_lease(

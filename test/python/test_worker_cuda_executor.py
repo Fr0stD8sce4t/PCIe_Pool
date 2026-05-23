@@ -72,7 +72,34 @@ class FakeCpuBuffer:
         pass
 
 
-def worker_request(direction: str = "h2d") -> WorkerTransferRequest:
+def relay_plan(direction: str = "h2d") -> dict[str, object]:
+    return {
+        "total_bytes": 16,
+        "chunk_bytes": 16,
+        "assignments": [
+            {
+                "path": {
+                    "kind": "relay",
+                    "direction": direction,
+                    "target_device": 0,
+                    "relay_device": 1,
+                    "enabled": True,
+                },
+                "chunks": [{"src_offset": 4, "dst_offset": 8, "bytes": 16}],
+                "bytes": 16,
+                "chunk_count": 1,
+            }
+        ],
+    }
+
+
+def worker_request(
+    direction: str = "h2d",
+    *,
+    plan: dict[str, object] | None = None,
+) -> WorkerTransferRequest:
+    if plan is None:
+        plan = relay_plan(direction)
     authorization = WorkerTransferAuthorization(
         transfer_id="transfer-1",
         lease_id="lease-1",
@@ -103,6 +130,7 @@ def worker_request(direction: str = "h2d") -> WorkerTransferRequest:
         direction=direction,
         ranges=({"src_offset": 4, "dst_offset": 8, "bytes": 16},),
         relay_gpu=1,
+        plan=plan,
     )
     return WorkerTransferRequest.from_authorization(authorization)
 
@@ -129,30 +157,10 @@ class CudaWorkerExecutorTest(unittest.TestCase):
         self.assertEqual(result.bytes_completed, 16)
         self.assertEqual(result.metadata["executor"], "cuda_worker")
         self.assertEqual(result.metadata["path"], "relay_h2d")
+        self.assertEqual(result.metadata["plan_source"], "daemon")
         self.assertEqual(
             backend.plan_payloads,
-            [
-                {
-                    "total_bytes": 16,
-                    "chunk_bytes": 16,
-                    "assignments": [
-                        {
-                            "path": {
-                                "kind": "relay",
-                                "direction": "h2d",
-                                "target_device": 0,
-                                "relay_device": 1,
-                                "enabled": True,
-                            },
-                            "chunks": [
-                                {"src_offset": 4, "dst_offset": 8, "bytes": 16}
-                            ],
-                            "bytes": 16,
-                            "chunk_count": 1,
-                        }
-                    ],
-                }
-            ],
+            [relay_plan()],
         )
         self.assertEqual(backend.initialize_calls[0][1:], (0, [1]))
         self.assertEqual(
@@ -169,6 +177,25 @@ class CudaWorkerExecutorTest(unittest.TestCase):
 
         self.assertEqual(result.state, WorkerTransferState.FAILED)
         self.assertIn("bound data-plane resources", result.error)
+
+    def test_executor_requires_daemon_plan(self) -> None:
+        request = worker_request(plan={})
+        slot = WorkerStagingPool().allocate(request.data_plane)
+        resources = WorkerDataPlaneResources(
+            request=request.data_plane,
+            source_cpu_buffer=FakeCpuBuffer(),
+            target_device_ptr=2000,
+            target_device_bytes=64,
+        )
+
+        result = CudaWorkerExecutor(backend=FakeBackend()).execute_bound(
+            request,
+            slot,
+            resources,
+        )
+
+        self.assertEqual(result.state, WorkerTransferState.FAILED)
+        self.assertIn("daemon-issued transfer plan", result.error)
 
     def test_executor_rejects_d2h_until_worker_path_exists(self) -> None:
         request = worker_request(direction="d2h")

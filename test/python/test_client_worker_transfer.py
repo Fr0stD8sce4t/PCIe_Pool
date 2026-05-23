@@ -119,7 +119,7 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
         self.assertEqual(result.target_buffer_id, "gpu-buffer")
         self.assertEqual(result.authorization_request.src_buffer_id, "cpu-buffer")
         self.assertEqual(result.authorization_request.dst_buffer_id, "gpu-buffer")
-        self.assertEqual(result.authorization_request.ranges[0]["bytes"], 16)
+        self.assertEqual(result.authorization_request.ranges, ())
         self.assertEqual(result.worker_lifecycle.final_state, "complete")
         self.assertEqual(
             result.worker_lifecycle.cleanup_target_id,
@@ -133,6 +133,11 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
         self.assertEqual(
             executor.requests[0].authorization.dst_buffer.handle_type,
             "cuda_ipc_device",
+        )
+        self.assertEqual(executor.requests[0].authorization.ranges[0]["bytes"], 16)
+        self.assertEqual(
+            executor.requests[0].data_plane.plan,
+            result.plan["plan"],
         )
         profile = daemon.describe().payload
         self.assertEqual(profile["reservations"], {})
@@ -188,6 +193,7 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
         self.assertEqual(worker_client.envelopes[0].cleanup_target_kind, "reservation")
         self.assertEqual(worker_client.envelopes[0].payload["src_buffer_id"], "cpu-buffer")
         self.assertEqual(worker_client.envelopes[0].payload["dst_buffer_id"], "gpu-buffer")
+        self.assertEqual(worker_client.envelopes[0].payload["ranges"], [])
         self.assertEqual(len(executor.requests), 1)
         profile = daemon.describe().payload
         self.assertEqual(profile["reservations"], {})
@@ -224,8 +230,9 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
             )
 
         self.assertEqual(result.bytes_completed, 64)
+        self.assertEqual(result.authorization_request.ranges, ())
         self.assertEqual(
-            tuple(result.authorization_request.ranges),
+            tuple(executor.requests[0].authorization.ranges),
             (
                 {"src_offset": 0, "dst_offset": 0, "bytes": 16},
                 {"src_offset": 16, "dst_offset": 16, "bytes": 16},
@@ -233,7 +240,7 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
                 {"src_offset": 48, "dst_offset": 48, "bytes": 16},
             ),
         )
-        self.assertEqual(executor.requests[0].authorization.ranges, result.authorization_request.ranges)
+        self.assertEqual(executor.requests[0].data_plane.plan, result.plan["plan"])
 
     def test_worker_managed_transfer_rejects_pool_plan_and_releases_lease(self) -> None:
         daemon = daemon_with_relay_path()
