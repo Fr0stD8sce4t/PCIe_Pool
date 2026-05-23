@@ -893,6 +893,10 @@ phase:
      declared `total_bytes` does not match the sum of assigned chunk bytes.
      Direct fallback, relay, and pooled worker/helper execution all fail before
      native CUDA submission if the daemon plan byte accounting is malformed.
+101. the worker CUDA executor now rejects the same malformed daemon byte
+     accounting before rebuilding its relay-scoped exact-plan payload. A helper
+     cannot bypass the native exact-plan guard by replacing the daemon-declared
+     total with the locally recomputed chunk sum.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

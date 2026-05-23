@@ -326,6 +326,9 @@ Completed current code cut:
   the sum of assigned chunk bytes before converting them to native CUDA plans,
   so malformed direct, relay, or pooled plans cannot reach native copy
   submission.
+- Reject the same `total_bytes` mismatch inside the worker CUDA executor before
+  rebuilding a relay-scoped native plan, so helper execution cannot bypass the
+  shared exact-plan conversion guard.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -393,6 +396,9 @@ Completed current code cut:
      slot for the daemon-authorized transfer and lease.
    - Reject daemon-issued exact plans whose declared total byte count does not
      match their assigned chunks before native CUDA execution.
+   - Reject worker/helper CUDA executor plans whose daemon-declared total byte
+     count does not match the rebuilt direct-plus-relay chunk set before native
+     submission.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor

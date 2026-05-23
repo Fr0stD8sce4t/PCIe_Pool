@@ -307,6 +307,33 @@ class CudaWorkerExecutorTest(unittest.TestCase):
         self.assertEqual(result.state, WorkerTransferState.FAILED)
         self.assertIn("daemon-issued transfer plan", result.error)
 
+    def test_executor_rejects_daemon_plan_total_byte_mismatch_before_backend(
+        self,
+    ) -> None:
+        bad_plan = relay_plan()
+        bad_plan["total_bytes"] = 32
+        request = worker_request(plan=bad_plan)
+        slot = WorkerStagingPool().allocate(request.data_plane)
+        resources = WorkerDataPlaneResources(
+            request=request.data_plane,
+            cpu_buffer=FakeCpuBuffer(),
+            device_ptr=2000,
+            device_bytes=64,
+        )
+        backend = FakeBackend()
+
+        result = CudaWorkerExecutor(backend=backend).execute_bound(
+            request,
+            slot,
+            resources,
+        )
+
+        self.assertEqual(result.state, WorkerTransferState.FAILED)
+        self.assertIn("total bytes", result.error)
+        self.assertEqual(backend.plan_payloads, [])
+        self.assertEqual(backend.initialize_calls, [])
+        self.assertEqual(backend.fetch_calls, [])
+
     def test_executor_runs_h2d_pool_plan_and_waits(self) -> None:
         request = worker_request(
             plan=pool_plan(),
