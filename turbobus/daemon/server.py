@@ -432,7 +432,10 @@ class TurboBusDaemon:
                 job_id=job_id,
                 session_id=session.session_id,
             )
-            planning_relays = self._eligible_relays_for_session_locked(session)
+            relay_eligibility = self._relay_eligibility_for_session_locked(session)
+            planning_relays = tuple(
+                item["relay_gpu"] for item in relay_eligibility["eligible_relays"]
+            )
 
             profile_entry = self._profile_cache.get(
                 self._profile_key(session.target_gpu, planning_relays)
@@ -487,6 +490,11 @@ class TurboBusDaemon:
             payload = decision.as_dict()
             payload["transfer_id"] = transfer_id
             payload["transfer_status"] = asdict(status)
+            payload["planning"] = {
+                "target_gpu": session.target_gpu,
+                "profile_key": self._profile_key(session.target_gpu, planning_relays),
+                "relay_eligibility": relay_eligibility,
+            }
             payload["reservations"] = [asdict(reservation) for reservation in reservations]
             payload["lease_tokens"] = [
                 asdict(self._lease_tokens[reservation.reservation_id])
@@ -893,12 +901,30 @@ class TurboBusDaemon:
         return DaemonResponse(ok=False, error=f"unsupported request: {request.request_type}")
 
     def _eligible_relays_for_session_locked(self, session: Session) -> tuple[int, ...]:
+        relay_eligibility = self._relay_eligibility_for_session_locked(session)
+        return tuple(item["relay_gpu"] for item in relay_eligibility["eligible_relays"])
+
+    def _relay_eligibility_for_session_locked(self, session: Session) -> dict[str, object]:
         inventory = self._topology_provider.snapshot()
-        eligible = inventory.eligible_relay_devices(
+        relay_eligibility = inventory.relay_eligibility(
             target_device=session.target_gpu,
             requested_relays=session.relay_gpus,
         )
-        return tuple(gpu for gpu in eligible if gpu in self._relay_quotas)
+        eligible_relays = []
+        filtered_relays = list(relay_eligibility["filtered_relays"])
+        for item in relay_eligibility["eligible_relays"]:
+            relay_gpu = int(item["relay_gpu"])
+            if relay_gpu in self._relay_quotas:
+                eligible_relays.append({"relay_gpu": relay_gpu, "reason": "eligible"})
+            else:
+                filtered_relays.append(
+                    {"relay_gpu": relay_gpu, "reason": "relay not configured"}
+                )
+        return {
+            **relay_eligibility,
+            "eligible_relays": eligible_relays,
+            "filtered_relays": filtered_relays,
+        }
 
     def handle_wire_message(self, data: bytes | str) -> DaemonResponse:
         try:

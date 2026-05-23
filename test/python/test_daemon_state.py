@@ -290,6 +290,18 @@ class DaemonStateTest(unittest.TestCase):
             planned.payload["reservations"][0]["relay_gpu"],
             1,
         )
+        planning = planned.payload["planning"]
+        self.assertEqual(planning["target_gpu"], 0)
+        self.assertEqual(planning["profile_key"], "target=0;relays=1")
+        self.assertEqual(planning["relay_eligibility"]["requested_relays"], [1, 2])
+        self.assertEqual(
+            planning["relay_eligibility"]["eligible_relays"],
+            [{"relay_gpu": 1, "reason": "eligible"}],
+        )
+        self.assertEqual(
+            planning["relay_eligibility"]["filtered_relays"],
+            [{"relay_gpu": 2, "reason": "missing enabled fabric link"}],
+        )
         self.assertEqual(daemon.describe().payload["relay_quotas"][1]["active_chunks"], 2)
         self.assertEqual(daemon.describe().payload["relay_quotas"][2]["active_chunks"], 0)
 
@@ -356,6 +368,10 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(planned.payload["stats"]["resolved_mode"], "direct")
         self.assertEqual(planned.payload["reservations"], [])
         self.assertEqual(planned.payload["stats"]["relay_bytes"], 0)
+        self.assertEqual(
+            planned.payload["planning"]["relay_eligibility"]["filtered_relays"],
+            [{"relay_gpu": 1, "reason": "missing enabled fabric link"}],
+        )
         self.assertEqual(daemon.describe().payload["relay_quotas"][1]["active_chunks"], 0)
 
     def test_profile_cache_get_put_round_trip(self) -> None:

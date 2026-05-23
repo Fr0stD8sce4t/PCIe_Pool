@@ -88,14 +88,18 @@ Current status:
 - daemon planning now derives relay eligibility from the daemon-owned inventory
   before profile lookup and scheduling, while keeping the cached profile path
   and direct fallback behavior intact.
+- daemon plan responses now include inventory-derived planning metadata,
+  including requested relay ids, eligible relays, filtered relays with reasons,
+  and the profile key used for planning.
 
 Next code cut:
 
-- surface inventory-derived planning metadata in daemon plan responses, such as
-  eligible relay ids and why requested relays were filtered out;
-- keep this as control-plane observability only, without changing transfer
-  execution or adding real hardware discovery;
-- preserve existing direct fallback and cached profile behavior.
+- add daemon-side lease and transfer cleanup observability for stale sessions
+  and canceled reservations, so future worker/helper failures have visible
+  control-plane outcomes;
+- keep this as daemon state/reporting only, without adding worker execution,
+  CUDA IPC, or hardware discovery;
+- preserve existing lease release, direct fallback, and cached profile behavior.
 
 ## Upcoming
 

@@ -366,6 +366,16 @@ class SchemaTest(unittest.TestCase):
             inventory.eligible_relay_devices(target_device=0, requested_relays=[1, 2]),
             (1,),
         )
+        eligibility = inventory.relay_eligibility(
+            target_device=0,
+            requested_relays=[1, 2],
+        )
+        self.assertEqual(eligibility["requested_relays"], [1, 2])
+        self.assertEqual(eligibility["eligible_relays"], [{"relay_gpu": 1, "reason": "eligible"}])
+        self.assertEqual(
+            eligibility["filtered_relays"],
+            [{"relay_gpu": 2, "reason": "missing enabled fabric link"}],
+        )
 
 
 if __name__ == "__main__":

@@ -94,6 +94,9 @@ transfer request objects:
 - `TurboBusDaemon.plan_transfer` now uses daemon-owned inventory to filter
   relay eligibility before profile lookup and scheduler input, while preserving
   cached profile lookup and direct fallback behavior.
+- daemon plan responses now include a `planning` block with the profile key,
+  requested relays, eligible relays, and filtered relays with inventory-derived
+  reasons.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -144,11 +147,15 @@ phase:
 15. daemon planning now starts relay eligibility from the daemon-owned
     inventory, so disabled or missing fabric paths are not handed to the
     scheduler as usable relay paths.
+16. daemon plan responses now surface inventory-derived planning metadata, so
+    clients and tests can see which relays were eligible or filtered without
+    changing transfer execution.
 
-The next immediate goal is to surface inventory-derived planning metadata in
-daemon plan responses, such as eligible relay ids and why requested relays were
-filtered out. This should remain control-plane observability only and should
-not change transfer execution or add real hardware discovery.
+The next immediate goal is to add daemon-side lease and transfer cleanup
+observability for stale sessions and canceled reservations, so future
+worker/helper failures have visible control-plane outcomes. This should remain
+daemon state/reporting only and should not add worker execution, CUDA IPC, or
+hardware discovery.
 
 ## Verification
 
@@ -184,7 +191,9 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
   scheduling can consume; done as the first inventory cut;
 - connect daemon scheduling inputs to the inventory skeleton without changing
   direct fallback behavior; done as the first scheduling-input cut;
-- surface inventory-derived planning metadata in daemon responses;
+- surface inventory-derived planning metadata in daemon responses; done as the
+  first observability cut;
+- add daemon cleanup observability for stale sessions and canceled reservations;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

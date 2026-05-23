@@ -136,22 +136,66 @@ class DaemonResourceInventory:
         target_device: int,
         requested_relays: Iterable[int],
     ) -> tuple[int, ...]:
+        return tuple(
+            item["relay_gpu"]
+            for item in self.relay_eligibility(target_device, requested_relays)[
+                "eligible_relays"
+            ]
+        )
+
+    def relay_eligibility(
+        self,
+        target_device: int,
+        requested_relays: Iterable[int],
+    ) -> dict[str, object]:
         candidates = tuple(sorted({int(gpu) for gpu in requested_relays}))
         if not candidates:
-            return ()
+            return {
+                "requested_relays": [],
+                "eligible_relays": [],
+                "filtered_relays": [],
+                "inventory_source": self.source,
+                "inventory_discovered_at": self.discovered_at,
+            }
 
+        filtered: list[dict[str, object]] = []
         if self.gpus:
             known_gpus = {gpu.device_id for gpu in self.gpus}
-            candidates = tuple(gpu for gpu in candidates if gpu in known_gpus)
+            candidates, removed = _partition_candidates(candidates, known_gpus)
+            filtered.extend(
+                {"relay_gpu": gpu, "reason": "unknown gpu"}
+                for gpu in removed
+            )
         if self.pcie_paths:
             pcie_devices = {path.device_id for path in self.pcie_paths}
-            candidates = tuple(gpu for gpu in candidates if gpu in pcie_devices)
+            candidates, removed = _partition_candidates(candidates, pcie_devices)
+            filtered.extend(
+                {"relay_gpu": gpu, "reason": "missing pcie path"}
+                for gpu in removed
+            )
         if self.fabric_links:
             target = int(target_device)
-            candidates = tuple(
-                gpu for gpu in candidates if _has_enabled_fabric_link(self, gpu, target)
+            eligible = tuple(
+                gpu
+                for gpu in candidates
+                if _has_enabled_fabric_link(self, gpu, target)
             )
-        return candidates
+            filtered.extend(
+                {"relay_gpu": gpu, "reason": "missing enabled fabric link"}
+                for gpu in candidates
+                if gpu not in eligible
+            )
+            candidates = eligible
+        return {
+            "requested_relays": list(sorted({int(gpu) for gpu in requested_relays})),
+            "eligible_relays": [
+                {"relay_gpu": gpu, "reason": "eligible"}
+                for gpu in candidates
+            ],
+            "filtered_relays": filtered,
+            "inventory_source": self.source,
+            "inventory_discovered_at": self.discovered_at,
+        }
 
 
 class TopologyProvider:
@@ -201,3 +245,12 @@ def _has_enabled_fabric_link(
         ):
             return True
     return False
+
+
+def _partition_candidates(
+    candidates: tuple[int, ...],
+    allowed: set[int],
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    kept = tuple(gpu for gpu in candidates if gpu in allowed)
+    removed = tuple(gpu for gpu in candidates if gpu not in allowed)
+    return kept, removed
