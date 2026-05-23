@@ -149,17 +149,22 @@ Current status:
   completion envelope, so future helper process callers can consume completion,
   status, cleanup, and staging-release output without parsing the full
   lifecycle payload.
+- worker process message codecs now encode and decode JSON-safe
+  `WorkerServiceRequestEnvelope` and `WorkerServiceResponseEnvelope` payloads
+  in process, preserving completion envelopes and malformed-message errors
+  without adding sockets, IPC, CUDA IPC, real data movement, or hardware
+  discovery.
 
 Next code cut:
 
-- add a minimal worker process message codec around
-  `WorkerServiceRequestEnvelope` and `WorkerServiceResponseEnvelope`, so the
-  future helper socket/IPC boundary has one JSON-safe encode/decode path before
-  any real socket, CUDA IPC, or data movement code is added;
+- add an in-process worker service message handler that accepts encoded worker
+  request messages, decodes them through the worker message codec, runs the
+  existing `WorkerTransferService.handle_envelope` path, and returns an encoded
+  worker response message;
 - keep it in process only, with no CUDA IPC, sockets, real data movement, or
   hardware discovery yet;
-- add focused tests for request/response round trips, malformed payloads, and
-  preservation of the completion envelope.
+- add focused tests for encoded success responses, malformed encoded requests,
+  and preservation of the completion envelope.
 
 ## Upcoming
 

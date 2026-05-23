@@ -21,6 +21,13 @@ from .helper import (
     parse_worker_authorization_request_payload,
     run_worker_service_control_plane_smoke,
 )
+from .codec import (
+    WorkerMessageCodecError,
+    decode_worker_request_envelope,
+    decode_worker_response_envelope,
+    encode_worker_request_envelope,
+    encode_worker_response_envelope,
+)
 from .staging_pool import (
     WorkerStagingPool,
     WorkerStagingPoolError,
@@ -50,6 +57,11 @@ __all__ = [
     "WorkerStagingPool",
     "WorkerStagingPoolError",
     "WorkerStagingSlot",
+    "WorkerMessageCodecError",
+    "decode_worker_request_envelope",
+    "decode_worker_response_envelope",
+    "encode_worker_request_envelope",
+    "encode_worker_response_envelope",
     "parse_worker_authorization_request_payload",
     "run_worker_service_control_plane_smoke",
 ]
