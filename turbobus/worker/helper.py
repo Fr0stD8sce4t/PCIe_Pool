@@ -584,6 +584,26 @@ class WorkerTransferCleanupCoordinator:
             force=force,
         )
 
+    def cleanup_status_report_failure(
+        self,
+        request: WorkerTransferRequest,
+        target_kind: str = "reservation",
+        reason: str = "worker_status_report_failed",
+        force: bool = True,
+    ) -> DaemonResponse:
+        if not isinstance(request, WorkerTransferRequest):
+            raise TypeError("request must be a WorkerTransferRequest")
+        return self._cleanup(
+            target_kind=target_kind,
+            target_id=_cleanup_target_id(
+                target_kind,
+                lease_id=request.authorization.lease_id,
+                session_id=request.authorization.session_id,
+            ),
+            reason=reason,
+            force=force,
+        )
+
     def _cleanup(
         self,
         target_kind: str,
@@ -728,6 +748,31 @@ class WorkerTransferClient:
                 staging_slot.slot_id,
                 worker_request.data_plane,
             )
+            cleanup_target_id = _cleanup_target_id(
+                cleanup_target_kind,
+                lease_id=worker_request.authorization.lease_id,
+                session_id=worker_request.authorization.session_id,
+            )
+            try:
+                cleanup_response = (
+                    self.cleanup_coordinator.cleanup_status_report_failure(
+                        worker_request,
+                        target_kind=cleanup_target_kind,
+                    )
+                )
+            except WorkerCleanupError as cleanup_exc:
+                return WorkerTransferLifecycleRecord(
+                    authorization_request=request,
+                    worker_request=worker_request,
+                    staging_slot=staging_slot,
+                    staging_release=staging_release,
+                    result=result,
+                    status_update=status_update,
+                    cleanup_target_kind=cleanup_target_kind,
+                    cleanup_target_id=cleanup_target_id,
+                    final_state="cleanup_failed",
+                    error=str(cleanup_exc),
+                )
             return WorkerTransferLifecycleRecord(
                 authorization_request=request,
                 worker_request=worker_request,
@@ -735,6 +780,9 @@ class WorkerTransferClient:
                 staging_release=staging_release,
                 result=result,
                 status_update=status_update,
+                cleanup_target_kind=cleanup_target_kind,
+                cleanup_target_id=cleanup_target_id,
+                cleanup_response=cleanup_response,
                 final_state="status_failed",
                 error=str(exc),
             )

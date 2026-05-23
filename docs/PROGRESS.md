@@ -135,6 +135,11 @@ transfer request objects:
   its own: it requires the daemon-owned final transfer status to be `complete`
   with the requested byte count, and cleans the relay reservation if the daemon
   status remains submitted, failed, canceled, or byte-mismatched;
+- worker helper lifecycle cleanup now also covers daemon status-report
+  failures. After helper execution, a failed `TRANSFER_STATUS` update releases
+  the local staging slot and force-cleans the daemon reservation with
+  `worker_status_report_failed`, including the case where the worker executor
+  had already completed the byte movement;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -580,6 +585,10 @@ phase:
     worker/helper completion. If the helper reports complete but the daemon
     status is not complete with the expected byte count, the client cleans the
     relay reservation and raises an error.
+64. worker helper lifecycle now cleans daemon reservations when status
+    reporting fails after execution. The status-failed path releases local
+    staging, sends daemon cleanup with `worker_status_report_failed`, and does
+    not treat a completed worker result as a normal reservation release.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

@@ -173,6 +173,10 @@ Completed current code cut:
   `complete` status and the expected byte count after the worker/helper
   returns complete; otherwise it cleans the relay reservation and reports an
   error instead of returning a false success.
+- Clean daemon relay reservations when worker status reporting fails after
+  execution. The helper lifecycle now releases its local staging slot and then
+  force-cleans the daemon reservation with `worker_status_report_failed`, even
+  if the worker executor had already completed the byte movement.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -196,6 +200,8 @@ Completed current code cut:
      worker staging allocation.
    - Reject incomplete daemon transfer-status completion updates.
    - Require client-side final status checks after worker/helper completion.
+   - Clean daemon relay reservations when worker status reporting fails after
+     helper execution.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor
