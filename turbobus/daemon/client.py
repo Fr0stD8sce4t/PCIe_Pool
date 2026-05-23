@@ -238,6 +238,9 @@ class TurboBusDaemonClient:
             )
         )
 
+    def describe(self) -> DaemonResponse:
+        return self.send(DaemonRequest(request_type=RequestType.PROFILE))
+
     def get_inventory(self) -> DaemonResponse:
         return self.send(
             DaemonRequest(

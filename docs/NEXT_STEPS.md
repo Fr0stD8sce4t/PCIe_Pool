@@ -94,15 +94,19 @@ Current status:
 - daemon state now reports system cleanup outcomes for stale sessions, closed
   sessions, and canceled reservations through `system_cleanup_events` in the
   daemon profile/describe payload.
+- `TurboBusDaemonClient.describe()` now exposes the daemon profile/describe
+  path, and socket coverage checks that cleanup observability is reachable
+  through the same control-plane client.
 
 Next code cut:
 
-- add a small daemon client helper and socket coverage for the daemon
-  profile/describe path so cleanup observability is available through the same
-  control-plane client used by workers and runtimes;
-- keep this as reporting only, without adding worker execution, CUDA IPC, or
-  hardware discovery;
-- preserve existing lease release, direct fallback, and cached profile behavior.
+- add a daemon client helper for the existing `CLEANUP` request so clients can
+  request job, buffer, session, or reservation cleanup without hand-building
+  daemon messages;
+- add focused socket coverage for client-driven cleanup and the resulting
+  cleanup/system cleanup events;
+- keep this as control-plane cleanup only, without adding worker execution,
+  CUDA IPC, or hardware discovery.
 
 ## Upcoming
 

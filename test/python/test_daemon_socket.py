@@ -9,7 +9,11 @@ import time
 import unittest
 
 from turbobus.daemon import TurboBusDaemonClient
-from turbobus.daemon.protocol import WorkerTransferAuthorizationRequest
+from turbobus.daemon.protocol import (
+    DaemonResponse,
+    RequestType,
+    WorkerTransferAuthorizationRequest,
+)
 from turbobus.daemon.server import TurboBusDaemon
 from turbobus.daemon.topology import (
     DaemonResourceInventory,
@@ -41,7 +45,25 @@ def send_raw_request(path: str, request: bytes) -> dict:
         client.close()
 
 
+class RecordingDaemonClient(TurboBusDaemonClient):
+    def __init__(self) -> None:
+        self.requests = []
+
+    def send(self, request):
+        self.requests.append(request)
+        return DaemonResponse(ok=True, payload={"sessions": {}})
+
+
 class DaemonSocketTest(unittest.TestCase):
+    def test_client_describe_uses_profile_request(self) -> None:
+        client = RecordingDaemonClient()
+
+        response = client.describe()
+
+        self.assertTrue(response.ok)
+        self.assertEqual(len(client.requests), 1)
+        self.assertEqual(client.requests[0].request_type, RequestType.PROFILE)
+
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
     def test_socket_session_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -269,6 +291,68 @@ class DaemonSocketTest(unittest.TestCase):
             self.assertEqual(
                 inventory.payload["inventory"]["gpus"][0]["device_id"],
                 1,
+            )
+
+    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
+    def test_client_describe_reports_cleanup_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            socket_path = os.path.join(tmpdir, "turbobusd.sock")
+            daemon = TurboBusDaemon(
+                relay_gpus=[1],
+                max_sessions_per_relay=1,
+                max_inflight_chunks_per_relay=4,
+            )
+            thread = threading.Thread(
+                target=daemon.serve_forever,
+                args=(socket_path,),
+                daemon=True,
+            )
+            thread.start()
+
+            for _ in range(100):
+                if os.path.exists(socket_path):
+                    break
+                time.sleep(0.01)
+            self.assertTrue(os.path.exists(socket_path))
+
+            client = TurboBusDaemonClient(socket_path)
+            registered = client.register_session(
+                target_gpu=0,
+                relay_gpus=[1],
+                max_inflight_chunks=4,
+            )
+            self.assertTrue(registered.ok)
+            session_id = registered.payload["session"]["session_id"]
+            reserved = client.reserve_transfer(
+                session_id=session_id,
+                relay_gpu=1,
+                chunks=4,
+            )
+            self.assertTrue(reserved.ok)
+            reservation_id = reserved.payload["reservation"]["reservation_id"]
+
+            closed = client.close_session(session_id)
+            self.assertTrue(closed.ok)
+            profile = client.describe()
+
+            self.assertTrue(profile.ok)
+            self.assertIn(
+                {
+                    "target_kind": "session",
+                    "target_id": session_id,
+                    "reason": "session_closed",
+                    "force": True,
+                },
+                profile.payload["system_cleanup_events"],
+            )
+            self.assertIn(
+                {
+                    "target_kind": "reservation",
+                    "target_id": reservation_id,
+                    "reason": "session_closed",
+                    "force": True,
+                },
+                profile.payload["system_cleanup_events"],
             )
 
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
