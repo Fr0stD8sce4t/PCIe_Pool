@@ -36,7 +36,7 @@ serves the system goal.
 Delete or fold down code that only supports the old unsupported path:
 
 - standalone smoke helpers and smoke-only tests; done for the worker
-  control-plane smoke helper;
+  control-plane smoke helper and the old daemon benchmark smoke wrapper;
 - endpoint observability snapshots, metrics, event history, and reset plumbing;
   done for the worker endpoint, codec, transport, and process path;
 - extra socket/transport wrappers that do not carry real transfer execution;
@@ -177,6 +177,9 @@ Completed current code cut:
   execution. The helper lifecycle now releases its local staging slot and then
   force-cleans the daemon reservation with `worker_status_report_failed`, even
   if the worker executor had already completed the byte movement.
+- Remove the old daemon benchmark smoke wrapper. The deleted helper only
+  launched the legacy daemon plus benchmark clients and parsed status lines; it
+  did not exercise the daemon-approved worker/helper data path.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.

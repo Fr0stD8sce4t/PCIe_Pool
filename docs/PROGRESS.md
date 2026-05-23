@@ -140,6 +140,9 @@ transfer request objects:
   the local staging slot and force-cleans the daemon reservation with
   `worker_status_report_failed`, including the case where the worker executor
   had already completed the byte movement;
+- the old daemon benchmark smoke wrapper has been removed. It only started the
+  legacy daemon plus benchmark clients and parsed status lines, so it no longer
+  belongs on the main path toward daemon-approved worker/helper data movement;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -589,6 +592,10 @@ phase:
     reporting fails after execution. The status-failed path releases local
     staging, sends daemon cleanup with `worker_status_report_failed`, and does
     not treat a completed worker result as a normal reservation release.
+65. the old daemon benchmark smoke wrapper and its smoke-only tests have been
+    removed. The remaining verification direction is the worker-managed
+    helper-socket path in `turbobus.verification`, not the legacy benchmark
+    client loop.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
