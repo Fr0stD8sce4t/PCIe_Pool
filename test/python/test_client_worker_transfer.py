@@ -17,6 +17,7 @@ from turbobus.daemon.topology import (
     PciePathRecord,
     StaticTopologyProvider,
 )
+from turbobus.runtime_engine import RuntimeOptions
 from turbobus.schema import DaemonResponse
 from turbobus.worker import (
     CudaWorkerExecutor,
@@ -902,11 +903,15 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
 
     def test_factory_defaults_to_cuda_worker_executor_with_resource_binding(self) -> None:
         daemon = daemon_with_relay_path()
+        backend = FakeDirectBackend()
+        runtime_options = RuntimeOptions(chunk_bytes=32)
 
         transfer_client = make_worker_managed_transfer_client(
             daemon,
             target_gpu=0,
             relay_gpus=[1],
+            backend=backend,
+            runtime_options=runtime_options,
         )
 
         self.assertIsInstance(
@@ -917,6 +922,11 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
             transfer_client.worker_client.resource_binder,
             WorkerDataPlaneResourceBinder,
         )
+        self.assertIs(transfer_client.backend, backend)
+        self.assertIs(transfer_client.runtime_options, runtime_options)
+        self.assertIs(transfer_client.worker_client.executor.backend, backend)
+        self.assertIs(transfer_client.worker_client.executor.options, runtime_options)
+        self.assertIs(transfer_client.worker_client.resource_binder.backend, backend)
 
 
 def daemon_with_relay_path(max_inflight_chunks_per_relay: int = 8) -> TurboBusDaemon:

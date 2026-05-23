@@ -177,6 +177,11 @@ transfer request objects:
   transfer status to complete, and leaves worker relay execution unused. The
   CUDA-server verifier accepts `--mode direct` and can accept pool requests
   that resolve to daemon direct fallback;
+- worker-managed client construction now uses one CUDA backend/runtime option
+  set for both direct fallback and the default worker/helper path. If a caller
+  passes a backend or runtime options into `make_worker_managed_transfer_client`,
+  the direct fallback executor, CUDA worker executor, and resource binder all
+  receive that same configuration;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -665,6 +670,11 @@ phase:
     and returns a complete transfer without sending a worker relay request.
     `turbobus.verification` now accepts `--mode direct` and handles pool
     requests that resolve to direct fallback.
+73. worker-managed backend configuration is now consistent across direct and
+    worker/helper execution. `make_worker_managed_transfer_client` passes the
+    selected backend and runtime options into the default CUDA worker executor
+    and resource binder, so direct fallback, relay, and pool paths do not
+    silently use different backend instances.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

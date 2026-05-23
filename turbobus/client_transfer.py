@@ -653,18 +653,19 @@ def make_worker_managed_transfer_client(
     backend=default_cuda_backend,
     runtime_options: RuntimeOptions | None = None,
 ) -> WorkerManagedTransferClient:
+    options = runtime_options or RuntimeOptions()
     return WorkerManagedTransferClient(
         daemon_client=daemon_client,
         worker_client=worker_client or WorkerTransferClient(
             daemon_client,
-            executor=CudaWorkerExecutor(),
-            resource_binder=WorkerDataPlaneResourceBinder(),
+            executor=CudaWorkerExecutor(backend=backend, options=options),
+            resource_binder=WorkerDataPlaneResourceBinder(backend=backend),
         ),
         target_gpu=int(target_gpu),
         relay_gpus=tuple(int(gpu) for gpu in relay_gpus),
         max_inflight_chunks=int(max_inflight_chunks),
         backend=backend,
-        runtime_options=runtime_options or RuntimeOptions(),
+        runtime_options=options,
     )
 
 

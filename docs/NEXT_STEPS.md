@@ -213,6 +213,10 @@ Completed current code cut:
   daemon-owned completion, and returns a complete transfer instead of treating
   missing relay lease tokens as an error. The verifier accepts `--mode direct`
   and also handles pool requests that resolve to direct fallback.
+- Keep worker-managed backend configuration consistent across direct fallback
+  and worker/helper execution. The factory now passes the selected CUDA
+  backend and runtime options into the default worker executor and resource
+  binder instead of using separate default instances for relay/pool paths.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
