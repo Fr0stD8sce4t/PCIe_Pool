@@ -131,6 +131,10 @@ transfer request objects:
 - daemon transfer-status updates now reject `complete` states unless
   `bytes_completed` equals the daemon-owned `bytes_total`, so the daemon cannot
   record an incomplete worker/helper transfer as successful completion;
+- daemon transfer-status updates now keep terminal states terminal. Once a
+  transfer is `complete`, `failed`, or `canceled`, later conflicting worker or
+  client status updates are rejected instead of rewriting the daemon-owned
+  outcome;
 - the worker-managed client now treats helper `complete` as insufficient on
   its own: it requires the daemon-owned final transfer status to be `complete`
   with the requested byte count, and cleans the relay reservation if the daemon
@@ -734,6 +738,10 @@ phase:
     `SharedPinnedCpuBuffer.open_from_registration` reaches the borrowed-open
     path, so the helper process cannot accidentally fall back to owner-tracked
     shared memory before CUDA host registration.
+81. daemon transfer status is now terminal once recorded. Repeated identical
+    terminal reports are accepted as idempotent, but a late helper/client update
+    can no longer rewrite `failed`, `canceled`, or `complete` into another
+    state after cleanup or completion has already been recorded.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

@@ -29,6 +29,13 @@ from .scheduler import DaemonScheduler, SchedulerDecision
 from .topology import StaticTopologyProvider, TopologyProvider
 
 
+_TERMINAL_TRANSFER_STATES = {
+    TransferStatusState.COMPLETE,
+    TransferStatusState.FAILED,
+    TransferStatusState.CANCELED,
+}
+
+
 class TurboBusDaemon:
     """Minimal resource-control daemon.
 
@@ -335,10 +342,27 @@ class TurboBusDaemon:
             if state is None and bytes_completed is None and error is None:
                 return DaemonResponse(ok=True, payload={"status": asdict(status)})
             try:
+                requested_state = (
+                    status.state if state is None else TransferStatusState(state)
+                )
+            except ValueError as exc:
+                return DaemonResponse(ok=False, error=str(exc))
+            if status.state in _TERMINAL_TRANSFER_STATES:
+                if (
+                    requested_state == status.state
+                    and _status_bytes_match(status, bytes_completed)
+                    and (error is None or error == status.error)
+                ):
+                    return DaemonResponse(ok=True, payload={"status": asdict(status)})
+                return DaemonResponse(
+                    ok=False,
+                    error="terminal transfer status cannot be updated",
+                )
+            try:
                 updated = TransferStatus(
                     transfer_id=status.transfer_id,
                     job_id=status.job_id,
-                    state=status.state if state is None else TransferStatusState(state),
+                    state=requested_state,
                     bytes_total=status.bytes_total,
                     bytes_completed=(
                         status.bytes_completed
@@ -1469,3 +1493,15 @@ def _normalize_transfer_ranges(
             }
         )
     return tuple(normalized)
+
+
+def _status_bytes_match(
+    status: TransferStatus,
+    bytes_completed: int | None,
+) -> bool:
+    if bytes_completed is None:
+        return True
+    try:
+        return int(bytes_completed) == status.bytes_completed
+    except (TypeError, ValueError):
+        return False

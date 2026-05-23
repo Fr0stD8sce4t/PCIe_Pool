@@ -1584,6 +1584,116 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(status.payload["status"]["state"], "submitted")
         self.assertEqual(status.payload["status"]["bytes_completed"], 0)
 
+    def test_transfer_status_rejects_terminal_state_rewrite(self) -> None:
+        daemon = TurboBusDaemon(relay_gpus=[1])
+        register = daemon.register_session(target_gpu=0, requested_relays=[1])
+        session_id = register.payload["session"]["session_id"]
+
+        planned = daemon.plan_transfer(
+            session_id=session_id,
+            total_bytes=64,
+            chunk_bytes=16,
+            mode="direct",
+            direction="h2d",
+            job_id="job-1",
+        )
+        transfer_id = planned.payload["transfer_id"]
+        failed = daemon.transfer_status(
+            transfer_id,
+            state="failed",
+            bytes_completed=0,
+            error="worker failed",
+        )
+        self.assertTrue(failed.ok)
+
+        idempotent = daemon.transfer_status(
+            transfer_id,
+            state="failed",
+            bytes_completed=0,
+            error="worker failed",
+        )
+        rewritten = daemon.transfer_status(
+            transfer_id,
+            state="complete",
+            bytes_completed=64,
+        )
+        malformed = daemon.transfer_status(
+            transfer_id,
+            state="failed",
+            bytes_completed="bad",
+        )
+        status = daemon.transfer_status(transfer_id)
+
+        self.assertTrue(idempotent.ok)
+        self.assertFalse(rewritten.ok)
+        self.assertFalse(malformed.ok)
+        self.assertIn("terminal transfer status", rewritten.error)
+        self.assertIn("terminal transfer status", malformed.error)
+        self.assertTrue(status.ok)
+        self.assertEqual(status.payload["status"]["state"], "failed")
+        self.assertEqual(status.payload["status"]["bytes_completed"], 0)
+        self.assertEqual(status.payload["status"]["error"], "worker failed")
+
+    def test_releasing_reservation_does_not_rewrite_failed_transfer(self) -> None:
+        daemon = TurboBusDaemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=1,
+            max_inflight_chunks_per_relay=8,
+        )
+        register = daemon.register_session(
+            target_gpu=0,
+            requested_relays=[1],
+            max_inflight_chunks=8,
+        )
+        session_id = register.payload["session"]["session_id"]
+        daemon.put_profile(
+            target_gpu=0,
+            relay_gpus=[1],
+            profile={
+                "target_device": 0,
+                "direct_h2d_bw_gbps": 7.5,
+                "direct_d2h_bw_gbps": 6.5,
+                "relays": [
+                    {
+                        "relay_device": 1,
+                        "target_device": 0,
+                        "h2d_bw_gbps": 7.5,
+                        "d2h_bw_gbps": 6.5,
+                        "p2p_bw_gbps": 40.0,
+                        "effective_bw_gbps": 7.5,
+                        "effective_d2h_bw_gbps": 6.5,
+                        "p2p_enabled": True,
+                    }
+                ],
+            },
+        )
+        planned = daemon.plan_transfer(
+            session_id=session_id,
+            total_bytes=64,
+            chunk_bytes=16,
+            mode="pool",
+            direction="h2d",
+            job_id="job-1",
+        )
+        transfer_id = planned.payload["transfer_id"]
+        reservation_id = planned.payload["reservations"][0]["reservation_id"]
+        failed = daemon.transfer_status(
+            transfer_id,
+            state="failed",
+            bytes_completed=0,
+            error="worker failed",
+        )
+
+        released = daemon.release_transfer(reservation_id)
+        status = daemon.transfer_status(transfer_id)
+
+        self.assertTrue(failed.ok)
+        self.assertTrue(released.ok)
+        self.assertTrue(status.ok)
+        self.assertEqual(status.payload["status"]["state"], "failed")
+        self.assertEqual(status.payload["status"]["bytes_completed"], 0)
+        self.assertEqual(status.payload["status"]["error"], "worker failed")
+
     def test_plan_transfer_falls_back_direct_when_relay_quota_is_unavailable(self) -> None:
         daemon = TurboBusDaemon(
             relay_gpus=[1],

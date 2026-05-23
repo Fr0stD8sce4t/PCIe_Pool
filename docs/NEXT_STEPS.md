@@ -247,6 +247,9 @@ Completed current code cut:
   `SharedPinnedCpuBuffer.open_from_registration`, which is what worker resource
   binding calls before CUDA host registration, now opens through the borrowed
   shared-memory helper.
+- Keep daemon-owned transfer status terminal once a worker/helper outcome has
+  been recorded. Terminal `complete`, `failed`, and `canceled` states now allow
+  only idempotent repeats and reject later conflicting status updates.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
