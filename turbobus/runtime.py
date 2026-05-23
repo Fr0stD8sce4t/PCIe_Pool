@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from typing import Iterable
 
 from . import runtime_engine as _runtime_engine
+from .backends.cuda import default_cuda_backend
 from .daemon import TurboBusDaemonClient
 from .plan_trace import transfer_plan_to_dict
 from .runtime_engine import (
@@ -26,23 +27,22 @@ except ImportError:  # pragma: no cover - depends on local build
 
 
 def _sync_runtime_engine() -> None:
-    _runtime_engine._turbobus = _turbobus
-    _runtime_engine.torch = torch
+    default_cuda_backend.bind_runtime(_turbobus, torch)
 
 
 def _require_extension() -> None:
     _sync_runtime_engine()
-    _runtime_engine._require_extension()
+    default_cuda_backend.require_available()
 
 
 def _require_torch() -> None:
     _sync_runtime_engine()
-    _runtime_engine._require_torch()
+    default_cuda_backend.require_torch()
 
 
 def _runtime_transfer_mode_value(mode: TransferMode | str):
     _sync_runtime_engine()
-    return _runtime_engine._runtime_transfer_mode_value(mode)
+    return default_cuda_backend.transfer_mode_value(mode)
 
 
 def _native_ranges(
@@ -51,7 +51,7 @@ def _native_ranges(
     destination_bytes: int,
 ) -> list:
     _sync_runtime_engine()
-    return _runtime_engine._native_ranges(ranges, source_bytes, destination_bytes)
+    return default_cuda_backend.make_ranges(ranges, source_bytes, destination_bytes)
 
 
 def _validate_range_tensors(
@@ -128,7 +128,7 @@ class Runtime:
         relay_gpus: Iterable[int] | None = None,
         options: RuntimeOptions | None = None,
     ) -> None:
-        _require_extension()
+        _sync_runtime_engine()
         self.target_gpu = int(target_gpu)
         self.relay_gpus = [int(gpu) for gpu in (relay_gpus or [])]
         self.options = options or RuntimeOptions()
@@ -144,7 +144,8 @@ class Runtime:
         self._forced_transfer_mode: TransferMode | None = None
         if TransferMode(self.options.transfer_mode) is TransferMode.AUTO:
             self._last_resolved_transfer_mode = TransferMode.AUTO
-        self._runtime = _turbobus.Runtime(self.options.to_native())
+        self._backend = default_cuda_backend
+        self._runtime = self._backend.create_runtime(self.options)
         self._runtime.init(self.target_gpu, self.relay_gpus)
         self._last_native_transfer_mode = (
             TransferMode.POOL

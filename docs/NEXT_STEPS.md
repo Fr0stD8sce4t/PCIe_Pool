@@ -16,6 +16,7 @@ Completed in the planner/scheduler cut:
   `PlannerLease` objects, reservation ids, and `PlannerStats`.
 - runtime preference for daemon-issued plans when the daemon supports the new
   request, with the old reserve-only request kept for compatibility.
+- backend facade for the current native CUDA runtime.
 
 Current status:
 
@@ -29,20 +30,22 @@ Current status:
   leases as releasable reservations;
 - `Runtime` consumes daemon plan responses before falling back to the legacy
   `reserve_transfer` request.
+- `turbobus.backends.cuda.CudaNativeBackend` owns native runtime creation,
+  transfer-mode translation, and native range construction for the current CUDA
+  path.
 
 Next code cut:
 
-- introduce backend-facing Python modules for the current native CUDA execution
-  path, so runtime no longer reaches directly into native details except through
-  a backend facade;
-- keep behavior the same for direct, relay, and pooled transfers;
-- add focused tests that prove runtime still accepts daemon plans and that the
-  backend facade preserves the existing native call shape.
+- introduce adapter-facing modules for current framework integrations while
+  keeping old imports compatible;
+- start with vLLM-facing files, then model loading and training offload;
+- keep adapters as clients of runtime/daemon APIs, not owners of scheduler or
+  backend policy.
 
 ## Upcoming
 
 1. CUDA backend baseline.
-   - backend facade for the current native runtime;
+   - backend facade for the current native runtime; done as the first cut;
    - local transfer execution on the new interfaces;
    - staging buffer pool;
    - timing and stats parity with the old prototype.
@@ -66,6 +69,7 @@ Next code cut:
    - fallback when relay access is denied.
 
 5. Framework adapters.
+   - adapter package boundary with compatibility imports;
    - vLLM KV prefix save/restore;
    - model loading;
    - training offload.
@@ -88,3 +92,5 @@ Next code cut:
 - Shared protocol and runtime-support modules now back the Python entry points.
 - The daemon can now issue a plan and relay leases instead of only accepting
   per-relay reserve calls.
+- Runtime now reaches the current CUDA native extension through a backend
+  facade instead of creating `_turbobus.Runtime` directly.

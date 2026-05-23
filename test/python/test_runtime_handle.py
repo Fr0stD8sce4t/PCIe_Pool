@@ -541,6 +541,46 @@ class RuntimeOptionsTest(unittest.TestCase):
         self.assertEqual(options.staging_slots, 2)
 
 
+class RuntimeBackendFacadeTest(unittest.TestCase):
+    class FakeNativeRuntime:
+        def __init__(self) -> None:
+            self.init_calls = []
+
+        def init(self, target_gpu, relay_gpus) -> None:
+            self.init_calls.append((target_gpu, list(relay_gpus)))
+
+    class FakeBackend:
+        def __init__(self) -> None:
+            self.bind_calls = []
+            self.create_calls = []
+            self.native_runtime = RuntimeBackendFacadeTest.FakeNativeRuntime()
+
+        def bind_runtime(self, native_module, torch_module) -> None:
+            self.bind_calls.append((native_module, torch_module))
+
+        def create_runtime(self, options):
+            self.create_calls.append(options)
+            return self.native_runtime
+
+    def test_runtime_creates_native_runtime_through_backend_facade(self) -> None:
+        backend = self.FakeBackend()
+        old_backend = runtime_module.default_cuda_backend
+        runtime_module.default_cuda_backend = backend
+        try:
+            runtime = runtime_module.Runtime(
+                target_gpu=0,
+                relay_gpus=[1],
+                options=RuntimeOptions(),
+            )
+        finally:
+            runtime_module.default_cuda_backend = old_backend
+
+        self.assertIs(runtime._backend, backend)
+        self.assertEqual(backend.create_calls, [runtime.options])
+        self.assertEqual(backend.native_runtime.init_calls, [(0, [1])])
+        self.assertEqual(len(backend.bind_calls), 1)
+
+
 class RuntimeDaemonReservationTest(unittest.TestCase):
     class Relay:
         relay_device = 1

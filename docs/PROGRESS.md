@@ -23,6 +23,9 @@ now has its first daemon-managed planning cut:
 - `Runtime` now prefers daemon-issued plans when the connected daemon supports
   `PLAN_TRANSFER`, while keeping the older `RESERVE_TRANSFER` path as a
   compatibility fallback.
+- `turbobus.backends` now exists as the first backend-facing package, and the
+  current CUDA native runtime is reached through `CudaNativeBackend` instead of
+  direct `_turbobus.Runtime(...)` calls in `Runtime`.
 
 ## What Was Updated
 
@@ -36,13 +39,20 @@ now has its first daemon-managed planning cut:
   policy module.
 - `turbobus/daemon/server.py` and `turbobus/daemon/client.py` now support
   daemon-owned plan issuance through `PLAN_TRANSFER`.
+- `turbobus/backends/base.py` and `turbobus/backends/cuda.py` now define the
+  backend facade for the current native CUDA runtime.
+- `turbobus/runtime.py` now binds the native extension through that backend and
+  asks it to create the native runtime, translate transfer modes, and build
+  native ranges.
+- `pyproject.toml` now packages `turbobus.backends`.
 - Added a focused protocol serialization test at
   `test/python/test_schema.py`.
 - Added planner model tests at `test/python/test_planner_types.py`.
 - Added planner engine tests at `test/python/test_planner_engine.py`.
 - Added daemon scheduler tests at `test/python/test_daemon_scheduler.py`.
+- Added backend facade tests at `test/python/test_backend_cuda.py`.
 - Extended daemon state and runtime handle tests for daemon-issued plans and
-  direct fallback.
+  direct fallback, plus runtime construction through the backend facade.
 
 ## Immediate Goal
 
@@ -50,9 +60,11 @@ Finish the refactor layer that separates planning/control from execution:
 
 1. keep runtime as an execution facade that consumes daemon plans instead of
    owning relay choice;
-2. introduce backend-facing boundaries for the current CUDA/native execution
-   path without changing direct, relay, and pooled behavior;
-3. keep framework adapter code outside daemon scheduling and backend execution
+2. keep native CUDA execution behind the backend facade while preserving direct,
+   relay, and pooled behavior;
+3. move framework adapter entry points behind adapter-facing modules without
+   breaking the current public imports;
+4. keep framework adapter code outside daemon scheduling and backend execution
    paths.
 
 ## Verification
@@ -61,6 +73,7 @@ The current refactor checks are:
 
 ```text
 $env:PYTHONPATH='.'; python test/python/test_schema.py
+$env:PYTHONPATH='.'; python test/python/test_backend_cuda.py
 $env:PYTHONPATH='.'; python test/python/test_daemon_scheduler.py
 $env:PYTHONPATH='.'; python test/python/test_daemon_state.py
 $env:PYTHONPATH='.'; python test/python/test_daemon_socket.py
@@ -72,7 +85,7 @@ $env:PYTHONPATH='.'; python test/python/test_planner_engine.py
 ## Remaining Work
 
 - split the current native CUDA execution path behind backend-facing Python
-  interfaces;
+  interfaces further as worker execution grows;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - separate framework adapters from the flat package root once their imports can
