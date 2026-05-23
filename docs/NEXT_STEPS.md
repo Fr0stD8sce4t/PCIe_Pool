@@ -204,14 +204,18 @@ Current status:
 - daemon relay discovery now reports backend-neutral relay eligibility,
   quota availability, cross-job session ownership, active reservations, and
   redacted active lease records without exposing lease tokens.
+- daemon-side expired relay lease cleanup now reaps expired reservations,
+  cancels the matching transfer status, and frees relay quota before state
+  reads.
 
 Next code cut:
 
-- add daemon-side expired relay lease cleanup so stale reservations release
-  relay quota without relying on a client release or session close;
+- expose expired relay lease reaping through the daemon client/socket control
+  path so external callers can trigger the same cleanup without relying on
+  client release or session close;
 - keep it in process only, with no CUDA IPC, sockets, real data movement, or
   hardware discovery yet;
-- add focused tests that expired lease cleanup removes reservations, clears
+- add focused tests that the explicit reaping request clears reservations,
   redacted relay discovery records, and preserves direct fallback behavior.
 
 ## Upcoming

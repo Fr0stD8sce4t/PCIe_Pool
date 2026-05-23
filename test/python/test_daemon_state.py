@@ -859,6 +859,96 @@ class DaemonStateTest(unittest.TestCase):
         self.assertTrue(released.ok)
         self.assertEqual(daemon.describe().payload["relay_quotas"][1]["active_chunks"], 0)
 
+    def test_expired_plan_lease_reap_releases_reservation_and_quota(self) -> None:
+        daemon = TurboBusDaemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=1,
+            max_inflight_chunks_per_relay=2,
+        )
+        register = daemon.register_session(
+            target_gpu=0,
+            requested_relays=[1],
+            max_inflight_chunks=8,
+        )
+        session_id = register.payload["session"]["session_id"]
+        daemon.put_profile(
+            target_gpu=0,
+            relay_gpus=[1],
+            profile={
+                "target_device": 0,
+                "direct_h2d_bw_gbps": 7.5,
+                "direct_d2h_bw_gbps": 6.5,
+                "relays": [
+                    {
+                        "relay_device": 1,
+                        "target_device": 0,
+                        "h2d_bw_gbps": 7.5,
+                        "d2h_bw_gbps": 6.5,
+                        "p2p_bw_gbps": 40.0,
+                        "effective_bw_gbps": 7.5,
+                        "effective_d2h_bw_gbps": 6.5,
+                        "p2p_enabled": True,
+                    }
+                ],
+            },
+        )
+        planned = daemon.plan_transfer(
+            session_id=session_id,
+            total_bytes=64,
+            chunk_bytes=16,
+            mode="pool",
+            direction="h2d",
+            job_id="job-1",
+        )
+        self.assertTrue(planned.ok)
+        self.assertEqual(planned.payload["stats"]["resolved_mode"], "pool")
+        self.assertEqual(daemon.describe().payload["relay_quotas"][1]["active_chunks"], 2)
+        transfer_id = planned.payload["transfer_id"]
+        lease_token = planned.payload["lease_tokens"][0]
+
+        expired = daemon.reap_expired_leases(now=lease_token["expires_at"] + 1.0)
+
+        self.assertEqual(expired, [lease_token["lease_id"]])
+        profile = daemon.describe().payload
+        self.assertEqual(profile["relay_quotas"][1]["active_chunks"], 0)
+        self.assertEqual(profile["reservations"], {})
+        self.assertIn(
+            {
+                "target_kind": "reservation",
+                "target_id": lease_token["lease_id"],
+                "reason": "lease_expired",
+                "force": True,
+            },
+            profile["system_cleanup_events"],
+        )
+        status = daemon.transfer_status(transfer_id)
+        self.assertTrue(status.ok)
+        self.assertEqual(status.payload["status"]["state"], "canceled")
+        discovered = daemon.discover_relays(target_gpu=0, requested_relays=[1])
+        self.assertEqual(
+            discovered.payload["relay_discovery"]["summary"]["active_reservation_count"],
+            0,
+        )
+        self.assertEqual(
+            discovered.payload["relay_discovery"]["summary"]["active_lease_count"],
+            0,
+        )
+        self.assertEqual(
+            discovered.payload["relay_discovery"]["relays"][0]["quota"]["available_chunks"],
+            2,
+        )
+
+        replanned = daemon.plan_transfer(
+            session_id=session_id,
+            total_bytes=64,
+            chunk_bytes=16,
+            mode="pool",
+            direction="h2d",
+            job_id="job-1",
+        )
+        self.assertTrue(replanned.ok)
+        self.assertEqual(replanned.payload["stats"]["resolved_mode"], "pool")
+
     def test_plan_transfer_issues_validatable_lease_tokens(self) -> None:
         daemon = TurboBusDaemon(
             relay_gpus=[1],

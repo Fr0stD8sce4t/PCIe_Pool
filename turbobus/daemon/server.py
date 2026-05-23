@@ -86,6 +86,7 @@ class TurboBusDaemon:
         target = None if target_gpu is None else int(target_gpu)
         with self._lock:
             self._reap_stale_sessions_locked(now)
+            self._reap_expired_leases_locked(now)
             inventory = self._topology_provider.snapshot()
             candidates = (
                 tuple(sorted(self._relay_quotas))
@@ -116,6 +117,7 @@ class TurboBusDaemon:
         now = time.time()
         with self._lock:
             self._reap_stale_sessions_locked(now)
+            self._reap_expired_leases_locked(now)
             unavailable = [
                 gpu
                 for gpu in relays
@@ -267,6 +269,7 @@ class TurboBusDaemon:
         now = time.time()
         with self._lock:
             self._reap_stale_sessions_locked(now)
+            self._reap_expired_leases_locked(now)
             session = self._sessions.get(session_id)
             if session is None or not session.active:
                 return DaemonResponse(ok=False, error="unknown session")
@@ -354,6 +357,7 @@ class TurboBusDaemon:
     ) -> DaemonResponse:
         checked_at = time.time() if now is None else float(now)
         with self._lock:
+            self._reap_stale_sessions_locked(checked_at)
             lease = self._lease_tokens.get(str(lease_id))
             if lease is None:
                 return DaemonResponse(ok=False, error="unknown lease")
@@ -376,6 +380,7 @@ class TurboBusDaemon:
                     if lease.job_id is not None and buffer.job_id != lease.job_id:
                         return DaemonResponse(ok=False, error="lease buffer owner mismatch")
             if lease.expires_at and checked_at > lease.expires_at:
+                self._release_expired_lease_locked(lease.lease_id)
                 return DaemonResponse(ok=False, error="lease expired")
             if lease.lease_id not in self._reservations:
                 return DaemonResponse(ok=False, error="lease is not active")
@@ -385,7 +390,9 @@ class TurboBusDaemon:
         self,
         request: WorkerTransferAuthorizationRequest,
     ) -> DaemonResponse:
+        now = time.time()
         with self._lock:
+            self._reap_stale_sessions_locked(now)
             status = self._transfer_statuses.get(request.transfer_id)
             if status is None:
                 return DaemonResponse(ok=False, error="unknown transfer")
@@ -404,6 +411,9 @@ class TurboBusDaemon:
                 return DaemonResponse(ok=False, error="lease job mismatch")
             if request.relay_gpu is not None and lease.relay_gpu != request.relay_gpu:
                 return DaemonResponse(ok=False, error="lease relay mismatch")
+            if lease.expires_at and now > lease.expires_at:
+                self._release_expired_lease_locked(lease.lease_id)
+                return DaemonResponse(ok=False, error="lease expired")
             if lease.lease_id not in self._reservations:
                 return DaemonResponse(ok=False, error="lease is not active")
             reservation = self._reservations[lease.lease_id]
@@ -453,6 +463,7 @@ class TurboBusDaemon:
         now = time.time()
         with self._lock:
             self._reap_stale_sessions_locked(now)
+            self._reap_expired_leases_locked(now)
             self._purge_stale_profiles_locked(now)
             session = self._sessions.get(session_id)
             if session is None or not session.active:
@@ -579,6 +590,12 @@ class TurboBusDaemon:
     def reap_stale_sessions(self, now: float | None = None) -> list[str]:
         with self._lock:
             return self._reap_stale_sessions_locked(time.time() if now is None else float(now))
+
+    def reap_expired_leases(self, now: float | None = None) -> list[str]:
+        with self._lock:
+            return self._reap_expired_leases_locked(
+                time.time() if now is None else float(now)
+            )
 
     def _release_reservation_locked(
         self,
@@ -778,6 +795,26 @@ class TurboBusDaemon:
             self._close_session_locked(session_id, reason="stale_session_timeout")
         return expired
 
+    def _reap_expired_leases_locked(self, now: float) -> list[str]:
+        expired = [
+            lease_id
+            for lease_id, lease in self._lease_tokens.items()
+            if lease.expires_at and float(now) > lease.expires_at
+        ]
+        for lease_id in expired:
+            self._release_expired_lease_locked(lease_id)
+        return expired
+
+    def _release_expired_lease_locked(self, lease_id: str) -> TransferReservation | None:
+        reservation = self._release_reservation_locked(
+            lease_id,
+            final_state=TransferStatusState.CANCELED,
+            cleanup_reason="lease_expired",
+        )
+        if reservation is None:
+            self._lease_tokens.pop(lease_id, None)
+        return reservation
+
     def _purge_stale_profiles_locked(self, now: float) -> list[str]:
         if self._profile_max_age_seconds <= 0.0:
             return []
@@ -794,6 +831,7 @@ class TurboBusDaemon:
         with self._lock:
             now = time.time()
             self._reap_stale_sessions_locked(now)
+            self._reap_expired_leases_locked(now)
             self._purge_stale_profiles_locked(now)
             return DaemonResponse(
                 ok=True,

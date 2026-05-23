@@ -41,6 +41,8 @@ transfer request objects:
 - daemon control plane now exposes backend-neutral relay discovery snapshots
   with per-relay eligibility, quota, active sessions, active reservations, and
   redacted lease bookkeeping across jobs.
+- daemon-side expired relay leases now reap active reservations and relay quota
+  before relay discovery, planning, validation, and description readouts.
 
 ## What Was Updated
 
@@ -202,6 +204,9 @@ transfer request objects:
   target-specific inventory eligibility, quota availability, active
   reservations, and redacted active lease records without exposing lease
   tokens.
+- `TurboBusDaemon.reap_expired_leases()` now clears expired relay reservations,
+  marks their transfer status canceled, and records lease-expiry cleanup
+  events.
 - `TurboBusDaemonClient.discover_relays()` now wraps the same daemon request
   shape for future control-plane callers.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
@@ -344,10 +349,13 @@ phase:
 49. daemon relay discovery now reports backend-neutral relay eligibility,
     quota availability, cross-job session ownership, active reservations, and
     redacted lease records without changing direct fallback behavior.
+50. daemon-side expired relay lease cleanup now reaps expired reservations,
+    cancels the matching transfer status, and frees relay quota before
+    daemon-side state reads.
 
-The next immediate goal is to add daemon-side expired relay lease cleanup so
-stale reservations can release relay quota without relying on a client release
-or session close.
+The next immediate goal is to expose expired relay lease reaping through the
+daemon client/socket control path so external callers can trigger the same
+cleanup without relying on client release or session close.
 
 ## Verification
 
@@ -458,8 +466,9 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
   socket or IPC transports can trigger the new endpoint handler explicitly;
   done through `WorkerServiceObservabilityRequestEnvelope` and the worker
   observability codec helpers;
-- add daemon-side expired relay lease cleanup so stale reservations release
-  relay quota without relying on a client release or session close;
+- expose expired relay lease reaping through the daemon client/socket control
+  path so external callers can trigger the same cleanup without relying on
+  client release or session close;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper
