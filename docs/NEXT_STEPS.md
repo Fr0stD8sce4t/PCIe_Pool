@@ -6,22 +6,36 @@ from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
 
 ## Current
 
-### 20. Validate all-mode paper speedup summaries on the target server
+### 21. Trim redundant native mode switches in vLLM auto restore
 
-Run the paper validation harness in `--mode all` on the target server and use
-the reported `paper_speedup` lines to identify the next measured bottleneck in
-the pooled PCIe path.
+Reduce the small vLLM auto-path overhead by reusing the already-selected
+native transfer mode when repeated auto decisions resolve to the same native
+path.
 
 Acceptance:
 
-- The target-server run includes `paper_metric` and `paper_speedup` lines for
-  model loading, vLLM KV restore, and training offload.
-- The result confirms whether pool or auto beats direct and relay for latency
-  and throughput on GPU 6 with relay GPU 5.
-- Any weak comparison is turned into a concrete follow-up code task rather
-  than a docs-only note.
+- Repeated auto decisions that resolve to the same native mode do not emit
+  redundant native transfer-mode switches.
+- Explicit direct, relay, and pool mode changes still update the native
+  runtime when the mode actually changes.
+- Focused runtime tests cover repeated auto decisions and explicit mode
+  transitions.
 
 ## Completed
+
+- 2026-05-23: Validate all-mode paper speedup summaries on the target server.
+  - The target-server paper validation harness completed in `--mode all` on
+    GPU 6 with relay GPU 5 and emitted `paper_metric` plus `paper_speedup`
+    lines for model loading, vLLM KV restore, and training offload.
+  - Model loading showed pool and auto beating direct and relay by about 2x
+    on both TTFT proxy and throughput.
+  - Training offload showed the same 2x-style pool and auto improvements over
+    direct and relay.
+  - vLLM KV restore still showed a small auto-path gap: pool won, but
+    `auto_over_direct_restore_latency=0.990` and
+    `auto_over_relay_restore_latency=0.922` showed auto was a little slower
+    than the direct and relay baselines, so the next code task is to remove
+    that redundant control-plane overhead.
 
 - 2026-05-22: Add explicit paper speedup summaries.
   - `benchmarks/paper_validation.py` now emits `paper_speedup` lines next to

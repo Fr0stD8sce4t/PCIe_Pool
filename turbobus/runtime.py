@@ -158,6 +158,11 @@ class Runtime:
             self._last_resolved_transfer_mode = TransferMode.AUTO
         self._runtime = _turbobus.Runtime(self.options.to_native())
         self._runtime.init(self.target_gpu, self.relay_gpus)
+        self._last_native_transfer_mode = (
+            TransferMode.POOL
+            if TransferMode(self.options.transfer_mode) is TransferMode.AUTO
+            else TransferMode(self.options.transfer_mode)
+        )
         self._init_daemon_session()
 
     def _init_daemon_session(self) -> None:
@@ -212,10 +217,10 @@ class Runtime:
         self.options.transfer_mode = TransferMode(mode)
         if self.options.transfer_mode is TransferMode.AUTO:
             self._last_resolved_transfer_mode = TransferMode.AUTO
-            self._runtime.set_transfer_mode(_runtime_transfer_mode_value(TransferMode.POOL))
+            self._set_native_transfer_mode(TransferMode.POOL)
             return
         self._last_resolved_transfer_mode = self.options.transfer_mode
-        self._runtime.set_transfer_mode(_runtime_transfer_mode_value(self.options.transfer_mode))
+        self._set_native_transfer_mode(self.options.transfer_mode)
 
     def resolve_transfer_mode(
         self,
@@ -245,7 +250,7 @@ class Runtime:
         decision = self._auto_transfer_decision(bytes, direction, range_count)
         self._last_resolved_transfer_mode = decision.resolved_mode
         self._last_auto_decision = decision
-        self._runtime.set_transfer_mode(_runtime_transfer_mode_value(decision.resolved_mode))
+        self._set_native_transfer_mode(decision.resolved_mode)
         return decision
 
     def _explicit_transfer_decision(
@@ -276,8 +281,16 @@ class Runtime:
         self._last_resolved_transfer_mode = mode
         if clear_auto_decision:
             self._last_auto_decision = None
-        self._runtime.set_transfer_mode(_runtime_transfer_mode_value(mode))
+        self._set_native_transfer_mode(mode)
         return decision
+
+    def _set_native_transfer_mode(self, mode: TransferMode | str) -> None:
+        native_mode = TransferMode(mode)
+        last_native = getattr(self, "_last_native_transfer_mode", None)
+        if last_native is native_mode:
+            return
+        self._runtime.set_transfer_mode(_runtime_transfer_mode_value(native_mode))
+        self._last_native_transfer_mode = native_mode
 
     def _auto_transfer_decision(
         self,

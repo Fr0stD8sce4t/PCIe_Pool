@@ -2,12 +2,29 @@
 
 Update this file after every coding turn that changes the project.
 
-## Status As Of 2026-05-22
+## Status As Of 2026-05-23
 
 The active goal is to turn TurboBus from a working prototype into a paper
 reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
+
+- Trim redundant native mode switches in auto restore
+  - `Runtime` now remembers the last native transfer mode it wrote and skips
+    redundant native mode updates when repeated decisions resolve to the same
+    path.
+  - Auto restore should now avoid reissuing the same pool mode write on back
+    to back requests, while explicit direct/relay/pool changes still update the
+    native runtime when they actually change mode.
+  - Added a focused runtime regression test that exercises repeated auto
+    decisions and confirms the native runtime is not switched again for the
+    same resolved mode.
+  - Verification: `python -m unittest discover -s test\\python -p "test_runtime_handle.py" -v`,
+    `python -m compileall turbobus\\runtime.py test\\python\\test_runtime_handle.py -q`,
+    `git diff --check`.
+  - Next focus: push the updated docs and then rerun target-server paper
+    validation if the vLLM auto-path still trails pool after this control-plane
+    trim.
 
 - Add explicit paper speedup summaries (`f4434e1`)
   - `benchmarks/paper_validation.py` now emits `paper_speedup` lines after the
@@ -303,6 +320,16 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
   - Connector configuration was consolidated around shared keys.
 
 ## Last Verified Checks
+
+For redundant native mode switch trimming:
+
+```text
+python -m unittest discover -s test\python -p "test_runtime_handle.py" -v
+python -m compileall turbobus\runtime.py test\python\test_runtime_handle.py -q
+git diff --check
+```
+
+Result: passed.
 
 For explicit paper speedup summaries:
 

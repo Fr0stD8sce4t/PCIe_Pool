@@ -308,6 +308,53 @@ class RuntimeOptionsTest(unittest.TestCase):
         self.assertEqual(runtime.last_auto_decision_dict()["auto_resolved_mode"], "pool")
         self.assertEqual(runtime.last_auto_decision_dict()["auto_eligible_relays"], "1")
 
+    def test_auto_transfer_mode_reuses_native_pool_mode_without_redundant_switches(self) -> None:
+        class Relay:
+            relay_device = 1
+            effective_bw_gbps = 7.6
+            p2p_enabled = True
+
+        class RelayProfile:
+            direct_h2d_bw_gbps = 7.5
+            relays = [Relay()]
+
+        class FakeRuntime:
+            def __init__(self) -> None:
+                self.modes = []
+
+            def profile(self, bytes: int, force: bool = False):
+                return RelayProfile()
+
+            def cached_profile(self):
+                return RelayProfile()
+
+            def planner_profile(self):
+                return RelayProfile()
+
+            def set_transfer_mode(self, mode):
+                self.modes.append(mode)
+
+        runtime = object.__new__(runtime_module.Runtime)
+        runtime.target_gpu = 0
+        runtime.relay_gpus = [1]
+        runtime.options = RuntimeOptions(
+            transfer_mode="auto",
+            chunk_bytes=4 * 1024 * 1024,
+        )
+        runtime._runtime = FakeRuntime()
+        runtime._last_resolved_transfer_mode = TransferMode.AUTO
+        runtime._last_native_transfer_mode = TransferMode.POOL
+        runtime._last_auto_decision = None
+        runtime._forced_transfer_mode = None
+
+        first = runtime.resolve_transfer_mode(32 * 1024 * 1024, direction="h2d")
+        second = runtime.resolve_transfer_mode(32 * 1024 * 1024, direction="h2d")
+
+        self.assertEqual(first.resolved_mode, TransferMode.POOL)
+        self.assertEqual(second.resolved_mode, TransferMode.POOL)
+        self.assertEqual(runtime._runtime.modes, [])
+        self.assertEqual(runtime.last_transfer_mode(), TransferMode.POOL)
+
     def test_auto_transfer_mode_stays_direct_when_relays_remain_missing(self) -> None:
         class EmptyRelayProfile:
             direct_h2d_bw_gbps = 7.5
