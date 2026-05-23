@@ -231,6 +231,10 @@ Completed current code cut:
   `WorkerBufferHandle` now require `shared_memory_size_bytes` for
   `shared_pinned_cpu` handles, so malformed shared CPU handles are stopped
   before worker resource binding.
+- Reject malformed CUDA IPC device registrations before worker binding.
+  `BufferRegistration` and `WorkerBufferHandle` now require
+  `cuda_ipc_device` handles to carry a 64-byte hex-encoded CUDA IPC memory
+  handle, preventing bad device handles from reaching native CUDA IPC open.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -271,6 +275,8 @@ Completed current code cut:
      resource binding opens a shared CPU handle.
    - Reject missing shared pinned CPU backing-size metadata at buffer
      registration and worker-handle construction time.
+   - Reject malformed CUDA IPC handle metadata at buffer registration and
+     worker-handle construction time.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor

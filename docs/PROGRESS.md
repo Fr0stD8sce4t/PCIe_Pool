@@ -193,6 +193,10 @@ transfer request objects:
 - shared pinned CPU handle metadata is now rejected at registration/worker
   handle construction time if it omits `shared_memory_size_bytes`, preventing a
   malformed shared CPU handle from reaching worker resource binding;
+- CUDA IPC device handle metadata is now rejected at registration/worker
+  handle construction time unless it is a 64-byte hex-encoded CUDA IPC memory
+  handle, preventing malformed device handles from reaching native CUDA IPC
+  open;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -700,6 +704,11 @@ phase:
     `WorkerBufferHandle` reject `shared_pinned_cpu` handles without
     `shared_memory_size_bytes`, moving that failure ahead of worker resource
     binding and CUDA host registration.
+77. CUDA IPC device registrations now require real-shaped CUDA IPC handle
+    metadata before daemon authorization. `BufferRegistration` and
+    `WorkerBufferHandle` reject `cuda_ipc_device` handles unless
+    `cuda_ipc_handle` is a 64-byte hex string, so malformed GPU handles cannot
+    reach worker resource binding or native CUDA IPC open.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

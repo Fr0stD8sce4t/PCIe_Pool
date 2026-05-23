@@ -18,6 +18,9 @@ from turbobus.daemon.topology import (
 )
 
 
+CUDA_IPC_TARGET_HANDLE = (b"t" * 64).hex()
+
+
 def _relay_ranges(plan: dict, relay_gpu: int) -> tuple[dict[str, int], ...]:
     ranges = []
     for assignment in plan["assignments"]:
@@ -278,7 +281,7 @@ class DaemonStateTest(unittest.TestCase):
             size_bytes=64,
             device_index=0,
             handle_type="cuda_ipc_device",
-            metadata={"cuda_ipc_handle": "ipc-target"},
+            metadata={"cuda_ipc_handle": CUDA_IPC_TARGET_HANDLE},
         )
         daemon.put_profile(
             target_gpu=0,
@@ -1256,7 +1259,7 @@ class DaemonStateTest(unittest.TestCase):
             size_bytes=64,
             device_index=0,
             handle_type="cuda_ipc_device",
-            metadata={"cuda_ipc_handle": "ipc-target"},
+            metadata={"cuda_ipc_handle": CUDA_IPC_TARGET_HANDLE},
         )
         daemon.put_profile(
             target_gpu=0,
@@ -1324,7 +1327,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(authorization["dst_buffer"]["handle_type"], "cuda_ipc_device")
         self.assertEqual(
             authorization["dst_buffer"]["metadata"]["cuda_ipc_handle"],
-            "ipc-target",
+            CUDA_IPC_TARGET_HANDLE,
         )
         self.assertEqual(authorization["ranges"], _relay_ranges(planned.payload["plan"], 1))
         self.assertEqual(authorization["relay_gpu"], 1)

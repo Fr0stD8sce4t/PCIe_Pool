@@ -34,6 +34,10 @@ from turbobus.daemon.topology import (
 )
 
 
+CUDA_IPC_SOURCE_HANDLE = (b"s" * 64).hex()
+CUDA_IPC_TARGET_HANDLE = (b"t" * 64).hex()
+
+
 class SchemaTest(unittest.TestCase):
     def test_auto_transfer_decision_is_json_serializable(self) -> None:
         decision = AutoTransferDecision(
@@ -192,7 +196,7 @@ class SchemaTest(unittest.TestCase):
                 size_bytes=4096,
                 device_index=0,
                 handle_type="cuda_ipc_device",
-                metadata={"cuda_ipc_handle": "ipc-target"},
+                metadata={"cuda_ipc_handle": CUDA_IPC_TARGET_HANDLE},
             ),
             direction="h2d",
             relay_gpu=1,
@@ -284,7 +288,7 @@ class SchemaTest(unittest.TestCase):
         )
         self.assertEqual(
             payload["data_plane_request"]["dst_handle"]["metadata"]["cuda_ipc_handle"],
-            "ipc-target",
+            CUDA_IPC_TARGET_HANDLE,
         )
         self.assertEqual(
             payload["data_plane_request"]["staging"]["total_bytes"],
@@ -321,6 +325,26 @@ class SchemaTest(unittest.TestCase):
                 device_index=0,
                 access="write",
                 handle_type="cuda_ipc_device",
+            )
+        with self.assertRaisesRegex(ValueError, "hex encoded"):
+            BufferRegistration(
+                buffer_id="buffer-1",
+                job_id="job-1",
+                kind="gpu",
+                size_bytes=1,
+                device_index=0,
+                handle_type="cuda_ipc_device",
+                metadata={"cuda_ipc_handle": "not-hex"},
+            )
+        with self.assertRaisesRegex(ValueError, "64 bytes"):
+            BufferRegistration(
+                buffer_id="buffer-1",
+                job_id="job-1",
+                kind="gpu",
+                size_bytes=1,
+                device_index=0,
+                handle_type="cuda_ipc_device",
+                metadata={"cuda_ipc_handle": b"short".hex()},
             )
         with self.assertRaises(ValueError):
             LeaseToken(
@@ -476,7 +500,7 @@ class SchemaTest(unittest.TestCase):
             size_bytes=64,
             device_index=0,
             handle_type="cuda_ipc_device",
-            metadata={"cuda_ipc_handle": "ipc-target"},
+            metadata={"cuda_ipc_handle": CUDA_IPC_TARGET_HANDLE},
         )
 
         with self.assertRaisesRegex(ValueError, "src buffer size"):
@@ -521,7 +545,7 @@ class SchemaTest(unittest.TestCase):
                         size_bytes=8,
                         device_index=0,
                         handle_type="cuda_ipc_device",
-                        metadata={"cuda_ipc_handle": "ipc-target"},
+                        metadata={"cuda_ipc_handle": CUDA_IPC_TARGET_HANDLE},
                     ),
                     direction="h2d",
                     ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
@@ -557,7 +581,7 @@ class SchemaTest(unittest.TestCase):
                         size_bytes=64,
                         device_index=0,
                         handle_type="cuda_ipc_device",
-                        metadata={"cuda_ipc_handle": "ipc-target"},
+                        metadata={"cuda_ipc_handle": CUDA_IPC_TARGET_HANDLE},
                     ),
                     direction="h2d",
                     ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
@@ -614,7 +638,7 @@ class SchemaTest(unittest.TestCase):
                         size_bytes=64,
                         device_index=0,
                         handle_type="cuda_ipc_device",
-                        metadata={"cuda_ipc_handle": "ipc-source"},
+                        metadata={"cuda_ipc_handle": CUDA_IPC_SOURCE_HANDLE},
                     ),
                     dst_buffer=BufferRegistration(
                         buffer_id="target-buffer",
@@ -623,7 +647,7 @@ class SchemaTest(unittest.TestCase):
                         size_bytes=64,
                         device_index=0,
                         handle_type="cuda_ipc_device",
-                        metadata={"cuda_ipc_handle": "ipc-target"},
+                        metadata={"cuda_ipc_handle": CUDA_IPC_TARGET_HANDLE},
                     ),
                     direction="h2d",
                     ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
@@ -645,7 +669,7 @@ class SchemaTest(unittest.TestCase):
                         size_bytes=64,
                         device_index=0,
                         handle_type="cuda_ipc_device",
-                        metadata={"cuda_ipc_handle": "ipc-source"},
+                        metadata={"cuda_ipc_handle": CUDA_IPC_SOURCE_HANDLE},
                     ),
                     dst_buffer=BufferRegistration(
                         buffer_id="target-buffer",
@@ -654,7 +678,7 @@ class SchemaTest(unittest.TestCase):
                         size_bytes=64,
                         device_index=0,
                         handle_type="cuda_ipc_device",
-                        metadata={"cuda_ipc_handle": "ipc-target"},
+                        metadata={"cuda_ipc_handle": CUDA_IPC_TARGET_HANDLE},
                     ),
                     direction="d2h",
                     ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),

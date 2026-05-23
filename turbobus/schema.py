@@ -689,9 +689,25 @@ def _normalize_buffer_handle_metadata(
             raise TypeError("metadata must be a dict")
         if "cuda_ipc_handle" not in metadata:
             raise ValueError("cuda_ipc_device metadata requires cuda_ipc_handle")
+        metadata = dict(metadata)
+        metadata["cuda_ipc_handle"] = _normalize_cuda_ipc_handle(
+            metadata["cuda_ipc_handle"]
+        )
     elif not isinstance(metadata, dict):
         raise TypeError("metadata must be a dict")
     return dict(metadata)
+
+
+def _normalize_cuda_ipc_handle(handle: Any) -> str:
+    if not isinstance(handle, str):
+        raise ValueError("cuda_ipc_handle must be a hex string")
+    try:
+        raw_handle = bytes.fromhex(handle)
+    except ValueError as exc:
+        raise ValueError("cuda_ipc_handle must be hex encoded") from exc
+    if len(raw_handle) != 64:
+        raise ValueError("cuda_ipc_handle must decode to 64 bytes")
+    return raw_handle.hex()
 
 
 @dataclass(frozen=True)
