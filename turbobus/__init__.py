@@ -66,6 +66,7 @@ from .runtime import AutoTransferSelector, Runtime
 from .runtime_engine import RuntimeOptions
 from .schema import AutoTransferDecision, TransferMode
 from .transfer import TransferDirection, TransferRange, TransferRequest
+from .client import SharedPinnedCpuBuffer, SharedPinnedCpuBufferAllocator
 
 __all__ = [
     "BlockState",
@@ -96,6 +97,8 @@ __all__ = [
     "AutoTransferSelector",
     "Runtime",
     "RuntimeOptions",
+    "SharedPinnedCpuBuffer",
+    "SharedPinnedCpuBufferAllocator",
     "TransferMode",
     "TransferStats",
     "TransferDirection",

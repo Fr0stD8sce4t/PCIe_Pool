@@ -1,7 +1,10 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <cuda_runtime.h>
+
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 
 #include "turbobus/runtime.h"
@@ -48,9 +51,40 @@ std::string DirectionToString(turbobus::TransferDirection direction) {
   return "unknown";
 }
 
+void CheckCuda(cudaError_t result, const char* message) {
+  if (result != cudaSuccess) {
+    throw std::runtime_error(std::string(message) + ": " +
+                             cudaGetErrorString(result));
+  }
+}
+
 }  // namespace
 
 PYBIND11_MODULE(_turbobus, m) {
+  m.def("register_host_memory",
+        [](std::uintptr_t host_ptr, std::size_t bytes) {
+          if (host_ptr == 0) {
+            throw std::invalid_argument("host_ptr must not be null");
+          }
+          if (bytes == 0) {
+            throw std::invalid_argument("bytes must be positive");
+          }
+          CheckCuda(cudaHostRegister(reinterpret_cast<void*>(host_ptr), bytes,
+                                     cudaHostRegisterPortable),
+                    "cudaHostRegister failed");
+        },
+        py::arg("host_ptr"), py::arg("bytes"),
+        py::call_guard<py::gil_scoped_release>());
+  m.def("unregister_host_memory",
+        [](std::uintptr_t host_ptr) {
+          if (host_ptr == 0) {
+            throw std::invalid_argument("host_ptr must not be null");
+          }
+          CheckCuda(cudaHostUnregister(reinterpret_cast<void*>(host_ptr)),
+                    "cudaHostUnregister failed");
+        },
+        py::arg("host_ptr"), py::call_guard<py::gil_scoped_release>());
+
   py::enum_<turbobus::TransferMode>(m, "TransferMode")
       .value("Pool", turbobus::TransferMode::Pool)
       .value("DirectOnly", turbobus::TransferMode::DirectOnly)

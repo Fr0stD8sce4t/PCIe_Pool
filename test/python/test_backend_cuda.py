@@ -15,6 +15,18 @@ class FakeNativeModule:
     Runtime = FakeNativeRuntime
 
 
+class FakeHostRegisterNativeModule:
+    def __init__(self) -> None:
+        self.register_host_memory_calls = []
+        self.unregister_host_memory_calls = []
+
+    def register_host_memory(self, host_ptr, bytes_):
+        self.register_host_memory_calls.append((host_ptr, bytes_))
+
+    def unregister_host_memory(self, host_ptr):
+        self.unregister_host_memory_calls.append(host_ptr)
+
+
 class FakeRuntimeEngine:
     def __init__(self) -> None:
         self._turbobus = None
@@ -181,6 +193,27 @@ class CudaNativeBackendTest(unittest.TestCase):
                 target_bytes=32,
                 plan="native-plan",
             )
+
+    def test_backend_registers_host_memory_through_native_runtime(self) -> None:
+        engine = FakeRuntimeEngine()
+        native = FakeHostRegisterNativeModule()
+        engine._turbobus = native
+        backend = CudaNativeBackend(engine)
+
+        backend.register_host_memory(100, 4096)
+        backend.unregister_host_memory(100)
+
+        self.assertEqual(native.register_host_memory_calls, [(100, 4096)])
+        self.assertEqual(native.unregister_host_memory_calls, [100])
+        self.assertEqual(engine.require_extension_calls, 2)
+
+    def test_backend_rejects_missing_host_memory_registration(self) -> None:
+        engine = FakeRuntimeEngine()
+        engine._turbobus = object()
+        backend = CudaNativeBackend(engine)
+
+        with self.assertRaisesRegex(RuntimeError, "host memory registration"):
+            backend.register_host_memory(100, 4096)
 
 
 if __name__ == "__main__":

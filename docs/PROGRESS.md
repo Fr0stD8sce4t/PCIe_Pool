@@ -36,6 +36,12 @@ transfer request objects:
   and cleanup requests;
 - buffer registration now carries worker-visible handle metadata for shared
   pinned CPU buffers and CUDA IPC target GPU buffers;
+- `turbobus.client` now provides a TurboBus-owned shared CPU buffer allocator
+  that creates cross-process shared-memory source buffers and emits
+  daemon-ready `shared_pinned_cpu` registrations;
+- `turbobus.backends.cuda.CudaNativeBackend` now exposes CUDA
+  host-register/unregister calls for registering opened shared-memory views in
+  the process that will issue CUDA copies;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -218,6 +224,9 @@ transfer request objects:
   submitted directly instead of falling back to native runtime replanning.
 - Added schema, daemon, and worker coverage for carrying shared pinned CPU and
   CUDA IPC buffer-handle metadata into worker data-plane requests.
+- Added client-buffer and backend-facade coverage for shared-memory CPU buffer
+  allocation, daemon registration payloads, cross-process reopening, and CUDA
+  host-register hook delegation.
 
 ## Immediate Goal
 
@@ -329,15 +338,18 @@ phase:
 40. daemon buffer registration, worker authorization, and worker data-plane
     request construction now preserve concrete buffer-handle metadata for
     `shared_pinned_cpu` source buffers and `cuda_ipc_device` target buffers.
+41. client-side TurboBus shared CPU buffers now have an owned allocator,
+    daemon registration helper, cross-process reopen support, and CUDA backend
+    host-register/unregister hooks.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
 daemon-managed data movement slice. The worker control-plane smoke helper,
 worker endpoint observability/event-history plumbing, loopback transport
 wrapper, and full worker response lifecycle serialization have been removed.
-The next code should implement the first TurboBus-owned shared pinned CPU
-buffer allocator and the CUDA IPC target-buffer producer/consumer path for
-worker/helper execution.
+The next code should open the shared CPU handle inside the worker/helper,
+register that opened view with CUDA before copy execution, and add the CUDA IPC
+target-buffer producer/consumer path for worker/helper execution.
 
 ## Verification
 
@@ -363,6 +375,7 @@ $env:PYTHONPATH='.'; python test/python/test_vllm_integration.py
 $env:PYTHONPATH='.'; python test/python/test_vllm_kv_connector.py
 $env:PYTHONPATH='.'; python test/python/test_vllm_kv_connector_sweep.py
 $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
+$env:PYTHONPATH='.'; python test/python/test_client_shared_buffer.py
 ```
 
 ## Remaining Work
@@ -372,7 +385,8 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
   authorization, staging ownership, completion, cleanup, and direct fallback;
 - rebuild the native extension on a CUDA server and verify that daemon-issued
   direct, relay, and pooled plans execute through the exact-plan entry point;
-- choose and implement the first cross-process CPU pinned buffer strategy;
+- open shared CPU source handles inside worker/helper execution and register
+  the opened mapping with CUDA before issuing copies;
 - add CUDA IPC or an equivalent target device-buffer handle path for worker
   access;
 - implement a CUDA worker executor for one narrow H2D relay path;

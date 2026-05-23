@@ -75,10 +75,14 @@ Completed current code cut:
 - Define the first registered buffer-handle metadata shape. Buffer registration
   can now carry shared pinned CPU handles and CUDA IPC device handles through
   daemon authorization into worker data-plane requests.
+- Add the first TurboBus-owned shared CPU buffer allocator. It creates a
+  cross-process shared-memory backing, emits daemon-ready `shared_pinned_cpu`
+  registration metadata, can reopen the same backing from that metadata, and
+  exposes CUDA host-register/unregister hooks through the CUDA backend.
 
 1. Define the first registered buffer handles.
-   - Implement a TurboBus-owned shared-memory CPU buffer allocator.
-   - Register that shared memory for CUDA access in the backend or worker path.
+   - Open shared pinned CPU handles inside the worker/helper execution path.
+   - Register the opened shared memory for CUDA access before worker copies.
    - Add the first target GPU CUDA IPC handle producer/consumer path.
 
 2. Implement a CUDA worker executor.

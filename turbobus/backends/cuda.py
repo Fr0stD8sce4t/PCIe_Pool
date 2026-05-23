@@ -40,6 +40,33 @@ class CudaNativeBackend:
     def make_transfer_plan(self, plan: Any) -> Any:
         return self._runtime_engine._native_transfer_plan(plan)
 
+    def register_host_memory(self, host_ptr: int, bytes_: int) -> None:
+        ptr = int(host_ptr)
+        size_bytes = int(bytes_)
+        if ptr <= 0:
+            raise ValueError("host_ptr must be positive")
+        if size_bytes <= 0:
+            raise ValueError("bytes must be positive")
+        self.require_available()
+        registrar = getattr(self._runtime_engine._turbobus, "register_host_memory", None)
+        if not callable(registrar):
+            raise RuntimeError("native runtime does not support host memory registration")
+        registrar(ptr, size_bytes)
+
+    def unregister_host_memory(self, host_ptr: int) -> None:
+        ptr = int(host_ptr)
+        if ptr <= 0:
+            raise ValueError("host_ptr must be positive")
+        self.require_available()
+        unregister = getattr(
+            self._runtime_engine._turbobus,
+            "unregister_host_memory",
+            None,
+        )
+        if not callable(unregister):
+            raise RuntimeError("native runtime does not support host memory registration")
+        unregister(ptr)
+
     def fetch_plan_to_gpu(
         self,
         runtime: Any,
