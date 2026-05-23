@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 
 from .codec import (
     decode_worker_response_envelope,
+    decode_worker_observability_request_envelope,
     encode_worker_observability_snapshot,
     handle_worker_service_message,
 )
@@ -33,6 +34,17 @@ class WorkerEndpointEvent:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class WorkerEndpointObservabilityEvent:
+    request_bytes: int
+    response_bytes: int
+    request_type: str = "observability"
+    response_type: str = "snapshot"
+
+    def as_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
 class WorkerServiceEndpoint:
     def __init__(
         self,
@@ -53,7 +65,9 @@ class WorkerServiceEndpoint:
         self.service = service
         self.max_events = max_events
         self.events: list[WorkerEndpointEvent] = []
+        self.observability_events: list[WorkerEndpointObservabilityEvent] = []
         self.last_event: WorkerEndpointEvent | None = None
+        self.last_observability_event: WorkerEndpointObservabilityEvent | None = None
 
     def handle_message(self, message: str | bytes) -> str:
         request_bytes = _message_size(message)
@@ -72,8 +86,21 @@ class WorkerServiceEndpoint:
         self._trim_events()
         return response_message
 
-    def handle_observability_message(self) -> str:
-        return encode_worker_observability_snapshot(self.observability_snapshot())
+    def handle_observability_message(self, message: str | bytes) -> str:
+        request_bytes = _message_size(message)
+        request = decode_worker_observability_request_envelope(message)
+        response_message = encode_worker_observability_snapshot(
+            self.observability_snapshot()
+        )
+        event = WorkerEndpointObservabilityEvent(
+            request_bytes=request_bytes,
+            response_bytes=_message_size(response_message),
+            request_type=request.request_type,
+        )
+        self.last_observability_event = event
+        self.observability_events.append(event)
+        self._trim_observability_events()
+        return response_message
 
     def describe(self) -> dict[str, object]:
         final_state_counts: dict[str, int] = {}
@@ -87,6 +114,7 @@ class WorkerServiceEndpoint:
             if event.has_completion:
                 completion_count += 1
         retained_event_count = len(self.events)
+        observability_retained_event_count = len(self.observability_events)
         return {
             "total_requests": retained_event_count,
             "retained_event_count": retained_event_count,
@@ -98,6 +126,14 @@ class WorkerServiceEndpoint:
             "events": self.event_snapshot(),
             "health": self.health_snapshot(),
             "metrics": self.metrics_snapshot(),
+            "observability_total_requests": observability_retained_event_count,
+            "observability_retained_event_count": observability_retained_event_count,
+            "observability_last_event": (
+                self.last_observability_event.as_dict()
+                if self.last_observability_event is not None
+                else None
+            ),
+            "observability_events": self.observability_event_snapshot(),
             "final_state_counts": final_state_counts,
             "error_count": error_count,
             "completion_count": completion_count,
@@ -106,11 +142,16 @@ class WorkerServiceEndpoint:
     def clear_events(self) -> dict[str, object]:
         snapshot = self.describe()
         self.events.clear()
+        self.observability_events.clear()
         self.last_event = None
+        self.last_observability_event = None
         return snapshot
 
     def event_snapshot(self) -> tuple[dict[str, object], ...]:
         return tuple(event.as_dict() for event in self.events)
+
+    def observability_event_snapshot(self) -> tuple[dict[str, object], ...]:
+        return tuple(event.as_dict() for event in self.observability_events)
 
     def health_snapshot(self) -> dict[str, object]:
         degraded_final_states: set[str] = set()
@@ -157,6 +198,13 @@ class WorkerServiceEndpoint:
             ),
         }
 
+    def _trim_observability_events(self) -> None:
+        if self.max_events is None:
+            return
+        extra_count = len(self.observability_events) - self.max_events
+        if extra_count > 0:
+            del self.observability_events[:extra_count]
+
     def observability_snapshot(self) -> dict[str, object]:
         description = self.describe()
         return {
@@ -164,6 +212,7 @@ class WorkerServiceEndpoint:
             "events": description["events"],
             "health": description["health"],
             "metrics": description["metrics"],
+            "observability_events": description["observability_events"],
         }
 
     def _trim_events(self) -> None:
@@ -182,4 +231,8 @@ def _message_size(message: str | bytes) -> int:
     raise TypeError("message must be str or bytes")
 
 
-__all__ = ["WorkerEndpointEvent", "WorkerServiceEndpoint"]
+__all__ = [
+    "WorkerEndpointEvent",
+    "WorkerEndpointObservabilityEvent",
+    "WorkerServiceEndpoint",
+]

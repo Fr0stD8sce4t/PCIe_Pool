@@ -198,16 +198,18 @@ Current status:
 - an in-process worker observability request envelope and codec helper now let
   future transports explicitly trigger the endpoint observability handler
   without changing worker response payloads.
+- worker endpoint observability request/response event tracking now records
+  observability message sizes separately from the normal worker event stream
+  while keeping the returned snapshot payload stable.
 
 Next code cut:
 
-- add in-process worker endpoint observability request/response event tracking
-  so future transports can measure observability message size without changing
-  snapshot payloads;
-- keep it in process only, with no CUDA IPC, sockets, real data movement, or
-  hardware discovery yet;
-- add focused tests that observability requests are recorded while encoded
-  worker response payloads stay unchanged.
+- start the daemon control-plane slice that owns cross-job relay discovery and
+  relay lease bookkeeping, still in process and without sockets or IPC;
+- add focused tests that daemon-owned relay discovery and lease bookkeeping
+  stay backend-neutral and do not change direct fallback behavior;
+- keep the worker observability slice as a completed subtask while the next
+  phase moves to daemon control-plane state.
 
 ## Upcoming
 

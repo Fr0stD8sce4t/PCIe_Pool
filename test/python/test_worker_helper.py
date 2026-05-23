@@ -1869,6 +1869,7 @@ class WorkerHelperTest(unittest.TestCase):
             DaemonResponse(ok=True, payload=authorization_payload())
         )
         endpoint = WorkerServiceEndpoint(daemon_client=daemon_client)
+        pre_observability_snapshot = endpoint.observability_snapshot()
 
         request_message = encode_worker_observability_request_envelope(
             WorkerServiceObservabilityRequestEnvelope()
@@ -1879,15 +1880,34 @@ class WorkerHelperTest(unittest.TestCase):
         )
         observability = decode_worker_observability_snapshot(observability_message)
         expected_observability = decode_worker_observability_snapshot(
-            encode_worker_observability_snapshot(endpoint.observability_snapshot())
+            encode_worker_observability_snapshot(pre_observability_snapshot)
         )
 
         self.assertEqual(observability, expected_observability)
         self.assertEqual(observability["describe"]["events"], [])
         self.assertEqual(observability["describe"]["retained_event_count"], 0)
         self.assertEqual(observability["describe"]["total_requests"], 0)
+        self.assertEqual(observability["describe"]["observability_total_requests"], 0)
+        self.assertEqual(
+            observability["describe"]["observability_retained_event_count"],
+            0,
+        )
+        self.assertIsNone(observability["describe"]["observability_last_event"])
+        self.assertEqual(observability["describe"]["observability_events"], [])
         self.assertEqual(observability["health"]["status"], "ready")
         self.assertEqual(observability["metrics"]["request_bytes_total"], 0)
+        self.assertEqual(endpoint.describe()["observability_total_requests"], 1)
+        self.assertEqual(endpoint.describe()["observability_retained_event_count"], 1)
+        self.assertEqual(len(endpoint.observability_events), 1)
+        self.assertEqual(endpoint.last_observability_event.request_type, "observability")
+        self.assertEqual(
+            endpoint.last_observability_event.request_bytes,
+            len(request_message.encode("utf-8")),
+        )
+        self.assertEqual(
+            endpoint.last_observability_event.response_bytes,
+            len(observability_message.encode("utf-8")),
+        )
 
     def test_worker_service_observability_message_populated(self) -> None:
         daemon_client = FakeDaemonClient(
@@ -1900,6 +1920,7 @@ class WorkerHelperTest(unittest.TestCase):
 
         response_message = endpoint.handle_message(request_message)
         event_snapshot = endpoint.event_snapshot()
+        pre_observability_snapshot = endpoint.observability_snapshot()
         observability_request_message = encode_worker_observability_request_envelope(
             WorkerServiceObservabilityRequestEnvelope()
         )
@@ -1909,7 +1930,7 @@ class WorkerHelperTest(unittest.TestCase):
         )
         observability = decode_worker_observability_snapshot(observability_message)
         expected_observability = decode_worker_observability_snapshot(
-            encode_worker_observability_snapshot(endpoint.observability_snapshot())
+            encode_worker_observability_snapshot(pre_observability_snapshot)
         )
         response = decode_worker_response_envelope(response_message).as_dict()
 
@@ -1922,6 +1943,13 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(observability, expected_observability)
         self.assertEqual(observability["describe"]["events"], list(event_snapshot))
         self.assertEqual(observability["describe"]["retained_event_count"], 1)
+        self.assertEqual(observability["describe"]["observability_total_requests"], 0)
+        self.assertEqual(
+            observability["describe"]["observability_retained_event_count"],
+            0,
+        )
+        self.assertIsNone(observability["describe"]["observability_last_event"])
+        self.assertEqual(observability["describe"]["observability_events"], [])
         self.assertEqual(observability["events"][0]["final_state"], "unsupported")
         self.assertEqual(observability["health"]["status"], "ready")
         self.assertEqual(observability["metrics"]["retained_event_count"], 1)
@@ -1932,6 +1960,21 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(
             observability["metrics"]["response_bytes_total"],
             len(response_message.encode("utf-8")),
+        )
+        self.assertEqual(endpoint.describe()["observability_total_requests"], 1)
+        self.assertEqual(endpoint.describe()["observability_retained_event_count"], 1)
+        self.assertEqual(len(endpoint.observability_events), 1)
+        self.assertEqual(
+            endpoint.last_observability_event.request_bytes,
+            len(observability_request_message.encode("utf-8")),
+        )
+        self.assertEqual(
+            endpoint.last_observability_event.response_bytes,
+            len(observability_message.encode("utf-8")),
+        )
+        self.assertEqual(
+            endpoint.last_observability_event.request_type,
+            "observability",
         )
         repeated_response_message = endpoint.handle_message(request_message)
         repeated_response = decode_worker_response_envelope(
@@ -1951,8 +1994,15 @@ class WorkerHelperTest(unittest.TestCase):
         request_message = encode_worker_request_envelope(
             WorkerServiceRequestEnvelope(payload=authorization_request_payload())
         )
+        observability_request_message = encode_worker_observability_request_envelope(
+            WorkerServiceObservabilityRequestEnvelope()
+        )
 
         first_response = endpoint.handle_message(request_message)
+        observability_response = handle_worker_observability_message(
+            endpoint,
+            observability_request_message,
+        )
         snapshot = endpoint.clear_events()
         cleared = endpoint.describe()
         second_response = endpoint.handle_message(request_message)
@@ -1961,19 +2011,40 @@ class WorkerHelperTest(unittest.TestCase):
 
         self.assertEqual(snapshot["total_requests"], 1)
         self.assertEqual(snapshot["retained_event_count"], 1)
+        self.assertEqual(snapshot["observability_total_requests"], 1)
+        self.assertEqual(snapshot["observability_retained_event_count"], 1)
         self.assertIsNone(snapshot["max_events"])
         self.assertFalse(snapshot["history_bounded"])
         self.assertEqual(snapshot["final_state_counts"], {"unsupported": 1})
         self.assertEqual(snapshot["completion_count"], 1)
+        self.assertEqual(
+            snapshot["observability_last_event"],
+            {
+                "request_bytes": len(observability_request_message.encode("utf-8")),
+                "response_bytes": len(observability_response.encode("utf-8")),
+                "request_type": "observability",
+                "response_type": "snapshot",
+            },
+        )
+        self.assertEqual(
+            snapshot["observability_events"],
+            (snapshot["observability_last_event"],),
+        )
         self.assertEqual(cleared["total_requests"], 0)
         self.assertEqual(cleared["retained_event_count"], 0)
+        self.assertEqual(cleared["observability_total_requests"], 0)
+        self.assertEqual(cleared["observability_retained_event_count"], 0)
         self.assertIsNone(cleared["max_events"])
         self.assertFalse(cleared["history_bounded"])
         self.assertIsNone(cleared["last_event"])
+        self.assertIsNone(cleared["observability_last_event"])
         self.assertEqual(cleared["events"], ())
+        self.assertEqual(cleared["observability_events"], ())
         self.assertEqual(cleared["final_state_counts"], {})
         self.assertEqual(len(endpoint.events), 1)
+        self.assertEqual(len(endpoint.observability_events), 0)
         self.assertEqual(endpoint.last_event.final_state, "unsupported")
+        self.assertIsNone(endpoint.last_observability_event)
         self.assertEqual(
             first_payload["final_state"],
             second_payload["final_state"],

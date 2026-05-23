@@ -103,7 +103,7 @@ def handle_worker_observability_message(
         decode_worker_observability_request_envelope(message)
     except WorkerMessageCodecError as exc:
         raise WorkerMessageCodecError(str(exc)) from exc
-    return endpoint.handle_observability_message()
+    return endpoint.handle_observability_message(message)
 
 
 def encode_worker_observability_snapshot(

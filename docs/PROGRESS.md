@@ -35,6 +35,9 @@ transfer request objects:
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
   adapter modules.
+- worker endpoint observability requests now record a separate event stream
+  with request and response byte counts while keeping the returned snapshot
+  payload stable.
 
 ## What Was Updated
 
@@ -187,6 +190,9 @@ transfer request objects:
   response byte counts, and `describe()` includes it under `metrics`.
 - `WorkerServiceEndpoint.observability_snapshot()` now combines `describe()`,
   retained events, health, and metrics under one stable in-process payload.
+- `WorkerServiceEndpoint.handle_observability_message()` now records a
+  separate observability event stream and `clear_events()` clears both worker
+  and observability histories.
 - worker endpoint observability snapshots now have JSON-safe encode/decode
   helpers for future transport observability clients.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
@@ -323,10 +329,13 @@ phase:
 47. an in-process worker observability request envelope and codec helper now
     let future transports explicitly trigger the endpoint observability
     handler without changing worker response payloads.
+48. worker endpoint observability request/response event tracking now records
+    observability message sizes separately from the normal worker event stream
+    while keeping the returned snapshot payload stable.
 
-The next immediate goal is to add in-process worker endpoint observability
-request/response event tracking so future transports can measure observability
-message size without changing snapshot payloads.
+The next immediate goal is to start the daemon control-plane slice that owns
+cross-job relay discovery and relay lease bookkeeping, still in process and
+without sockets or IPC.
 
 ## Verification
 
@@ -437,9 +446,8 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
   socket or IPC transports can trigger the new endpoint handler explicitly;
   done through `WorkerServiceObservabilityRequestEnvelope` and the worker
   observability codec helpers;
-- add in-process worker endpoint observability request/response event tracking
-  so future transports can measure observability message size without changing
-  snapshot payloads;
+- start the daemon control-plane slice that owns cross-job relay discovery and
+  relay lease bookkeeping, still in process and without sockets or IPC;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper
