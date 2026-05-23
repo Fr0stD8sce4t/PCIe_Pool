@@ -9,6 +9,8 @@ from unittest.mock import patch
 from turbobus.verification import (
     WorkerManagedH2DRelayVerificationResult,
     _build_verification_daemon,
+    _cuda_environment_relay_gpu,
+    _required_cuda_device_count,
     _resolve_verification_buffer_sizes,
     _worker_helper_required,
     main,
@@ -270,6 +272,13 @@ class WorkerManagedH2DRelayVerificationTest(unittest.TestCase):
         self.assertFalse(_worker_helper_required("direct"))
         self.assertTrue(_worker_helper_required("relay"))
         self.assertTrue(_worker_helper_required("pool"))
+
+    def test_direct_cuda_environment_does_not_require_relay_gpu(self) -> None:
+        self.assertIsNone(_cuda_environment_relay_gpu("direct", 7))
+        self.assertEqual(_cuda_environment_relay_gpu("relay", 7), 7)
+        self.assertEqual(_cuda_environment_relay_gpu("pool", 7), 7)
+        self.assertEqual(_required_cuda_device_count(0, None), 1)
+        self.assertEqual(_required_cuda_device_count(0, 7), 8)
 
     def test_cli_forwards_range_offsets_to_h2d_verifier(self) -> None:
         result = WorkerManagedH2DRelayVerificationResult(

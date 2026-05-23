@@ -250,6 +250,9 @@ Completed current code cut:
 - Keep daemon-owned transfer status terminal once a worker/helper outcome has
   been recorded. Terminal `complete`, `failed`, and `canceled` states now allow
   only idempotent repeats and reject later conflicting status updates.
+- Keep direct fallback verification scoped to the direct CUDA device. Direct
+  mode no longer requires the configured relay GPU to be visible, while relay
+  and pool verification still require both target and relay GPUs.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.

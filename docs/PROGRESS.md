@@ -181,6 +181,9 @@ transfer request objects:
   transfer status to complete, and leaves worker relay execution unused. The
   CUDA-server verifier accepts `--mode direct` and can accept pool requests
   that resolve to daemon direct fallback;
+- direct fallback verification now checks only the target CUDA device for
+  visibility. Relay and pool verification still require the relay GPU, but a
+  direct baseline run is no longer blocked by a non-visible relay GPU argument;
 - worker-managed client construction now uses one CUDA backend/runtime option
   set for both direct fallback and the default worker/helper path. If a caller
   passes a backend or runtime options into `make_worker_managed_transfer_client`,
@@ -742,6 +745,10 @@ phase:
     terminal reports are accepted as idempotent, but a late helper/client update
     can no longer rewrite `failed`, `canceled`, or `complete` into another
     state after cleanup or completion has already been recorded.
+82. direct fallback verification no longer requires the configured relay GPU
+    to be visible. The verifier now scopes CUDA environment checks to the
+    target GPU for `--mode direct`, while `relay` and `pool` modes continue to
+    require both devices.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

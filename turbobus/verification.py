@@ -184,7 +184,10 @@ def _verify_worker_managed_relay(
         destination_buffer_bytes=destination_buffer_bytes,
     )
 
-    torch = _require_cuda_environment(target, relay)
+    torch = _require_cuda_environment(
+        target,
+        _cuda_environment_relay_gpu(mode, relay),
+    )
     pattern = _make_pattern(total_bytes)
     job_id = f"verify-worker-{direction}-{mode}-{os.getpid()}-{time.time_ns()}"
     allocator = SharedPinnedCpuBufferAllocator(
@@ -548,7 +551,7 @@ def _require_unix_sockets() -> None:
         raise RuntimeError("worker helper verification requires Unix domain sockets")
 
 
-def _require_cuda_environment(target_gpu: int, relay_gpu: int):
+def _require_cuda_environment(target_gpu: int, relay_gpu: int | None = None):
     try:
         import torch
     except ImportError as exc:
@@ -557,12 +560,23 @@ def _require_cuda_environment(target_gpu: int, relay_gpu: int):
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is not available")
     device_count = int(torch.cuda.device_count())
-    required_devices = max(int(target_gpu), int(relay_gpu)) + 1
+    required_devices = _required_cuda_device_count(target_gpu, relay_gpu)
     if device_count < required_devices:
         raise RuntimeError(
             f"CUDA verification needs at least {required_devices} visible devices"
         )
     return torch
+
+
+def _cuda_environment_relay_gpu(mode: str, relay_gpu: int) -> int | None:
+    return int(relay_gpu) if _worker_helper_required(mode) else None
+
+
+def _required_cuda_device_count(target_gpu: int, relay_gpu: int | None = None) -> int:
+    devices = [int(target_gpu)]
+    if relay_gpu is not None:
+        devices.append(int(relay_gpu))
+    return max(devices) + 1
 
 
 def _make_pattern(size_bytes: int) -> bytearray:
