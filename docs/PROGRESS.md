@@ -9,7 +9,7 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
-- Trim redundant native mode switches in auto restore
+- Trim redundant native mode switches in auto restore (`a955298`)
   - `Runtime` now remembers the last native transfer mode it wrote and skips
     redundant native mode updates when repeated decisions resolve to the same
     path.
