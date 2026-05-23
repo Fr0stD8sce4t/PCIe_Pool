@@ -62,6 +62,7 @@ class DaemonScheduler:
         relay_quotas: Mapping[int, RelayQuota],
         total_bytes: int,
         chunk_bytes: int,
+        ranges: tuple[Mapping[str, int], ...] | None = None,
         mode: TransferMode | str = TransferMode.POOL,
         direction: str = "h2d",
         now: float = 0.0,
@@ -69,11 +70,16 @@ class DaemonScheduler:
     ) -> SchedulerDecision:
         total_bytes = int(total_bytes)
         chunk_bytes = int(chunk_bytes)
+        normalized_ranges = _normalize_ranges(ranges)
         direction = str(direction).lower()
         if total_bytes < 0:
             raise ValueError("total_bytes must be non-negative")
         if chunk_bytes <= 0:
             raise ValueError("chunk_bytes must be positive")
+        if normalized_ranges is not None:
+            range_bytes = sum(item["bytes"] for item in normalized_ranges)
+            if range_bytes != total_bytes:
+                raise ValueError("range bytes must match total_bytes")
         if direction not in {"h2d", "d2h"}:
             raise ValueError("direction must be h2d or d2h")
         if not session.active:
@@ -98,6 +104,7 @@ class DaemonScheduler:
         plan = self._plan_or_direct(
             total_bytes=total_bytes,
             chunk_bytes=chunk_bytes,
+            ranges=normalized_ranges,
             profile=profile,
             mode=planning_mode,
             direction=direction,
@@ -115,6 +122,7 @@ class DaemonScheduler:
             plan = self._direct_plan(
                 total_bytes=total_bytes,
                 chunk_bytes=chunk_bytes,
+                ranges=normalized_ranges,
                 profile=profile,
                 direction=direction,
             )
@@ -186,11 +194,20 @@ class DaemonScheduler:
         *,
         total_bytes: int,
         chunk_bytes: int,
+        ranges: tuple[Mapping[str, int], ...] | None,
         profile: _Profile,
         mode: TransferMode,
         direction: str,
     ) -> PlannerTransferPlan:
         try:
+            if ranges is not None:
+                return self._planner.plan_ranges(
+                    ranges,
+                    chunk_bytes,
+                    profile,
+                    mode,
+                    direction=direction,
+                )
             return self._planner.plan(
                 total_bytes=total_bytes,
                 chunk_bytes=chunk_bytes,
@@ -202,6 +219,7 @@ class DaemonScheduler:
             return self._direct_plan(
                 total_bytes=total_bytes,
                 chunk_bytes=chunk_bytes,
+                ranges=ranges,
                 profile=profile,
                 direction=direction,
             )
@@ -211,6 +229,7 @@ class DaemonScheduler:
         *,
         total_bytes: int,
         chunk_bytes: int,
+        ranges: tuple[Mapping[str, int], ...] | None = None,
         profile: _Profile,
         direction: str,
     ) -> PlannerTransferPlan:
@@ -222,6 +241,14 @@ class DaemonScheduler:
             ),
             relays=(),
         )
+        if ranges is not None:
+            return self._planner.plan_ranges(
+                ranges,
+                chunk_bytes,
+                direct_profile,
+                mode=TransferMode.DIRECT,
+                direction=direction,
+            )
         return self._planner.plan(
             total_bytes=total_bytes,
             chunk_bytes=chunk_bytes,
@@ -359,6 +386,32 @@ def _parse_transfer_mode(mode: TransferMode | str) -> TransferMode:
         return TransferMode(value)
     except ValueError:
         return TransferMode[value.upper()]
+
+
+def _normalize_ranges(
+    ranges: tuple[Mapping[str, int], ...] | None,
+) -> tuple[Mapping[str, int], ...] | None:
+    if ranges is None:
+        return None
+    normalized = []
+    for item in ranges:
+        if not isinstance(item, Mapping):
+            raise ValueError("ranges must contain mappings")
+        src_offset = int(item["src_offset"])
+        dst_offset = int(item["dst_offset"])
+        bytes_count = int(item["bytes"])
+        if src_offset < 0 or dst_offset < 0:
+            raise ValueError("range offsets must be non-negative")
+        if bytes_count <= 0:
+            raise ValueError("range bytes must be positive")
+        normalized.append(
+            {
+                "src_offset": src_offset,
+                "dst_offset": dst_offset,
+                "bytes": bytes_count,
+            }
+        )
+    return tuple(normalized)
 
 
 __all__ = ["DaemonScheduler", "SchedulerDecision"]

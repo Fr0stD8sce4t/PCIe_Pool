@@ -196,6 +196,11 @@ Completed current code cut:
   Client-side target/source handle export and worker-side device binding now
   switch to the registered buffer's `device_index`, so helper-socket
   verification is not implicitly limited to target GPU 0.
+- Preserve client-requested transfer range offsets in daemon-issued plans.
+  Worker-managed transfers now pass `TransferRequest.ranges` into the daemon
+  planner, so helper execution receives exact source and destination offsets
+  instead of replanning every request from offset 0. The daemon socket
+  round-trip also preserves those offsets through worker authorization.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.

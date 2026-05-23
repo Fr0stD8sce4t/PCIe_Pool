@@ -159,6 +159,13 @@ transfer request objects:
   export, open, and close. The client exports handles on the buffer's
   `device_index`, and the worker resource binder opens and closes CUDA IPC
   pointers on the same registered device;
+- daemon-issued worker-managed plans now preserve explicit transfer range
+  offsets from the client request. The client fallback path passes
+  `TransferRequest.ranges` into daemon planning, and the daemon scheduler uses
+  range-aware planner chunks so worker authorization carries the exact source
+  and destination offsets requested by the application. The daemon socket
+  client path preserves the same offsets through planning and worker
+  authorization;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -630,6 +637,11 @@ phase:
     device before touching the native CUDA IPC handle. This removes an
     implicit GPU-0 assumption from the client-to-worker helper path and lets
     server verification use nonzero target GPUs.
+70. worker-managed daemon planning now preserves explicit range offsets.
+    `TransferRequest.ranges` reach the daemon scheduler, range-aware planner
+    chunks are stored in the daemon plan, and worker authorization receives
+    those exact offsets instead of chunks regenerated from offset 0. Socket
+    client planning and worker authorization keep the same range offsets.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

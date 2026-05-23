@@ -306,6 +306,7 @@ def _plan_transfer_request(
         direction=request.direction.value,
         job_id=request.job_id,
         buffer_ids=list(request.metadata["buffer_ids"]),
+        ranges=[item.as_dict() for item in request.ranges] if request.ranges else None,
     )
 
 

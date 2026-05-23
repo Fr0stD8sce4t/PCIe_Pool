@@ -364,6 +364,51 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
         )
         self.assertEqual(executor.requests[0].data_plane.plan, result.plan["plan"])
 
+    def test_worker_managed_transfer_preserves_requested_range_offsets(self) -> None:
+        daemon = daemon_with_relay_path()
+        executor = CompleteExecutor()
+        transfer_client = make_worker_managed_transfer_client(
+            daemon,
+            target_gpu=0,
+            relay_gpus=[1],
+            worker_client=WorkerTransferClient(daemon, executor=executor),
+            max_inflight_chunks=8,
+        )
+        allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-client-worker-test")
+
+        with allocator.allocate("cpu-buffer", "job-1", 64) as source:
+            target = CudaIpcDeviceBuffer.from_device_pointer(
+                buffer_id="gpu-buffer",
+                job_id="job-1",
+                device_index=0,
+                size_bytes=64,
+                device_ptr=4096,
+                backend=FakeCudaBackend(),
+            )
+
+            result = transfer_client.fetch_shared_cpu_to_cuda_ipc(
+                source,
+                target,
+                ranges=({"src_offset": 8, "dst_offset": 24, "bytes": 16},),
+                chunk_bytes=8,
+                mode="relay",
+            )
+
+        expected_ranges = (
+            {"src_offset": 8, "dst_offset": 24, "bytes": 8},
+            {"src_offset": 16, "dst_offset": 32, "bytes": 8},
+        )
+        self.assertEqual(result.state, "complete")
+        self.assertEqual(tuple(executor.requests[0].authorization.ranges), expected_ranges)
+        self.assertEqual(
+            tuple(
+                chunk
+                for assignment in result.plan["plan"]["assignments"]
+                for chunk in _worker_ranges(assignment["chunks"])
+            ),
+            expected_ranges,
+        )
+
     def test_worker_managed_transfer_accepts_pool_plan_from_daemon(self) -> None:
         daemon = daemon_with_relay_path()
         executor = CompleteExecutor()

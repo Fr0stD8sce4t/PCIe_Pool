@@ -477,8 +477,20 @@ class TurboBusDaemon:
         direction: str = "h2d",
         job_id: str | None = None,
         buffer_ids: Iterable[str] | None = None,
+        ranges: Iterable[dict[str, int]] | None = None,
     ) -> DaemonResponse:
         now = time.time()
+        try:
+            normalized_ranges = _normalize_transfer_ranges(ranges)
+            if normalized_ranges is not None:
+                range_bytes = sum(item["bytes"] for item in normalized_ranges)
+                if range_bytes != int(total_bytes):
+                    return DaemonResponse(
+                        ok=False,
+                        error="range bytes must match total_bytes",
+                    )
+        except (KeyError, TypeError, ValueError) as exc:
+            return DaemonResponse(ok=False, error=str(exc))
         with self._lock:
             self._reap_stale_sessions_locked(now)
             self._reap_expired_leases_locked(now)
@@ -524,6 +536,7 @@ class TurboBusDaemon:
                 relay_quotas=self._relay_quotas,
                 total_bytes=total_bytes,
                 chunk_bytes=chunk_bytes,
+                ranges=normalized_ranges,
                 mode=mode,
                 direction=direction,
                 now=now,
@@ -967,6 +980,7 @@ class TurboBusDaemon:
                 direction=str(payload.get("direction", "h2d")),
                 job_id=str(payload["job_id"]) if "job_id" in payload else None,
                 buffer_ids=payload.get("buffer_ids"),
+                ranges=payload.get("ranges"),
             )
         if request.request_type == RequestType.RELEASE_TRANSFER:
             payload = request.payload
@@ -1429,3 +1443,29 @@ def _relay_ranges_from_plan(
     if not ranges:
         raise ValueError("daemon plan has no authorized relay chunks")
     return tuple(ranges)
+
+
+def _normalize_transfer_ranges(
+    ranges: Iterable[dict[str, int]] | None,
+) -> tuple[dict[str, int], ...] | None:
+    if ranges is None:
+        return None
+    normalized: list[dict[str, int]] = []
+    for item in ranges:
+        if not isinstance(item, dict):
+            raise ValueError("transfer ranges must be objects")
+        src_offset = int(item["src_offset"])
+        dst_offset = int(item["dst_offset"])
+        bytes_count = int(item["bytes"])
+        if src_offset < 0 or dst_offset < 0:
+            raise ValueError("range offsets must be non-negative")
+        if bytes_count <= 0:
+            raise ValueError("range bytes must be positive")
+        normalized.append(
+            {
+                "src_offset": src_offset,
+                "dst_offset": dst_offset,
+                "bytes": bytes_count,
+            }
+        )
+    return tuple(normalized)
