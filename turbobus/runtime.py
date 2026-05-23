@@ -13,6 +13,7 @@ from .runtime_engine import (
     TransferHandle,
 )
 from .schema import AutoTransferDecision, TransferMode
+from .transfer import TransferRange, TransferRequest
 from .transfer_selector import AutoTransferSelector
 
 try:
@@ -62,6 +63,10 @@ def _validate_range_tensors(
 ) -> tuple[int, int]:
     _sync_runtime_engine()
     return _runtime_engine._validate_range_tensors(cpu_tensor, gpu_tensor, target_gpu, direction)
+
+
+def _range_fields(item) -> tuple[int, int, int]:
+    return _runtime_engine._range_fields(item)
 
 
 def _validate_tensor_pair(cpu_tensor, gpu_tensor, target_gpu: int) -> None:
@@ -531,16 +536,16 @@ class Runtime:
         range_items = list(ranges)
         native_ranges = _native_ranges(range_items, source_bytes, destination_bytes)
         range_fields = [_range_fields(item) for item in range_items]
-        transfer_bytes = sum(int(bytes_) for _, _, bytes_ in range_fields)
-        range_count = sum(
-            max(1, math.ceil(int(bytes_) / max(1, int(self.options.chunk_bytes))))
-            for _, _, bytes_ in range_fields
-        )
-        reservations = self._resolve_transfer_with_daemon(
-            transfer_bytes,
+        transfer_request = TransferRequest.from_ranges(
+            [
+                TransferRange(src_offset=src, dst_offset=dst, bytes=bytes_)
+                for src, dst, bytes_ in range_fields
+            ],
+            chunk_bytes=self.options.chunk_bytes,
             direction="h2d",
-            range_count=range_count,
+            mode=self.options.transfer_mode,
         )
+        reservations = self._resolve_transfer_request_with_daemon(transfer_request)
         try:
             handle = self._runtime.fetch_ranges_to_gpu(
                 int(cpu_tensor.data_ptr()),
@@ -565,16 +570,16 @@ class Runtime:
         range_items = list(ranges)
         native_ranges = _native_ranges(range_items, source_bytes, destination_bytes)
         range_fields = [_range_fields(item) for item in range_items]
-        transfer_bytes = sum(int(bytes_) for _, _, bytes_ in range_fields)
-        range_count = sum(
-            max(1, math.ceil(int(bytes_) / max(1, int(self.options.chunk_bytes))))
-            for _, _, bytes_ in range_fields
-        )
-        reservations = self._resolve_transfer_with_daemon(
-            transfer_bytes,
+        transfer_request = TransferRequest.from_ranges(
+            [
+                TransferRange(src_offset=src, dst_offset=dst, bytes=bytes_)
+                for src, dst, bytes_ in range_fields
+            ],
+            chunk_bytes=self.options.chunk_bytes,
             direction="d2h",
-            range_count=range_count,
+            mode=self.options.transfer_mode,
         )
+        reservations = self._resolve_transfer_request_with_daemon(transfer_request)
         try:
             handle = self._runtime.offload_ranges_to_cpu(
                 int(gpu_tensor.data_ptr()),
@@ -627,14 +632,30 @@ class Runtime:
         direction: str,
         range_count: int | None = None,
     ) -> list[str]:
-        decision = self.resolve_transfer_mode(bytes, direction=direction, range_count=range_count)
-        return self._reserve_daemon_transfer(decision, direction)
+        request = TransferRequest(
+            total_bytes=bytes,
+            chunk_bytes=self.options.chunk_bytes,
+            direction=direction,
+            mode=self.options.transfer_mode,
+            request_chunks=range_count,
+        )
+        return self._resolve_transfer_request_with_daemon(request)
+
+    def _resolve_transfer_request_with_daemon(self, request: TransferRequest) -> list[str]:
+        decision = self.resolve_transfer_mode(
+            request.total_bytes,
+            direction=request.direction.value,
+            range_count=request.request_chunks,
+        )
+        return self._reserve_daemon_transfer(decision, request)
 
     def _reserve_daemon_transfer(
         self,
         decision: AutoTransferDecision,
-        direction: str,
+        request: TransferRequest | str,
     ) -> list[str]:
+        transfer_request = self._coerce_transfer_request(decision, request)
+        direction = transfer_request.direction.value
         if (
             self._daemon_client is None
             or self._daemon_session_id is None
@@ -652,7 +673,7 @@ class Runtime:
             }
             return []
 
-        planned = self._plan_daemon_transfer(decision, direction)
+        planned = self._plan_daemon_transfer(decision, transfer_request)
         if planned is not None:
             return planned
 
@@ -715,19 +736,29 @@ class Runtime:
     def _plan_daemon_transfer(
         self,
         decision: AutoTransferDecision,
-        direction: str,
+        request: TransferRequest,
     ) -> list[str] | None:
+        direction = request.direction.value
+        request_for_daemon = request.with_mode(decision.resolved_mode)
+        request_planner = getattr(self._daemon_client, "plan_transfer_request", None)
         planner = getattr(self._daemon_client, "plan_transfer", None)
-        if not callable(planner):
+        if not callable(request_planner) and not callable(planner):
             return None
         try:
-            response = planner(
-                self._daemon_session_id,
-                total_bytes=decision.request_bytes,
-                chunk_bytes=self.options.chunk_bytes,
-                mode=decision.resolved_mode.value,
-                direction=direction,
-            )
+            if callable(request_planner):
+                response = request_planner(
+                    self._daemon_session_id,
+                    request_for_daemon,
+                )
+            else:
+                response = planner(
+                    self._daemon_session_id,
+                    total_bytes=request_for_daemon.total_bytes,
+                    chunk_bytes=request_for_daemon.chunk_bytes,
+                    mode=request_for_daemon.mode.value,
+                    direction=direction,
+                    job_id=request_for_daemon.job_id,
+                )
         except Exception as exc:
             self._apply_daemon_plan_fallback(decision, str(exc))
             return []
@@ -781,6 +812,21 @@ class Runtime:
             info.update(_daemon_lease_summary(leases))
         self._last_daemon_reservation = info
         return reservations
+
+    def _coerce_transfer_request(
+        self,
+        decision: AutoTransferDecision,
+        request: TransferRequest | str,
+    ) -> TransferRequest:
+        if isinstance(request, TransferRequest):
+            return request.with_mode(decision.resolved_mode)
+        return TransferRequest(
+            total_bytes=decision.request_bytes,
+            chunk_bytes=self.options.chunk_bytes,
+            direction=str(request),
+            mode=decision.resolved_mode,
+            request_chunks=decision.request_chunks,
+        )
 
     def _apply_daemon_plan_fallback(
         self,

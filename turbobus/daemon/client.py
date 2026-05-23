@@ -4,6 +4,7 @@ import json
 import socket
 from dataclasses import asdict
 
+from ..transfer import TransferRequest
 from .protocol import DaemonRequest, DaemonResponse, RequestType
 
 
@@ -89,19 +90,26 @@ class TurboBusDaemonClient:
         direction: str = "h2d",
         job_id: str | None = None,
     ) -> DaemonResponse:
-        payload = {
-            "total_bytes": int(total_bytes),
-            "chunk_bytes": int(chunk_bytes),
-            "mode": str(mode),
-            "direction": str(direction),
-        }
-        if job_id is not None:
-            payload["job_id"] = str(job_id)
+        request = TransferRequest(
+            total_bytes=total_bytes,
+            chunk_bytes=chunk_bytes,
+            mode=mode,
+            direction=direction,
+            job_id=job_id,
+        )
+        return self.plan_transfer_request(session_id, request)
+
+    def plan_transfer_request(
+        self,
+        session_id: str,
+        request: TransferRequest,
+        mode: str | None = None,
+    ) -> DaemonResponse:
         return self.send(
             DaemonRequest(
                 request_type=RequestType.PLAN_TRANSFER,
                 session_id=str(session_id),
-                payload=payload,
+                payload=request.daemon_payload(mode=mode),
             )
         )
 

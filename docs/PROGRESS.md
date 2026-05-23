@@ -2,80 +2,86 @@
 
 ## Current State
 
-The project direction is still the paper-reproduction rewrite, and the code
-now has its first daemon-managed planning cut:
+The project direction is still the paper-reproduction rewrite. The current
+code refactor layer is now organized around daemon-managed planning,
+backend-facing CUDA execution, adapter-owned framework logic, and explicit
+transfer request objects:
 
 - shared protocol types for transfer mode and daemon requests live in
   `turbobus/schema.py`;
-- native runtime support moved into `turbobus/runtime_engine.py`;
-- `turbobus/runtime.py` is thinner and now acts more like a facade over the
-  runtime engine and daemon control path;
-- daemon protocol definitions are no longer duplicated in the daemon package.
-- planner model types now live in `turbobus/planner_types.py`, and
-  `transfer_plan_to_dict` accepts them directly.
-- `turbobus/planner_engine.py` can now build direct, relay, and pooled chunk
-  plans without depending on CUDA-specific native objects.
-- `turbobus/daemon/scheduler.py` now converts daemon session/profile/quota
-  state into `PlannerTransferPlan`, `PlannerLease`, and `PlannerStats`.
-- the daemon now accepts `PLAN_TRANSFER` requests, commits scheduler leases as
+- native runtime support lives in `turbobus/runtime_engine.py`;
+- `turbobus/runtime.py` is a Python execution facade over the runtime engine,
+  CUDA backend facade, and daemon control path;
+- planner model types live in `turbobus/planner_types.py`, and
+  `transfer_plan_to_dict` accepts them directly;
+- `turbobus/planner_engine.py` builds direct, relay, and pooled chunk plans
+  without depending on CUDA-specific native objects;
+- `turbobus/daemon/scheduler.py` converts daemon session/profile/quota state
+  into `PlannerTransferPlan`, `PlannerLease`, and `PlannerStats`;
+- the daemon accepts `PLAN_TRANSFER` requests, commits scheduler leases as
   releasable reservations, and returns direct fallback plans when relay planning
-  cannot be approved.
-- `Runtime` now prefers daemon-issued plans when the connected daemon supports
-  `PLAN_TRANSFER`, while keeping the older `RESERVE_TRANSFER` path as a
-  compatibility fallback.
-- `turbobus.backends` now exists as the first backend-facing package, and the
-  current CUDA native runtime is reached through `CudaNativeBackend` instead of
-  direct `_turbobus.Runtime(...)` calls in `Runtime`.
-- `turbobus.adapters` now exists as the framework-facing package boundary for
-  inference slots, vLLM, vLLM connector entry points, model loading, and
-  training offload while old root-level imports remain compatible.
+  cannot be approved;
+- `Runtime` prefers daemon-issued transfer plans, but still falls back to the
+  older reserve-only daemon path for compatibility;
+- `turbobus.backends.cuda.CudaNativeBackend` owns current CUDA native runtime
+  creation, transfer-mode translation, and native range construction;
+- `turbobus.transfer` defines `TransferRequest`, `TransferRange`, and
+  `TransferDirection` as the shared request shape for runtime, daemon, adapter,
+  and future worker code;
+- `turbobus.adapters` owns the framework-facing implementations for inference
+  slots, vLLM, vLLM connector entry points, model loading, and training offload;
+- old root-level framework modules remain as compatibility aliases to the
+  adapter modules.
 
 ## What Was Updated
 
-- `turbobus/schema.py` now owns the shared transfer and daemon protocol types.
-- `turbobus/runtime_engine.py` now owns runtime options, transfer handles, and
-  helper logic for native transfer validation and daemon profile conversion.
+- `turbobus/schema.py` owns the shared transfer and daemon protocol types.
+- `turbobus/runtime_engine.py` owns runtime options, transfer handles, native
+  transfer validation helpers, and daemon profile conversion helpers.
 - `turbobus/runtime.py`, `turbobus/transfer_selector.py`, and
-  `turbobus/daemon/protocol.py` now import those shared types instead of
-  duplicating them.
-- `turbobus/daemon/scheduler.py` was added as the first daemon-side scheduling
-  policy module.
-- `turbobus/daemon/server.py` and `turbobus/daemon/client.py` now support
+  `turbobus/daemon/protocol.py` import shared types instead of duplicating
+  them.
+- `turbobus/daemon/scheduler.py` is the daemon-side scheduling policy module.
+- `turbobus/daemon/server.py` and `turbobus/daemon/client.py` support
   daemon-owned plan issuance through `PLAN_TRANSFER`.
-- `turbobus/backends/base.py` and `turbobus/backends/cuda.py` now define the
+- `turbobus/backends/base.py` and `turbobus/backends/cuda.py` define the
   backend facade for the current native CUDA runtime.
-- `turbobus/runtime.py` now binds the native extension through that backend and
-  asks it to create the native runtime, translate transfer modes, and build
-  native ranges.
-- `pyproject.toml` now packages `turbobus.backends`.
-- `turbobus/adapters/*.py` now provides the adapter-facing import paths.
-- `turbobus/__init__.py` now re-exports framework-facing objects through
-  `turbobus.adapters` instead of importing each old flat module directly.
-- `pyproject.toml` now packages `turbobus.adapters`.
-- Added a focused protocol serialization test at
-  `test/python/test_schema.py`.
-- Added planner model tests at `test/python/test_planner_types.py`.
-- Added planner engine tests at `test/python/test_planner_engine.py`.
-- Added daemon scheduler tests at `test/python/test_daemon_scheduler.py`.
-- Added backend facade tests at `test/python/test_backend_cuda.py`.
-- Added adapter package boundary tests at `test/python/test_adapters_package.py`.
-- Extended daemon state and runtime handle tests for daemon-issued plans and
-  direct fallback, plus runtime construction through the backend facade.
+- `turbobus/runtime.py` submits request-shaped daemon plans and uses transfer
+  requests for contiguous and range transfers.
+- `turbobus/transfer.py` was added for transfer request/range/direction
+  validation and daemon payload serialization.
+- `turbobus/daemon/client.py` exposes `plan_transfer_request`; the older
+  `plan_transfer` helper now builds the same request object.
+- `turbobus/adapters/*.py` now owns framework-facing implementation code.
+- `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
+  `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
+  `turbobus/model_loading.py`, and `turbobus/training_offload.py` are
+  compatibility aliases to the adapter modules.
+- `turbobus/__init__.py` re-exports framework-facing objects through
+  `turbobus.adapters`.
+- `pyproject.toml` packages `turbobus.backends` and `turbobus.adapters`.
+- Added focused protocol, planner, scheduler, backend, adapter, and transfer
+  request tests.
+- Extended daemon state and runtime handle tests for daemon-issued plans, direct
+  fallback, backend facade construction, and request-shaped daemon planning.
 
 ## Immediate Goal
 
-Finish the refactor layer that separates planning/control from execution:
+The current refactor layer has reached the intended boundary for the next
+phase:
 
-1. keep runtime as an execution facade that consumes daemon plans instead of
-   owning relay choice;
-2. keep native CUDA execution behind the backend facade while preserving direct,
+1. runtime consumes daemon plans instead of owning relay choice;
+2. native CUDA execution is behind the backend facade while preserving direct,
    relay, and pooled behavior;
-3. keep framework adapter entry points behind adapter-facing modules without
-   breaking the current public imports;
-4. introduce explicit client/runtime transfer request objects so later worker
-   execution can consume the same transfer shape;
-5. keep framework adapter code outside daemon scheduling and backend execution
-   paths.
+3. framework adapter implementations are under `turbobus.adapters`;
+4. root-level framework modules remain compatible through aliases;
+5. explicit transfer request objects are available for runtime, daemon, adapter,
+   and future worker paths.
+
+The next immediate goal is the daemon protocol baseline: job registration,
+buffer registration, transfer status, lease-token records, and cleanup
+messages. This starts the privileged-daemon work, but does not add worker
+execution yet.
 
 ## Verification
 
@@ -83,6 +89,7 @@ The current refactor checks are:
 
 ```text
 $env:PYTHONPATH='.'; python test/python/test_schema.py
+$env:PYTHONPATH='.'; python test/python/test_transfer.py
 $env:PYTHONPATH='.'; python test/python/test_adapters_package.py
 $env:PYTHONPATH='.'; python test/python/test_backend_cuda.py
 $env:PYTHONPATH='.'; python test/python/test_daemon_scheduler.py
@@ -91,16 +98,23 @@ $env:PYTHONPATH='.'; python test/python/test_daemon_socket.py
 $env:PYTHONPATH='.'; python test/python/test_runtime_handle.py
 $env:PYTHONPATH='.'; python test/python/test_planner_types.py
 $env:PYTHONPATH='.'; python test/python/test_planner_engine.py
+$env:PYTHONPATH='.'; python test/python/test_inference_adapters.py
+$env:PYTHONPATH='.'; python test/python/test_offload_store.py
+$env:PYTHONPATH='.'; python test/python/test_model_loading.py
+$env:PYTHONPATH='.'; python test/python/test_training_offload.py
+$env:PYTHONPATH='.'; python test/python/test_vllm_connector.py
+$env:PYTHONPATH='.'; python test/python/test_vllm_integration.py
+$env:PYTHONPATH='.'; python test/python/test_vllm_kv_connector.py
+$env:PYTHONPATH='.'; python test/python/test_vllm_kv_connector_sweep.py
 ```
 
 ## Remaining Work
 
-- split the current native CUDA execution path behind backend-facing Python
-  interfaces further as worker execution grows;
+- define daemon protocol records for job identity, buffer registration,
+  transfer status, lease tokens, and cleanup;
+- add daemon state and validation tests for those records;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
-- separate framework adapters from the flat package root once their imports can
-  move from compatibility wrappers into owned adapter modules;
-- introduce client/runtime transfer request objects that can be shared with the
-  future worker path;
+- split the current native CUDA execution path further only when worker/helper
+  execution needs it;
 - avoid reintroducing local relay selection in runtime or framework adapters.

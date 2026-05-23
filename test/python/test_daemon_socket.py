@@ -10,6 +10,7 @@ import unittest
 
 from turbobus.daemon import TurboBusDaemonClient
 from turbobus.daemon.server import TurboBusDaemon
+from turbobus.transfer import TransferRequest
 
 
 def send_request(path: str, request: dict) -> dict:
@@ -273,12 +274,14 @@ class DaemonSocketTest(unittest.TestCase):
             )
             self.assertTrue(stored.ok)
 
-            planned = client.plan_transfer(
+            planned = client.plan_transfer_request(
                 session_id=session_id,
-                total_bytes=64,
-                chunk_bytes=16,
-                mode="pool",
-                direction="h2d",
+                request=TransferRequest(
+                    total_bytes=64,
+                    chunk_bytes=16,
+                    mode="pool",
+                    direction="h2d",
+                ),
             )
 
             self.assertTrue(planned.ok)

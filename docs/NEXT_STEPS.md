@@ -2,10 +2,11 @@
 
 ## Current
 
-Finish the current code refactor by separating daemon planning/control from
-local execution and framework adapters.
+Start the next phase after the current refactor layer: build out the daemon
+control plane that will later own cross-job relay discovery, leases, and worker
+execution.
 
-Completed in the planner/scheduler cut:
+Completed in the refactor layer:
 
 - generic planner types for devices, links, paths, chunks, plans, leases, and
   stats;
@@ -18,6 +19,14 @@ Completed in the planner/scheduler cut:
   request, with the old reserve-only request kept for compatibility.
 - backend facade for the current native CUDA runtime.
 - adapter package boundary for current framework integrations.
+- explicit `TransferRequest`, `TransferRange`, and `TransferDirection` objects
+  for runtime/client transfer submission.
+- runtime daemon planning now prefers request-shaped `plan_transfer_request`
+  calls before falling back to the old `plan_transfer`/`reserve_transfer`
+  compatibility paths.
+- framework adapter logic now lives under `turbobus.adapters`; old flat modules
+  such as `turbobus.vllm_kv_connector` are compatibility aliases to the adapter
+  modules.
 
 Current status:
 
@@ -34,25 +43,28 @@ Current status:
 - `turbobus.backends.cuda.CudaNativeBackend` owns native runtime creation,
   transfer-mode translation, and native range construction for the current CUDA
   path.
-- `turbobus.adapters` now provides framework-facing imports for inference slot
+- `turbobus.transfer` now owns request-shaped transfer metadata that adapters,
+  runtime, daemon, and future worker code can share.
+- `turbobus.adapters` now owns framework-facing logic for inference slot
   adapters, vLLM helpers/connectors, model loading, and training offload while
-  preserving old root-level import paths.
+  preserving old root-level import paths as module aliases.
 
 Next code cut:
 
-- introduce client/runtime transfer request objects that adapters can submit and
-  daemon/worker code can consume later;
-- keep direct, relay, and pooled behavior unchanged;
-- keep adapters as clients of runtime/daemon APIs, not owners of scheduler,
-  backend, or worker policy.
+- define the next daemon protocol messages for job registration, buffer
+  registration, transfer status, lease tokens, and cleanup;
+- keep the daemon as the owner of planning/control decisions;
+- do not add worker execution yet, but shape the protocol so worker/helper
+  execution can consume the same `TransferRequest` and lease records later.
 
 ## Upcoming
 
-1. CUDA backend baseline.
-   - backend facade for the current native runtime; done as the first cut;
-   - local transfer execution on the new interfaces;
-   - staging buffer pool;
-   - timing and stats parity with the old prototype.
+1. Daemon protocol baseline.
+   - job/session identity;
+   - buffer registration records;
+   - transfer request/status messages;
+   - lease-token records;
+   - cleanup and stale-session messages.
 
 2. Daemon control plane.
    - topology discovery;
@@ -99,3 +111,7 @@ Next code cut:
 - Runtime now reaches the current CUDA native extension through a backend
   facade instead of creating `_turbobus.Runtime` directly.
 - Framework-facing imports now have a `turbobus.adapters` package boundary.
+- Framework adapter implementations now live in `turbobus.adapters`; root-level
+  adapter module names are compatibility aliases.
+- Runtime and daemon planning now use explicit transfer request objects as the
+  shared request shape for later worker execution.

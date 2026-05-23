@@ -17,6 +17,7 @@ from turbobus.runtime import (
     TransferMode,
     transfer_plan_to_dict as runtime_plan_to_dict,
 )
+from turbobus.transfer import TransferRequest
 
 try:
     import torch
@@ -670,6 +671,23 @@ class RuntimeDaemonReservationTest(unittest.TestCase):
             self.plan_response = plan_response
             self.plan_calls = []
 
+        def plan_transfer_request(self, session_id, request, mode=None):
+            payload = request.daemon_payload(mode=mode)
+            self.plan_calls.append(
+                {
+                    "session_id": session_id,
+                    "total_bytes": payload["total_bytes"],
+                    "chunk_bytes": payload["chunk_bytes"],
+                    "mode": payload["mode"],
+                    "direction": payload["direction"],
+                    "request_chunks": payload["request_chunks"],
+                    "job_id": payload.get("job_id"),
+                    "ranges": payload.get("ranges", []),
+                    "api": "request",
+                }
+            )
+            return self.plan_response
+
         def plan_transfer(
             self,
             session_id,
@@ -687,6 +705,7 @@ class RuntimeDaemonReservationTest(unittest.TestCase):
                     "mode": mode,
                     "direction": direction,
                     "job_id": job_id,
+                    "api": "legacy",
                 }
             )
             return self.plan_response
@@ -765,6 +784,37 @@ class RuntimeDaemonReservationTest(unittest.TestCase):
         self.assertEqual(info["daemon_reservation_status"], "granted")
         self.assertEqual(info["daemon_reservation_ids"], "lease-1")
         self.assertEqual(info["daemon_reserved_relays"], "1")
+
+    def test_daemon_plan_uses_transfer_request_shape(self) -> None:
+        self.RelayProfile.relays = [self.Relay()]
+        client = self.PlanningDaemonClient(
+            DaemonResponse(
+                ok=True,
+                payload={
+                    "stats": {"resolved_mode": "pool", "fallback_reason": None},
+                    "leases": [{"relay_device": 1, "chunk_limit": 2, "bytes_limit": 16}],
+                    "reservations": [{"reservation_id": "lease-1"}],
+                },
+            )
+        )
+        runtime = self.make_runtime(client)
+        request = TransferRequest(
+            total_bytes=32 * 1024 * 1024,
+            chunk_bytes=4 * 1024 * 1024,
+            direction="h2d",
+            mode="pool",
+            request_chunks=8,
+            job_id="job-1",
+        )
+
+        reservations = runtime._resolve_transfer_request_with_daemon(request)
+
+        self.assertEqual(reservations, ["lease-1"])
+        self.assertEqual(client.plan_calls[0]["total_bytes"], 32 * 1024 * 1024)
+        self.assertEqual(client.plan_calls[0]["chunk_bytes"], 4 * 1024 * 1024)
+        self.assertEqual(client.plan_calls[0]["request_chunks"], 8)
+        self.assertEqual(client.plan_calls[0]["job_id"], "job-1")
+        self.assertEqual(client.plan_calls[0]["api"], "request")
 
     def test_daemon_plan_direct_fallback_updates_auto_decision(self) -> None:
         self.RelayProfile.relays = [self.Relay()]
@@ -1118,6 +1168,13 @@ class PlanTraceTest(unittest.TestCase):
 
 
 class RangeValidationTest(unittest.TestCase):
+    def test_runtime_range_fields_wrapper_accepts_dicts(self) -> None:
+        fields = runtime_module._range_fields(
+            {"src_offset": 1, "dst_offset": 2, "bytes": 3}
+        )
+
+        self.assertEqual(fields, (1, 2, 3))
+
     def test_native_ranges_accepts_dicts_and_tuples(self) -> None:
         class NativeRange:
             def __init__(self) -> None:

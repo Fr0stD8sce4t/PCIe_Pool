@@ -33,6 +33,13 @@ from turbobus.adapters import vllm_kv_connector as adapter_vllm_kv_connector
 
 class AdaptersPackageTest(unittest.TestCase):
     def test_adapter_package_reexports_current_framework_entry_points(self) -> None:
+        self.assertIs(root_inference, adapter_inference)
+        self.assertIs(root_model_loading, adapter_model_loading)
+        self.assertIs(root_training_offload, adapter_training_offload)
+        self.assertIs(root_vllm, adapter_vllm)
+        self.assertIs(root_vllm_connector, adapter_vllm_connector)
+        self.assertIs(root_vllm_integration, adapter_vllm_integration)
+        self.assertIs(root_vllm_kv_connector, adapter_vllm_kv_connector)
         self.assertIs(
             adapter_inference.InferenceKVSlotAdapter,
             root_inference.InferenceKVSlotAdapter,

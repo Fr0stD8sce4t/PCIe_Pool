@@ -65,6 +65,7 @@ from .planner_engine import (
 from .runtime import AutoTransferSelector, Runtime
 from .runtime_engine import RuntimeOptions
 from .schema import AutoTransferDecision, TransferMode
+from .transfer import TransferDirection, TransferRange, TransferRequest
 
 __all__ = [
     "BlockState",
@@ -97,6 +98,9 @@ __all__ = [
     "RuntimeOptions",
     "TransferMode",
     "TransferStats",
+    "TransferDirection",
+    "TransferRange",
+    "TransferRequest",
     "TrainingOffloadManager",
     "TrainingOffloadStore",
     "VllmKVBlockRef",
