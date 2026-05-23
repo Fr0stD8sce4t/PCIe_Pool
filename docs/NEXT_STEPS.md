@@ -69,12 +69,15 @@ Current status:
 - transfer requests can now carry registered buffer ids, and daemon lease
   validation checks the lease token, job, session, relay, and authorized buffer
   ids together.
+- worker-facing transfer authorization messages now exist, and the daemon can
+  authorize a future helper transfer by checking transfer id, lease token,
+  job/session ownership, relay id, buffer ids, direction, and ranges.
 
 Next code cut:
 
-- add a worker-facing transfer authorization request shape that packages the
-  validated lease token, transfer id, source/destination buffer ids, direction,
-  and range metadata without adding worker execution yet;
+- add a worker/helper module skeleton that consumes authorized transfer
+  messages and reports unsupported execution cleanly, without adding CUDA IPC or
+  real data movement yet;
 - keep the daemon as the owner of planning/control decisions;
 - do not add worker execution yet, but shape the protocol so worker/helper
   execution can consume the same `TransferRequest` and lease records later.

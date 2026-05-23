@@ -13,6 +13,8 @@ from ..schema import (
     TransferReservation,
     TransferStatus,
     TransferStatusState,
+    WorkerTransferAuthorization,
+    WorkerTransferAuthorizationRequest,
 )
 
 __all__ = [
@@ -28,4 +30,6 @@ __all__ = [
     "TransferReservation",
     "TransferStatus",
     "TransferStatusState",
+    "WorkerTransferAuthorization",
+    "WorkerTransferAuthorizationRequest",
 ]

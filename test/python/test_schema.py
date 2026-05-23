@@ -19,6 +19,8 @@ from turbobus.schema import (
     TransferReservation,
     TransferStatus,
     TransferStatusState,
+    WorkerTransferAuthorization,
+    WorkerTransferAuthorizationRequest,
 )
 
 
@@ -149,6 +151,35 @@ class SchemaTest(unittest.TestCase):
             reason="timeout",
             force=True,
         )
+        worker_request = WorkerTransferAuthorizationRequest(
+            transfer_id="transfer-1",
+            lease_id="lease-1",
+            token="token-1",
+            session_id="session-1",
+            job_id="job-1",
+            src_buffer_id="cpu-buffer",
+            dst_buffer_id="gpu-buffer",
+            direction="h2d",
+            relay_gpu=1,
+            ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 4096},),
+        )
+        worker_authorization = WorkerTransferAuthorization(
+            transfer_id="transfer-1",
+            lease_id="lease-1",
+            session_id="session-1",
+            job_id="job-1",
+            src_buffer=buffer_registration,
+            dst_buffer=BufferRegistration(
+                buffer_id="gpu-buffer",
+                job_id="job-1",
+                kind="gpu",
+                size_bytes=4096,
+                device_index=0,
+            ),
+            direction="h2d",
+            relay_gpu=1,
+            ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 4096},),
+        )
 
         payload = json.loads(
             json.dumps(
@@ -158,6 +189,8 @@ class SchemaTest(unittest.TestCase):
                     "lease": asdict(lease),
                     "status": asdict(status),
                     "cleanup": asdict(cleanup),
+                    "worker_request": asdict(worker_request),
+                    "worker_authorization": asdict(worker_authorization),
                 }
             )
         )
@@ -169,6 +202,11 @@ class SchemaTest(unittest.TestCase):
         self.assertEqual(payload["lease"]["buffer_ids"], ["cpu-buffer", "gpu-buffer"])
         self.assertEqual(payload["status"]["state"], "running")
         self.assertTrue(payload["cleanup"]["force"])
+        self.assertEqual(payload["worker_request"]["direction"], "h2d")
+        self.assertEqual(
+            payload["worker_authorization"]["src_buffer"]["buffer_id"],
+            "buffer-1",
+        )
 
     def test_daemon_baseline_message_validation_rejects_invalid_values(self) -> None:
         with self.assertRaises(ValueError):
@@ -211,6 +249,17 @@ class SchemaTest(unittest.TestCase):
                 state=TransferStatusState.SUBMITTED,
                 bytes_total=1,
                 bytes_completed=2,
+            )
+        with self.assertRaises(ValueError):
+            WorkerTransferAuthorizationRequest(
+                transfer_id="transfer-1",
+                lease_id="lease-1",
+                token="token-1",
+                session_id="session-1",
+                job_id="job-1",
+                src_buffer_id="cpu-buffer",
+                dst_buffer_id="gpu-buffer",
+                direction="sideways",
             )
         with self.assertRaises(ValueError):
             CleanupRequest(target_kind="", target_id="session-1", reason="timeout")

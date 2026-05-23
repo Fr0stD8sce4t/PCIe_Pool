@@ -37,6 +37,7 @@ class RequestType(str, Enum):
     RESERVE_TRANSFER = "RESERVE_TRANSFER"
     ISSUE_LEASE = "ISSUE_LEASE"
     VALIDATE_LEASE = "VALIDATE_LEASE"
+    AUTHORIZE_WORKER_TRANSFER = "AUTHORIZE_WORKER_TRANSFER"
     RELEASE_TRANSFER = "RELEASE_TRANSFER"
     CLEANUP = "CLEANUP"
     CLOSE_SESSION = "CLOSE_SESSION"
@@ -182,6 +183,114 @@ class TransferStatus:
 
 
 @dataclass(frozen=True)
+class WorkerTransferAuthorizationRequest:
+    transfer_id: str
+    lease_id: str
+    token: str
+    session_id: str
+    job_id: str
+    src_buffer_id: str
+    dst_buffer_id: str
+    direction: str
+    ranges: tuple[dict[str, int], ...] = field(default_factory=tuple)
+    relay_gpu: int | None = None
+
+    def __post_init__(self) -> None:
+        if not str(self.transfer_id).strip():
+            raise ValueError("transfer_id must be non-empty")
+        if not str(self.lease_id).strip():
+            raise ValueError("lease_id must be non-empty")
+        if not str(self.token).strip():
+            raise ValueError("token must be non-empty")
+        if not str(self.session_id).strip():
+            raise ValueError("session_id must be non-empty")
+        if not str(self.job_id).strip():
+            raise ValueError("job_id must be non-empty")
+        if not str(self.src_buffer_id).strip():
+            raise ValueError("src_buffer_id must be non-empty")
+        if not str(self.dst_buffer_id).strip():
+            raise ValueError("dst_buffer_id must be non-empty")
+        direction = str(self.direction).lower()
+        if direction not in {"h2d", "d2h"}:
+            raise ValueError("direction must be h2d or d2h")
+        normalized_ranges = _normalize_worker_ranges(self.ranges)
+        object.__setattr__(self, "transfer_id", str(self.transfer_id))
+        object.__setattr__(self, "lease_id", str(self.lease_id))
+        object.__setattr__(self, "token", str(self.token))
+        object.__setattr__(self, "session_id", str(self.session_id))
+        object.__setattr__(self, "job_id", str(self.job_id))
+        object.__setattr__(self, "src_buffer_id", str(self.src_buffer_id))
+        object.__setattr__(self, "dst_buffer_id", str(self.dst_buffer_id))
+        object.__setattr__(self, "direction", direction)
+        object.__setattr__(self, "ranges", tuple(normalized_ranges))
+        if self.relay_gpu is not None:
+            object.__setattr__(self, "relay_gpu", int(self.relay_gpu))
+            if self.relay_gpu < 0:
+                raise ValueError("relay_gpu must be non-negative")
+
+
+@dataclass(frozen=True)
+class WorkerTransferAuthorization:
+    transfer_id: str
+    lease_id: str
+    session_id: str
+    job_id: str
+    src_buffer: BufferRegistration
+    dst_buffer: BufferRegistration
+    direction: str
+    ranges: tuple[dict[str, int], ...] = field(default_factory=tuple)
+    relay_gpu: int | None = None
+
+    def __post_init__(self) -> None:
+        if not str(self.transfer_id).strip():
+            raise ValueError("transfer_id must be non-empty")
+        if not str(self.lease_id).strip():
+            raise ValueError("lease_id must be non-empty")
+        if not str(self.session_id).strip():
+            raise ValueError("session_id must be non-empty")
+        if not str(self.job_id).strip():
+            raise ValueError("job_id must be non-empty")
+        direction = str(self.direction).lower()
+        if direction not in {"h2d", "d2h"}:
+            raise ValueError("direction must be h2d or d2h")
+        normalized_ranges = _normalize_worker_ranges(self.ranges)
+        if self.src_buffer.job_id != str(self.job_id):
+            raise ValueError("src buffer job does not match authorization job")
+        if self.dst_buffer.job_id != str(self.job_id):
+            raise ValueError("dst buffer job does not match authorization job")
+        object.__setattr__(self, "transfer_id", str(self.transfer_id))
+        object.__setattr__(self, "lease_id", str(self.lease_id))
+        object.__setattr__(self, "session_id", str(self.session_id))
+        object.__setattr__(self, "job_id", str(self.job_id))
+        object.__setattr__(self, "direction", direction)
+        object.__setattr__(self, "ranges", tuple(normalized_ranges))
+        if self.relay_gpu is not None:
+            object.__setattr__(self, "relay_gpu", int(self.relay_gpu))
+            if self.relay_gpu < 0:
+                raise ValueError("relay_gpu must be non-negative")
+
+
+def _normalize_worker_ranges(ranges: tuple[dict[str, int], ...]) -> tuple[dict[str, int], ...]:
+    normalized_ranges: list[dict[str, int]] = []
+    for item in ranges:
+        src_offset = int(item["src_offset"])
+        dst_offset = int(item["dst_offset"])
+        bytes_count = int(item["bytes"])
+        if src_offset < 0 or dst_offset < 0:
+            raise ValueError("range offsets must be non-negative")
+        if bytes_count <= 0:
+            raise ValueError("range bytes must be positive")
+        normalized_ranges.append(
+            {
+                "src_offset": src_offset,
+                "dst_offset": dst_offset,
+                "bytes": bytes_count,
+            }
+        )
+    return tuple(normalized_ranges)
+
+
+@dataclass(frozen=True)
 class CleanupRequest:
     target_kind: str
     target_id: str
@@ -267,4 +376,6 @@ __all__ = [
     "TransferReservation",
     "TransferStatus",
     "TransferStatusState",
+    "WorkerTransferAuthorization",
+    "WorkerTransferAuthorizationRequest",
 ]

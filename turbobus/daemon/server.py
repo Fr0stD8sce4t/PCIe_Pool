@@ -22,6 +22,8 @@ from .protocol import (
     TransferReservation,
     TransferStatus,
     TransferStatusState,
+    WorkerTransferAuthorization,
+    WorkerTransferAuthorizationRequest,
 )
 from .scheduler import DaemonScheduler, SchedulerDecision
 
@@ -338,6 +340,65 @@ class TurboBusDaemon:
             if lease.lease_id not in self._reservations:
                 return DaemonResponse(ok=False, error="lease is not active")
             return DaemonResponse(ok=True, payload={"lease_token": asdict(lease)})
+
+    def authorize_worker_transfer(
+        self,
+        request: WorkerTransferAuthorizationRequest,
+    ) -> DaemonResponse:
+        with self._lock:
+            status = self._transfer_statuses.get(request.transfer_id)
+            if status is None:
+                return DaemonResponse(ok=False, error="unknown transfer")
+            if status.session_id != request.session_id:
+                return DaemonResponse(ok=False, error="transfer session mismatch")
+            if status.job_id != request.job_id:
+                return DaemonResponse(ok=False, error="transfer job mismatch")
+            lease = self._lease_tokens.get(request.lease_id)
+            if lease is None:
+                return DaemonResponse(ok=False, error="unknown lease")
+            if lease.token != request.token:
+                return DaemonResponse(ok=False, error="invalid lease token")
+            if lease.session_id != request.session_id:
+                return DaemonResponse(ok=False, error="lease session mismatch")
+            if lease.job_id != request.job_id:
+                return DaemonResponse(ok=False, error="lease job mismatch")
+            if request.relay_gpu is not None and lease.relay_gpu != request.relay_gpu:
+                return DaemonResponse(ok=False, error="lease relay mismatch")
+            if lease.lease_id not in self._reservations:
+                return DaemonResponse(ok=False, error="lease is not active")
+            reservation = self._reservations[lease.lease_id]
+            if reservation.direction not in {"unknown", request.direction}:
+                return DaemonResponse(ok=False, error="reservation direction mismatch")
+            requested_bytes = (
+                sum(item["bytes"] for item in request.ranges)
+                if request.ranges
+                else reservation.bytes
+            )
+            if requested_bytes > reservation.bytes:
+                return DaemonResponse(ok=False, error="authorization exceeds reservation bytes")
+            required_buffers = (request.src_buffer_id, request.dst_buffer_id)
+            for buffer_id in required_buffers:
+                if buffer_id not in lease.buffer_ids:
+                    return DaemonResponse(ok=False, error="lease buffer mismatch")
+            src_buffer = self._buffers.get(request.src_buffer_id)
+            dst_buffer = self._buffers.get(request.dst_buffer_id)
+            if src_buffer is None or dst_buffer is None:
+                return DaemonResponse(ok=False, error="unknown buffer")
+            authorization = WorkerTransferAuthorization(
+                transfer_id=request.transfer_id,
+                lease_id=request.lease_id,
+                session_id=request.session_id,
+                job_id=request.job_id,
+                src_buffer=src_buffer,
+                dst_buffer=dst_buffer,
+                direction=request.direction,
+                ranges=request.ranges,
+                relay_gpu=lease.relay_gpu,
+            )
+            return DaemonResponse(
+                ok=True,
+                payload={"authorization": asdict(authorization)},
+            )
 
     def plan_transfer(
         self,
@@ -758,6 +819,10 @@ class TurboBusDaemon:
                 relay_gpu=payload.get("relay_gpu"),
                 job_id=payload.get("job_id"),
                 buffer_ids=payload.get("buffer_ids"),
+            )
+        if request.request_type == RequestType.AUTHORIZE_WORKER_TRANSFER:
+            return self.authorize_worker_transfer(
+                WorkerTransferAuthorizationRequest(**request.payload)
             )
         if request.request_type == RequestType.CLEANUP:
             payload = request.payload

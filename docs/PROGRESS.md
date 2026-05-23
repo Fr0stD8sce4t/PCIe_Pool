@@ -72,6 +72,9 @@ transfer request objects:
 - `TransferRequest` can now send registered buffer ids to the daemon, and
   `VALIDATE_LEASE` can check those buffer ids against the lease token plus the
   owning job and session.
+- Worker-facing authorization messages now exist in the daemon protocol, and
+  `AUTHORIZE_WORKER_TRANSFER` returns a checked transfer context with source
+  and destination buffer registrations, direction, relay GPU, and ranges.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -108,11 +111,13 @@ phase:
    snapshots.
 10. lease validation now ties relay permission to registered transfer buffers,
     job ownership, and session ownership.
+11. worker/helper authorization can be requested without adding worker
+    execution, so the next data-plane layer has a daemon-approved input shape.
 
-The next immediate goal is to add a worker-facing transfer authorization request
-shape that carries the validated lease token, transfer id, buffer ids,
-direction, and range metadata. This continues the privileged-daemon work, but
-does not add worker execution yet.
+The next immediate goal is to add a worker/helper module skeleton that consumes
+authorized transfer messages and reports unsupported execution cleanly. This
+continues the privileged-daemon work, but does not add CUDA IPC or real data
+movement yet.
 
 ## Verification
 
@@ -143,8 +148,7 @@ $env:PYTHONPATH='.'; python test/python/test_vllm_kv_connector_sweep.py
 
 - define daemon protocol records for job identity, buffer registration,
   lease tokens, and worker-facing cleanup;
-- add a worker-facing authorization request/response shape for future helper
-  execution;
+- add a worker/helper module skeleton for future helper execution;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

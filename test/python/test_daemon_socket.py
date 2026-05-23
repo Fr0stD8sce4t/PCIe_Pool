@@ -9,6 +9,7 @@ import time
 import unittest
 
 from turbobus.daemon import TurboBusDaemonClient
+from turbobus.daemon.protocol import WorkerTransferAuthorizationRequest
 from turbobus.daemon.server import TurboBusDaemon
 from turbobus.transfer import TransferRequest
 
@@ -323,6 +324,25 @@ class DaemonSocketTest(unittest.TestCase):
                 buffer_ids=["cpu-buffer", "gpu-buffer"],
             )
             self.assertTrue(validated.ok)
+            authorized = client.authorize_worker_transfer(
+                WorkerTransferAuthorizationRequest(
+                    transfer_id=transfer_id,
+                    lease_id=lease_token["lease_id"],
+                    token=lease_token["token"],
+                    session_id=session_id,
+                    job_id="job-1",
+                    src_buffer_id="cpu-buffer",
+                    dst_buffer_id="gpu-buffer",
+                    direction="h2d",
+                    relay_gpu=1,
+                    ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
+                )
+            )
+            self.assertTrue(authorized.ok)
+            self.assertEqual(
+                authorized.payload["authorization"]["src_buffer"]["buffer_id"],
+                "cpu-buffer",
+            )
 
             released = client.release_transfer(reservation_id)
             self.assertTrue(released.ok)

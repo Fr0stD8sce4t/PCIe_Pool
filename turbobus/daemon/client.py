@@ -5,7 +5,12 @@ import socket
 from dataclasses import asdict
 
 from ..transfer import TransferRequest
-from .protocol import DaemonRequest, DaemonResponse, RequestType
+from .protocol import (
+    DaemonRequest,
+    DaemonResponse,
+    RequestType,
+    WorkerTransferAuthorizationRequest,
+)
 
 
 class TurboBusDaemonClient:
@@ -219,6 +224,17 @@ class TurboBusDaemonClient:
             DaemonRequest(
                 request_type=RequestType.VALIDATE_LEASE,
                 payload=payload,
+            )
+        )
+
+    def authorize_worker_transfer(
+        self,
+        request: WorkerTransferAuthorizationRequest,
+    ) -> DaemonResponse:
+        return self.send(
+            DaemonRequest(
+                request_type=RequestType.AUTHORIZE_WORKER_TRANSFER,
+                payload=asdict(request),
             )
         )
 
