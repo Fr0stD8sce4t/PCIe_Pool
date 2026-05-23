@@ -345,6 +345,131 @@ class DaemonStateTest(unittest.TestCase):
         second = daemon.reserve_transfer(session_id, relay_gpu=2, chunks=2)
         self.assertTrue(second.ok)
 
+    def test_plan_transfer_uses_cached_profile_and_reserves_leases(self) -> None:
+        daemon = TurboBusDaemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=1,
+            max_inflight_chunks_per_relay=8,
+        )
+        register = daemon.register_session(
+            target_gpu=0,
+            requested_relays=[1],
+            max_inflight_chunks=8,
+        )
+        session_id = register.payload["session"]["session_id"]
+        daemon.put_profile(
+            target_gpu=0,
+            relay_gpus=[1],
+            profile={
+                "target_device": 0,
+                "direct_h2d_bw_gbps": 7.5,
+                "direct_d2h_bw_gbps": 6.5,
+                "relays": [
+                    {
+                        "relay_device": 1,
+                        "target_device": 0,
+                        "h2d_bw_gbps": 7.5,
+                        "d2h_bw_gbps": 6.5,
+                        "p2p_bw_gbps": 40.0,
+                        "effective_bw_gbps": 7.5,
+                        "effective_d2h_bw_gbps": 6.5,
+                        "p2p_enabled": True,
+                    }
+                ],
+            },
+        )
+
+        planned = daemon.plan_transfer(
+            session_id=session_id,
+            total_bytes=64,
+            chunk_bytes=16,
+            mode="pool",
+            direction="h2d",
+        )
+
+        self.assertTrue(planned.ok)
+        self.assertEqual(planned.payload["stats"]["resolved_mode"], "pool")
+        self.assertEqual(len(planned.payload["leases"]), 1)
+        self.assertEqual(len(planned.payload["reservations"]), 1)
+        reservation = planned.payload["reservations"][0]
+        self.assertEqual(
+            reservation["reservation_id"],
+            planned.payload["leases"][0]["lease_id"],
+        )
+        self.assertEqual(daemon.describe().payload["relay_quotas"][1]["active_chunks"], 2)
+
+        released = daemon.release_transfer(reservation["reservation_id"])
+        self.assertTrue(released.ok)
+        self.assertEqual(daemon.describe().payload["relay_quotas"][1]["active_chunks"], 0)
+
+    def test_plan_transfer_falls_back_direct_when_relay_quota_is_unavailable(self) -> None:
+        daemon = TurboBusDaemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=1,
+            max_inflight_chunks_per_relay=1,
+        )
+        register = daemon.register_session(
+            target_gpu=0,
+            requested_relays=[1],
+            max_inflight_chunks=8,
+        )
+        session_id = register.payload["session"]["session_id"]
+        daemon.put_profile(
+            target_gpu=0,
+            relay_gpus=[1],
+            profile={
+                "target_device": 0,
+                "direct_h2d_bw_gbps": 7.5,
+                "direct_d2h_bw_gbps": 6.5,
+                "relays": [
+                    {
+                        "relay_device": 1,
+                        "target_device": 0,
+                        "h2d_bw_gbps": 7.5,
+                        "d2h_bw_gbps": 6.5,
+                        "p2p_bw_gbps": 40.0,
+                        "effective_bw_gbps": 7.5,
+                        "effective_d2h_bw_gbps": 6.5,
+                        "p2p_enabled": True,
+                    }
+                ],
+            },
+        )
+
+        planned = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.PLAN_TRANSFER,
+                session_id=session_id,
+                payload={
+                    "total_bytes": 64,
+                    "chunk_bytes": 16,
+                    "mode": "pool",
+                    "direction": "h2d",
+                },
+            )
+        )
+
+        self.assertTrue(planned.ok)
+        self.assertEqual(planned.payload["stats"]["resolved_mode"], "direct")
+        self.assertIn("quota", planned.payload["stats"]["fallback_reason"])
+        self.assertEqual(planned.payload["leases"], [])
+        self.assertEqual(planned.payload["reservations"], [])
+        self.assertEqual(daemon.describe().payload["relay_quotas"][1]["active_chunks"], 0)
+
+    def test_plan_transfer_rejects_unknown_session(self) -> None:
+        daemon = TurboBusDaemon(relay_gpus=[1])
+
+        planned = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.PLAN_TRANSFER,
+                session_id="missing",
+                payload={"total_bytes": 64, "chunk_bytes": 16},
+            )
+        )
+
+        self.assertFalse(planned.ok)
+        self.assertIn("unknown session", planned.error)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -80,6 +80,31 @@ class TurboBusDaemonClient:
             )
         )
 
+    def plan_transfer(
+        self,
+        session_id: str,
+        total_bytes: int,
+        chunk_bytes: int,
+        mode: str = "pool",
+        direction: str = "h2d",
+        job_id: str | None = None,
+    ) -> DaemonResponse:
+        payload = {
+            "total_bytes": int(total_bytes),
+            "chunk_bytes": int(chunk_bytes),
+            "mode": str(mode),
+            "direction": str(direction),
+        }
+        if job_id is not None:
+            payload["job_id"] = str(job_id)
+        return self.send(
+            DaemonRequest(
+                request_type=RequestType.PLAN_TRANSFER,
+                session_id=str(session_id),
+                payload=payload,
+            )
+        )
+
     def release_transfer(self, reservation_id: str) -> DaemonResponse:
         return self.send(
             DaemonRequest(

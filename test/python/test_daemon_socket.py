@@ -219,6 +219,73 @@ class DaemonSocketTest(unittest.TestCase):
 
             invalidated = client.invalidate_profile(target_gpu=0, relay_gpus=[1])
             self.assertTrue(invalidated.ok)
+
+    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
+    def test_client_plan_transfer_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            socket_path = os.path.join(tmpdir, "turbobusd.sock")
+            daemon = TurboBusDaemon(
+                relay_gpus=[1],
+                max_sessions_per_relay=1,
+                max_inflight_chunks_per_relay=8,
+            )
+            thread = threading.Thread(
+                target=daemon.serve_forever,
+                args=(socket_path,),
+                daemon=True,
+            )
+            thread.start()
+
+            for _ in range(100):
+                if os.path.exists(socket_path):
+                    break
+                time.sleep(0.01)
+            self.assertTrue(os.path.exists(socket_path))
+
+            client = TurboBusDaemonClient(socket_path)
+            registered = client.register_session(
+                target_gpu=0,
+                relay_gpus=[1],
+                max_inflight_chunks=8,
+            )
+            self.assertTrue(registered.ok)
+            session_id = registered.payload["session"]["session_id"]
+            stored = client.put_profile(
+                target_gpu=0,
+                relay_gpus=[1],
+                profile={
+                    "target_device": 0,
+                    "direct_h2d_bw_gbps": 7.5,
+                    "direct_d2h_bw_gbps": 6.5,
+                    "relays": [
+                        {
+                            "relay_device": 1,
+                            "target_device": 0,
+                            "h2d_bw_gbps": 7.5,
+                            "d2h_bw_gbps": 6.5,
+                            "p2p_bw_gbps": 40.0,
+                            "effective_bw_gbps": 7.5,
+                            "effective_d2h_bw_gbps": 6.5,
+                            "p2p_enabled": True,
+                        }
+                    ],
+                },
+            )
+            self.assertTrue(stored.ok)
+
+            planned = client.plan_transfer(
+                session_id=session_id,
+                total_bytes=64,
+                chunk_bytes=16,
+                mode="pool",
+                direction="h2d",
+            )
+
+            self.assertTrue(planned.ok)
+            self.assertEqual(planned.payload["stats"]["resolved_mode"], "pool")
+            reservation_id = planned.payload["reservations"][0]["reservation_id"]
+            released = client.release_transfer(reservation_id)
+            self.assertTrue(released.ok)
             self.assertTrue(invalidated.payload["removed"])
 
             missing_again = client.get_profile(target_gpu=0, relay_gpus=[1])

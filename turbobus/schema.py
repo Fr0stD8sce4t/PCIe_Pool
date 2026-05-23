@@ -30,6 +30,7 @@ class RequestType(str, Enum):
     GET_PROFILE = "GET_PROFILE"
     PUT_PROFILE = "PUT_PROFILE"
     INVALIDATE_PROFILE = "INVALIDATE_PROFILE"
+    PLAN_TRANSFER = "PLAN_TRANSFER"
     RESERVE_TRANSFER = "RESERVE_TRANSFER"
     RELEASE_TRANSFER = "RELEASE_TRANSFER"
     CLOSE_SESSION = "CLOSE_SESSION"
@@ -85,4 +86,3 @@ class DaemonResponse:
     ok: bool
     payload: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
-

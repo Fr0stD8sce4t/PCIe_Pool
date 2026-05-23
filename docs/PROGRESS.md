@@ -3,7 +3,7 @@
 ## Current State
 
 The project direction is still the paper-reproduction rewrite, and the code
-now has its first structural cut:
+now has its first daemon-managed planning cut:
 
 - shared protocol types for transfer mode and daemon requests live in
   `turbobus/schema.py`;
@@ -15,6 +15,14 @@ now has its first structural cut:
   `transfer_plan_to_dict` accepts them directly.
 - `turbobus/planner_engine.py` can now build direct, relay, and pooled chunk
   plans without depending on CUDA-specific native objects.
+- `turbobus/daemon/scheduler.py` now converts daemon session/profile/quota
+  state into `PlannerTransferPlan`, `PlannerLease`, and `PlannerStats`.
+- the daemon now accepts `PLAN_TRANSFER` requests, commits scheduler leases as
+  releasable reservations, and returns direct fallback plans when relay planning
+  cannot be approved.
+- `Runtime` now prefers daemon-issued plans when the connected daemon supports
+  `PLAN_TRANSFER`, while keeping the older `RESERVE_TRANSFER` path as a
+  compatibility fallback.
 
 ## What Was Updated
 
@@ -24,43 +32,49 @@ now has its first structural cut:
 - `turbobus/runtime.py`, `turbobus/transfer_selector.py`, and
   `turbobus/daemon/protocol.py` now import those shared types instead of
   duplicating them.
+- `turbobus/daemon/scheduler.py` was added as the first daemon-side scheduling
+  policy module.
+- `turbobus/daemon/server.py` and `turbobus/daemon/client.py` now support
+  daemon-owned plan issuance through `PLAN_TRANSFER`.
 - Added a focused protocol serialization test at
   `test/python/test_schema.py`.
 - Added planner model tests at `test/python/test_planner_types.py`.
 - Added planner engine tests at `test/python/test_planner_engine.py`.
+- Added daemon scheduler tests at `test/python/test_daemon_scheduler.py`.
+- Extended daemon state and runtime handle tests for daemon-issued plans and
+  direct fallback.
 
 ## Immediate Goal
 
-Start the planner and scheduler model on top of the new shared types:
+Finish the refactor layer that separates planning/control from execution:
 
-1. make scheduler policy consume `PlannerTransferPlan` and `PlannerLease`;
-2. move relay fallback and denial reasons out of the runtime hot path;
-3. keep the runtime facade thin so later daemon-managed execution can replace
-   the old single-process assumptions.
+1. keep runtime as an execution facade that consumes daemon plans instead of
+   owning relay choice;
+2. introduce backend-facing boundaries for the current CUDA/native execution
+   path without changing direct, relay, and pooled behavior;
+3. keep framework adapter code outside daemon scheduling and backend execution
+   paths.
 
 ## Verification
 
-This turn exercised the new shared types and the runtime facade. The relevant
-checks were:
+The current refactor checks are:
 
 ```text
 $env:PYTHONPATH='.'; python test/python/test_schema.py
+$env:PYTHONPATH='.'; python test/python/test_daemon_scheduler.py
 $env:PYTHONPATH='.'; python test/python/test_daemon_state.py
 $env:PYTHONPATH='.'; python test/python/test_daemon_socket.py
 $env:PYTHONPATH='.'; python test/python/test_runtime_handle.py
-$env:PYTHONPATH='.'; python test/python/test_offload_store.py
-$env:PYTHONPATH='.'; python test/python/test_inference_adapters.py
-$env:PYTHONPATH='.'; python test/python/test_model_loading.py
-$env:PYTHONPATH='.'; python test/python/test_training_offload.py
-$env:PYTHONPATH='.'; python test/python/test_vllm_integration.py
-$env:PYTHONPATH='.'; python test/python/test_vllm_connector.py
-$env:PYTHONPATH='.'; python test/python/test_vllm_kv_connector.py
 $env:PYTHONPATH='.'; python test/python/test_planner_types.py
 $env:PYTHONPATH='.'; python test/python/test_planner_engine.py
 ```
 
 ## Remaining Work
 
-- make daemon-side scheduling consume the new planner model;
-- keep the new docs as the source of truth for the rewrite plan;
-- avoid reintroducing the old single-process assumptions in future code.
+- split the current native CUDA execution path behind backend-facing Python
+  interfaces;
+- keep the daemon plan path as the control-plane entry point for future worker
+  execution;
+- separate framework adapters from the flat package root once their imports can
+  remain compatible;
+- avoid reintroducing local relay selection in runtime or framework adapters.

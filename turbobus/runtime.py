@@ -85,6 +85,42 @@ def _attach_daemon_stats(stats, daemon_info: dict[str, object]):
     return _runtime_engine._attach_daemon_stats(stats, daemon_info)
 
 
+def _mode_from_daemon_stats(stats, default: TransferMode) -> TransferMode:
+    if not isinstance(stats, dict):
+        return default
+    value = stats.get("resolved_mode")
+    if value is None:
+        return default
+    try:
+        return TransferMode(str(value))
+    except ValueError:
+        try:
+            return TransferMode[str(value).upper()]
+        except KeyError:
+            return default
+
+
+def _daemon_lease_summary(leases: list) -> dict[str, object]:
+    relay_devices = []
+    chunk_limits = []
+    byte_limits = []
+    for lease in leases:
+        if not isinstance(lease, dict):
+            continue
+        relay_devices.append(str(lease.get("relay_device", "")))
+        chunk_limits.append(str(lease.get("chunk_limit", "")))
+        byte_limits.append(str(lease.get("bytes_limit", "")))
+    return {
+        "daemon_reserved_relays": ",".join(item for item in relay_devices if item),
+        "daemon_reserved_chunks_per_relay": ",".join(
+            item for item in chunk_limits if item
+        ),
+        "daemon_reserved_bytes_per_relay": ",".join(
+            item for item in byte_limits if item
+        ),
+    }
+
+
 class Runtime:
     def __init__(
         self,
@@ -615,6 +651,10 @@ class Runtime:
             }
             return []
 
+        planned = self._plan_daemon_transfer(decision, direction)
+        if planned is not None:
+            return planned
+
         divisor = len(relay_devices)
         if decision.resolved_mode is TransferMode.POOL:
             divisor += 1
@@ -670,6 +710,101 @@ class Runtime:
             "daemon_reserved_direction": direction,
         }
         return reservations
+
+    def _plan_daemon_transfer(
+        self,
+        decision: AutoTransferDecision,
+        direction: str,
+    ) -> list[str] | None:
+        planner = getattr(self._daemon_client, "plan_transfer", None)
+        if not callable(planner):
+            return None
+        try:
+            response = planner(
+                self._daemon_session_id,
+                total_bytes=decision.request_bytes,
+                chunk_bytes=self.options.chunk_bytes,
+                mode=decision.resolved_mode.value,
+                direction=direction,
+            )
+        except Exception as exc:
+            self._apply_daemon_plan_fallback(decision, str(exc))
+            return []
+
+        if not response.ok:
+            error = response.error or "daemon plan denied"
+            if "unsupported" in error or "not a valid RequestType" in error:
+                return None
+            self._apply_daemon_plan_fallback(decision, error)
+            return []
+
+        payload = response.payload or {}
+        stats = payload.get("stats", {})
+        fallback_reason = (
+            stats.get("fallback_reason") if isinstance(stats, dict) else None
+        )
+        resolved_mode = _mode_from_daemon_stats(stats, decision.resolved_mode)
+        self._last_resolved_transfer_mode = resolved_mode
+        self._set_native_transfer_mode(resolved_mode)
+        if fallback_reason and decision.requested_mode is TransferMode.AUTO:
+            self._last_auto_decision = AutoTransferDecision(
+                requested_mode=decision.requested_mode,
+                resolved_mode=resolved_mode,
+                request_bytes=decision.request_bytes,
+                request_chunks=decision.request_chunks,
+                direct_h2d_bw_gbps=decision.direct_h2d_bw_gbps,
+                relay_effective_bw_gbps=decision.relay_effective_bw_gbps,
+                eligible_relay_devices=(),
+                reason=f"daemon reservation denied: {fallback_reason}",
+            )
+
+        reservations = [
+            str(reservation["reservation_id"])
+            for reservation in (payload.get("reservations") or [])
+        ]
+        leases = payload.get("leases") or []
+        status = "granted" if reservations else "planned"
+        if fallback_reason:
+            status = "denied"
+        info = {
+            "daemon_session_id": self._daemon_session_id,
+            "daemon_reservation_status": status,
+            "daemon_plan_resolved_mode": resolved_mode.value,
+            "daemon_reserved_direction": direction,
+        }
+        if reservations:
+            info["daemon_reservation_ids"] = ",".join(reservations)
+        if fallback_reason:
+            info["daemon_reservation_error"] = str(fallback_reason)
+        if leases:
+            info.update(_daemon_lease_summary(leases))
+        self._last_daemon_reservation = info
+        return reservations
+
+    def _apply_daemon_plan_fallback(
+        self,
+        decision: AutoTransferDecision,
+        reason: str,
+    ) -> None:
+        self._last_daemon_reservation = {
+            "daemon_session_id": self._daemon_session_id,
+            "daemon_reservation_status": "denied",
+            "daemon_reservation_error": str(reason),
+        }
+        fallback = AutoTransferDecision(
+            requested_mode=decision.requested_mode,
+            resolved_mode=TransferMode.DIRECT,
+            request_bytes=decision.request_bytes,
+            request_chunks=decision.request_chunks,
+            direct_h2d_bw_gbps=decision.direct_h2d_bw_gbps,
+            relay_effective_bw_gbps=decision.relay_effective_bw_gbps,
+            eligible_relay_devices=(),
+            reason=f"daemon reservation denied: {reason}",
+        )
+        self._last_resolved_transfer_mode = TransferMode.DIRECT
+        if decision.requested_mode is TransferMode.AUTO:
+            self._last_auto_decision = fallback
+        self._set_native_transfer_mode(TransferMode.DIRECT)
 
     def _release_daemon_reservations(self, reservations: list[str]) -> None:
         if self._daemon_client is None:

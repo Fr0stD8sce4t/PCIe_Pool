@@ -624,6 +624,33 @@ class RuntimeDaemonReservationTest(unittest.TestCase):
             self.release_calls.append(reservation_id)
             return DaemonResponse(ok=True, payload={"reservation_id": reservation_id})
 
+    class PlanningDaemonClient(FakeDaemonClient):
+        def __init__(self, plan_response: DaemonResponse) -> None:
+            super().__init__()
+            self.plan_response = plan_response
+            self.plan_calls = []
+
+        def plan_transfer(
+            self,
+            session_id,
+            total_bytes,
+            chunk_bytes,
+            mode="pool",
+            direction="unknown",
+            job_id=None,
+        ):
+            self.plan_calls.append(
+                {
+                    "session_id": session_id,
+                    "total_bytes": total_bytes,
+                    "chunk_bytes": chunk_bytes,
+                    "mode": mode,
+                    "direction": direction,
+                    "job_id": job_id,
+                }
+            )
+            return self.plan_response
+
     def make_runtime(self, client):
         runtime = object.__new__(runtime_module.Runtime)
         runtime.target_gpu = 0
@@ -662,6 +689,94 @@ class RuntimeDaemonReservationTest(unittest.TestCase):
         info = runtime.last_daemon_reservation_dict()
         self.assertEqual(info["daemon_reservation_status"], "granted")
         self.assertEqual(info["daemon_reserved_relays"], "1")
+
+    def test_daemon_plan_response_is_used_before_legacy_reserve(self) -> None:
+        self.RelayProfile.relays = [self.Relay()]
+        client = self.PlanningDaemonClient(
+            DaemonResponse(
+                ok=True,
+                payload={
+                    "stats": {"resolved_mode": "pool", "fallback_reason": None},
+                    "leases": [
+                        {
+                            "lease_id": "lease-1",
+                            "relay_device": 1,
+                            "chunk_limit": 4,
+                            "bytes_limit": 16 * 1024 * 1024,
+                        }
+                    ],
+                    "reservations": [{"reservation_id": "lease-1"}],
+                },
+            )
+        )
+        runtime = self.make_runtime(client)
+
+        reservations = runtime._resolve_transfer_with_daemon(
+            32 * 1024 * 1024,
+            direction="h2d",
+            range_count=8,
+        )
+
+        self.assertEqual(reservations, ["lease-1"])
+        self.assertEqual(client.reserve_calls, [])
+        self.assertEqual(client.plan_calls[0]["mode"], "pool")
+        self.assertEqual(runtime.last_transfer_mode(), TransferMode.POOL)
+        info = runtime.last_daemon_reservation_dict()
+        self.assertEqual(info["daemon_reservation_status"], "granted")
+        self.assertEqual(info["daemon_reservation_ids"], "lease-1")
+        self.assertEqual(info["daemon_reserved_relays"], "1")
+
+    def test_daemon_plan_direct_fallback_updates_auto_decision(self) -> None:
+        self.RelayProfile.relays = [self.Relay()]
+        client = self.PlanningDaemonClient(
+            DaemonResponse(
+                ok=True,
+                payload={
+                    "stats": {
+                        "resolved_mode": "direct",
+                        "fallback_reason": "relay chunk quota is unavailable",
+                    },
+                    "leases": [],
+                    "reservations": [],
+                },
+            )
+        )
+        runtime = self.make_runtime(client)
+
+        reservations = runtime._resolve_transfer_with_daemon(
+            32 * 1024 * 1024,
+            direction="h2d",
+            range_count=8,
+        )
+
+        self.assertEqual(reservations, [])
+        self.assertEqual(client.reserve_calls, [])
+        self.assertEqual(runtime.last_transfer_mode(), TransferMode.DIRECT)
+        self.assertIn(
+            "daemon_reservation_denied",
+            runtime.last_auto_decision_dict()["auto_reason"],
+        )
+        info = runtime.last_daemon_reservation_dict()
+        self.assertEqual(info["daemon_reservation_status"], "denied")
+        self.assertIn("relay chunk quota", info["daemon_reservation_error"])
+
+    def test_unsupported_daemon_plan_falls_back_to_legacy_reserve(self) -> None:
+        self.RelayProfile.relays = [self.Relay()]
+        client = self.PlanningDaemonClient(
+            DaemonResponse(ok=False, error="unsupported request: PLAN_TRANSFER")
+        )
+        runtime = self.make_runtime(client)
+
+        reservations = runtime._resolve_transfer_with_daemon(
+            32 * 1024 * 1024,
+            direction="h2d",
+            range_count=8,
+        )
+
+        self.assertEqual(reservations, ["res-1"])
+        self.assertEqual(len(client.plan_calls), 1)
+        self.assertEqual(len(client.reserve_calls), 1)
+        self.assertEqual(runtime.last_transfer_mode(), TransferMode.POOL)
 
     def test_daemon_reservation_denial_falls_back_to_direct(self) -> None:
         self.RelayProfile.relays = [self.Relay()]

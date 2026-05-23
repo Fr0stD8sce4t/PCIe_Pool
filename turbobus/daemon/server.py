@@ -17,6 +17,7 @@ from .protocol import (
     Session,
     TransferReservation,
 )
+from .scheduler import DaemonScheduler, SchedulerDecision
 
 
 class TurboBusDaemon:
@@ -39,6 +40,7 @@ class TurboBusDaemon:
         self._sessions: dict[str, Session] = {}
         self._reservations: dict[str, TransferReservation] = {}
         self._profile_cache: dict[str, dict] = {}
+        self._scheduler = DaemonScheduler()
         self._session_timeout_seconds = max(0.0, float(session_timeout_seconds))
         self._profile_max_age_seconds = max(0.0, float(profile_max_age_seconds))
         self._relay_quotas = {
@@ -151,6 +153,43 @@ class TurboBusDaemon:
                 return DaemonResponse(ok=False, error="unknown reservation")
             return DaemonResponse(ok=True, payload={"reservation_id": reservation_id})
 
+    def plan_transfer(
+        self,
+        session_id: str,
+        total_bytes: int,
+        chunk_bytes: int,
+        mode: str = "pool",
+        direction: str = "h2d",
+        job_id: str | None = None,
+    ) -> DaemonResponse:
+        now = time.time()
+        with self._lock:
+            self._reap_stale_sessions_locked(now)
+            self._purge_stale_profiles_locked(now)
+            session = self._sessions.get(session_id)
+            if session is None or not session.active:
+                return DaemonResponse(ok=False, error="unknown session")
+
+            profile_entry = self._profile_cache.get(
+                self._profile_key(session.target_gpu, session.relay_gpus)
+            )
+            decision = self._scheduler.plan_transfer(
+                session=session,
+                profile_entry=profile_entry,
+                relay_quotas=self._relay_quotas,
+                total_bytes=total_bytes,
+                chunk_bytes=chunk_bytes,
+                mode=mode,
+                direction=direction,
+                now=now,
+                job_id=job_id,
+            )
+            reservations = self._commit_scheduler_leases_locked(session, decision)
+            self._touch_session_locked(session.session_id, now)
+            payload = decision.as_dict()
+            payload["reservations"] = [asdict(reservation) for reservation in reservations]
+            return DaemonResponse(ok=True, payload=payload)
+
     def get_profile(self, target_gpu: int, relay_gpus: Iterable[int]) -> DaemonResponse:
         key = self._profile_key(target_gpu, relay_gpus)
         with self._lock:
@@ -209,6 +248,29 @@ class TurboBusDaemon:
         if quota is not None:
             quota.active_chunks = max(0, quota.active_chunks - reservation.chunks)
         return reservation
+
+    def _commit_scheduler_leases_locked(
+        self,
+        session: Session,
+        decision: SchedulerDecision,
+    ) -> list[TransferReservation]:
+        reservations: list[TransferReservation] = []
+        for lease in decision.leases:
+            reservation = TransferReservation(
+                reservation_id=lease.lease_id,
+                session_id=lease.session_id,
+                relay_gpu=lease.relay_device,
+                chunks=lease.chunk_limit,
+                bytes=lease.bytes_limit,
+                direction=lease.direction,
+            )
+            self._reservations[reservation.reservation_id] = reservation
+            session.active_chunks += reservation.chunks
+            quota = self._relay_quotas.get(reservation.relay_gpu)
+            if quota is not None:
+                quota.active_chunks += reservation.chunks
+            reservations.append(reservation)
+        return reservations
 
     def _close_session_locked(self, session_id: str) -> Session | None:
         session = self._sessions.pop(session_id, None)
@@ -311,6 +373,19 @@ class TurboBusDaemon:
                 chunks=int(payload.get("chunks", 1)),
                 bytes_=int(payload.get("bytes", 0)),
                 direction=str(payload.get("direction", "unknown")),
+            )
+        if request.request_type == RequestType.PLAN_TRANSFER:
+            if request.session_id is None:
+                return DaemonResponse(ok=False, error="session_id is required")
+            payload = request.payload
+            total_bytes = int(payload.get("total_bytes", payload.get("bytes", 0)))
+            return self.plan_transfer(
+                session_id=request.session_id,
+                total_bytes=total_bytes,
+                chunk_bytes=int(payload.get("chunk_bytes", 16 * 1024 * 1024)),
+                mode=str(payload.get("mode", "pool")),
+                direction=str(payload.get("direction", "h2d")),
+                job_id=str(payload["job_id"]) if "job_id" in payload else None,
             )
         if request.request_type == RequestType.RELEASE_TRANSFER:
             payload = request.payload

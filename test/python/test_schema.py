@@ -72,6 +72,23 @@ class SchemaTest(unittest.TestCase):
             "reservation-1",
         )
 
+    def test_plan_transfer_request_is_serializable(self) -> None:
+        request = DaemonRequest(
+            request_type=RequestType.PLAN_TRANSFER,
+            session_id="session-1",
+            payload={
+                "total_bytes": 64,
+                "chunk_bytes": 16,
+                "mode": "pool",
+                "direction": "h2d",
+            },
+        )
+
+        payload = json.loads(json.dumps(asdict(request)))
+
+        self.assertEqual(payload["request_type"], "PLAN_TRANSFER")
+        self.assertEqual(payload["payload"]["mode"], "pool")
+
     def test_relay_quota_limits(self) -> None:
         quota = RelayQuota(relay_gpu=1, max_sessions=1, max_inflight_chunks=4)
 
