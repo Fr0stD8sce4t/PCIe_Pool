@@ -24,6 +24,7 @@ from turbobus.worker import (
     WorkerTransferAuthorizer,
     WorkerTransferClient,
     WorkerTransferCleanupCoordinator,
+    WorkerTransferLifecycleRecord,
     WorkerTransferRequest,
     WorkerTransferResult,
     WorkerTransferState,
@@ -488,6 +489,106 @@ class WorkerHelperTest(unittest.TestCase):
         status = daemon.transfer_status(transfer_id)
         self.assertTrue(status.ok)
         self.assertEqual(status.payload["status"]["state"], "failed")
+
+    def test_lifecycle_record_serializes_control_plane_state(self) -> None:
+        request = authorization_request()
+        worker_request = WorkerTransferRequest.from_authorization_payload(
+            authorization_payload()
+        )
+        result = WorkerTransferResult(
+            transfer_id="transfer-1",
+            state=WorkerTransferState.UNSUPPORTED,
+            error="worker execution is not implemented yet",
+        )
+
+        record = WorkerTransferLifecycleRecord(
+            authorization_request=request,
+            worker_request=worker_request,
+            result=result,
+            status_update={
+                "transfer_id": "transfer-1",
+                "state": "failed",
+                "bytes_completed": 0,
+                "error": result.error,
+            },
+            status_response=DaemonResponse(ok=True, payload={"status": {"state": "failed"}}),
+            cleanup_target_kind="reservation",
+            cleanup_target_id="lease-1",
+            cleanup_response=DaemonResponse(ok=True, payload={"removed": {"reservations": 1}}),
+            final_state="unsupported",
+            error=result.error,
+        )
+        payload = record.as_dict()
+
+        self.assertEqual(payload["authorization_request"]["lease_id"], "lease-1")
+        self.assertEqual(
+            payload["worker_request"]["authorization"]["src_buffer"]["buffer_id"],
+            "cpu-buffer",
+        )
+        self.assertEqual(payload["result"]["state"], "unsupported")
+        self.assertEqual(payload["status_update"]["state"], "failed")
+        self.assertEqual(payload["status_response"]["payload"]["status"]["state"], "failed")
+        self.assertEqual(payload["cleanup_target"]["target_id"], "lease-1")
+        self.assertEqual(payload["cleanup_response"]["payload"]["removed"]["reservations"], 1)
+        self.assertEqual(payload["final_state"], "unsupported")
+
+    def test_worker_client_lifecycle_records_status_and_cleanup(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        client = WorkerTransferClient(daemon_client)
+
+        lifecycle = client.submit_report_cleanup_lifecycle(authorization_request())
+
+        self.assertEqual(lifecycle.final_state, "unsupported")
+        self.assertEqual(lifecycle.result.state, WorkerTransferState.UNSUPPORTED)
+        self.assertEqual(lifecycle.status_response, daemon_client.status_response)
+        self.assertEqual(lifecycle.cleanup_response, daemon_client.cleanup_response)
+        self.assertEqual(lifecycle.cleanup_target_kind, "reservation")
+        self.assertEqual(lifecycle.cleanup_target_id, "lease-1")
+        self.assertEqual(lifecycle.status_update["state"], "failed")
+        self.assertIn("not implemented", lifecycle.status_update["error"])
+        self.assertEqual(daemon_client.status_updates[0]["state"], "failed")
+        self.assertEqual(daemon_client.cleanup_requests[0]["target_id"], "lease-1")
+
+    def test_worker_client_lifecycle_skips_cleanup_for_complete_result(self) -> None:
+        class CompleteExecutor:
+            def execute(self, request: WorkerTransferRequest) -> WorkerTransferResult:
+                return WorkerTransferResult(
+                    transfer_id=request.transfer_id,
+                    state=WorkerTransferState.COMPLETE,
+                    bytes_completed=64,
+                )
+
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        client = WorkerTransferClient(daemon_client, executor=CompleteExecutor())
+
+        lifecycle = client.submit_report_cleanup_lifecycle(authorization_request())
+
+        self.assertEqual(lifecycle.final_state, "complete")
+        self.assertEqual(lifecycle.cleanup_target_kind, "reservation")
+        self.assertIsNone(lifecycle.cleanup_target_id)
+        self.assertTrue(lifecycle.cleanup_response.payload["cleanup_skipped"])
+        self.assertEqual(daemon_client.cleanup_requests, [])
+        self.assertEqual(lifecycle.status_update["state"], "complete")
+        self.assertEqual(lifecycle.status_update["bytes_completed"], 64)
+        self.assertEqual(daemon_client.status_updates[0]["state"], "complete")
+
+    def test_worker_client_lifecycle_records_authorization_failure_cleanup(self) -> None:
+        daemon_client = FakeDaemonClient(DaemonResponse(ok=False, error="denied"))
+        client = WorkerTransferClient(daemon_client)
+
+        lifecycle = client.submit_report_cleanup_lifecycle(authorization_request())
+
+        self.assertEqual(lifecycle.final_state, "authorization_failed")
+        self.assertIn("denied", lifecycle.error)
+        self.assertIsNone(lifecycle.worker_request)
+        self.assertIsNone(lifecycle.result)
+        self.assertEqual(lifecycle.cleanup_target_kind, "reservation")
+        self.assertEqual(lifecycle.cleanup_target_id, "lease-1")
+        self.assertEqual(daemon_client.cleanup_requests[0]["reason"], "worker_authorization_failed")
 
 
 if __name__ == "__main__":

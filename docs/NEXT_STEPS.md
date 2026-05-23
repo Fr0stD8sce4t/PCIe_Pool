@@ -106,16 +106,21 @@ Current status:
   `WorkerTransferClient.submit_report_and_cleanup()` ties authorization,
   unsupported execution, daemon status reporting, and reservation/session
   cleanup together without adding real data movement.
+- `WorkerTransferLifecycleRecord` now captures the worker authorization
+  request, daemon-approved worker context, status update, status response,
+  cleanup target, cleanup response, final outcome, and error for future helper
+  processes.
 
 Next code cut:
 
-- add a worker request lifecycle record that captures authorization request,
-  daemon-approved transfer context, status updates, cleanup target, and final
-  outcome for future helper processes;
-- add focused worker tests for serializing that lifecycle record and for using
-  it to keep status/cleanup decisions consistent;
-- keep this as worker control-plane state only, without adding CUDA IPC, real
-  data movement, or hardware discovery.
+- add a worker helper service skeleton that accepts a
+  `WorkerTransferAuthorizationRequest`, runs the existing worker client control
+  path, and returns a serialized lifecycle record;
+- add focused tests that the service skeleton returns lifecycle records for
+  successful authorization plus unsupported execution, authorization denial,
+  status report failure, and cleanup failure;
+- keep this as an in-process worker service boundary only, without adding CUDA
+  IPC, sockets, real data movement, or hardware discovery.
 
 ## Upcoming
 

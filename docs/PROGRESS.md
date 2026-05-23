@@ -111,6 +111,10 @@ transfer request objects:
   cleanup after authorization or execution failure, and
   `WorkerTransferClient.submit_report_and_cleanup()` keeps unsupported worker
   execution on the daemon-owned status and cleanup paths.
+- `WorkerTransferLifecycleRecord` now serializes the worker authorization
+  request, daemon-approved transfer context, status update and response,
+  cleanup target and response, final outcome, and error for future helper
+  process handoff.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -174,12 +178,14 @@ phase:
     and covered through the daemon socket path.
 20. worker-side cleanup coordination can now report failed or unsupported helper
     transfers and ask the daemon to reclaim the matching reservation or session.
+21. worker request lifecycle records now make status and cleanup decisions
+    explicit and serializable for future helper processes.
 
-The next immediate goal is to add a worker request lifecycle record that captures
-authorization request, daemon-approved transfer context, status updates, cleanup
-target, and final outcome for future helper processes. This should remain worker
-control-plane state only and should not add CUDA IPC, real data movement, or
-hardware discovery.
+The next immediate goal is to add an in-process worker helper service skeleton
+that accepts a `WorkerTransferAuthorizationRequest`, runs the existing worker
+client control path, and returns a serialized lifecycle record. This should stay
+inside the worker control-plane boundary and should not add CUDA IPC, sockets,
+real data movement, or hardware discovery.
 
 ## Verification
 
@@ -225,7 +231,10 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
   `TurboBusDaemonClient.cleanup()`;
 - add worker-side cleanup coordination for failed or unsupported helper
   transfers; done through `WorkerTransferCleanupCoordinator`;
-- add worker request lifecycle records for future helper processes;
+- add worker request lifecycle records for future helper processes; done
+  through `WorkerTransferLifecycleRecord`;
+- add an in-process worker helper service skeleton that returns lifecycle
+  records;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

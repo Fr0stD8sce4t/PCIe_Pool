@@ -100,6 +100,90 @@ class WorkerTransferResult:
         }
 
 
+@dataclass(frozen=True)
+class WorkerTransferLifecycleRecord:
+    authorization_request: WorkerTransferAuthorizationRequest
+    worker_request: WorkerTransferRequest | None = None
+    result: WorkerTransferResult | None = None
+    status_update: Mapping[str, object] | None = None
+    status_response: DaemonResponse | None = None
+    cleanup_target_kind: str | None = None
+    cleanup_target_id: str | None = None
+    cleanup_response: DaemonResponse | None = None
+    final_state: str = "created"
+    error: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.authorization_request, WorkerTransferAuthorizationRequest):
+            raise TypeError("authorization_request must be a WorkerTransferAuthorizationRequest")
+        if self.worker_request is not None and not isinstance(
+            self.worker_request,
+            WorkerTransferRequest,
+        ):
+            raise TypeError("worker_request must be a WorkerTransferRequest")
+        if self.result is not None and not isinstance(self.result, WorkerTransferResult):
+            raise TypeError("result must be a WorkerTransferResult")
+        if self.status_update is not None and not isinstance(self.status_update, Mapping):
+            raise TypeError("status_update must be a mapping")
+        if self.status_response is not None and not isinstance(
+            self.status_response,
+            DaemonResponse,
+        ):
+            raise TypeError("status_response must be a DaemonResponse")
+        if self.cleanup_response is not None and not isinstance(
+            self.cleanup_response,
+            DaemonResponse,
+        ):
+            raise TypeError("cleanup_response must be a DaemonResponse")
+        final_state = str(self.final_state)
+        if not final_state.strip():
+            raise ValueError("final_state must be non-empty")
+        object.__setattr__(self, "final_state", final_state)
+        if self.cleanup_target_kind is not None:
+            object.__setattr__(self, "cleanup_target_kind", str(self.cleanup_target_kind))
+        if self.cleanup_target_id is not None:
+            object.__setattr__(self, "cleanup_target_id", str(self.cleanup_target_id))
+        if self.error is not None:
+            object.__setattr__(self, "error", str(self.error))
+        if self.status_update is not None:
+            object.__setattr__(self, "status_update", dict(self.status_update))
+
+    def as_dict(self) -> dict[str, object]:
+        cleanup_target = None
+        if self.cleanup_target_kind is not None or self.cleanup_target_id is not None:
+            cleanup_target = {
+                "target_kind": self.cleanup_target_kind,
+                "target_id": self.cleanup_target_id,
+            }
+        return {
+            "authorization_request": asdict(self.authorization_request),
+            "worker_request": (
+                self.worker_request.as_dict()
+                if self.worker_request is not None
+                else None
+            ),
+            "result": self.result.as_dict() if self.result is not None else None,
+            "status_update": (
+                dict(self.status_update)
+                if self.status_update is not None
+                else None
+            ),
+            "status_response": (
+                asdict(self.status_response)
+                if self.status_response is not None
+                else None
+            ),
+            "cleanup_target": cleanup_target,
+            "cleanup_response": (
+                asdict(self.cleanup_response)
+                if self.cleanup_response is not None
+                else None
+            ),
+            "final_state": self.final_state,
+            "error": self.error,
+        }
+
+
 class WorkerTransferUnsupportedExecutor:
     def execute(self, request: WorkerTransferRequest) -> WorkerTransferResult:
         if not isinstance(request, WorkerTransferRequest):
@@ -149,17 +233,12 @@ class WorkerTransferStatusReporter:
     def report(self, result: WorkerTransferResult) -> DaemonResponse:
         if not isinstance(result, WorkerTransferResult):
             raise TypeError("result must be a WorkerTransferResult")
-        daemon_state = _daemon_state_for_worker_state(result.state)
-        error = result.error
-        if result.state == WorkerTransferState.UNSUPPORTED and error is None:
-            error = "worker execution is unsupported"
-        if result.state == WorkerTransferState.FAILED and error is None:
-            error = "worker transfer failed"
+        status_update = _daemon_status_update_for_result(result)
         response: DaemonResponse = self.daemon_client.transfer_status(
-            result.transfer_id,
-            state=daemon_state.value,
-            bytes_completed=result.bytes_completed,
-            error=error,
+            status_update["transfer_id"],
+            state=status_update["state"],
+            bytes_completed=status_update["bytes_completed"],
+            error=status_update["error"],
         )
         if not response.ok:
             raise WorkerStatusReportError(
@@ -284,22 +363,108 @@ class WorkerTransferClient:
         request: WorkerTransferAuthorizationRequest,
         cleanup_target_kind: str = "reservation",
     ) -> WorkerTransferResult:
+        lifecycle = self.submit_report_cleanup_lifecycle(
+            request,
+            cleanup_target_kind=cleanup_target_kind,
+        )
+        if lifecycle.final_state == "authorization_failed":
+            raise WorkerAuthorizationError(
+                lifecycle.error or "worker transfer authorization failed"
+            )
+        if lifecycle.final_state == "status_failed":
+            raise WorkerStatusReportError(
+                lifecycle.error or "worker transfer status report failed"
+            )
+        if lifecycle.final_state == "cleanup_failed":
+            raise WorkerCleanupError(lifecycle.error or "worker cleanup failed")
+        if lifecycle.result is None:
+            raise RuntimeError("worker lifecycle completed without a result")
+        return lifecycle.result
+
+    def submit_report_cleanup_lifecycle(
+        self,
+        request: WorkerTransferAuthorizationRequest,
+        cleanup_target_kind: str = "reservation",
+    ) -> WorkerTransferLifecycleRecord:
         try:
             worker_request = self.authorize(request)
-        except WorkerAuthorizationError:
-            self.cleanup_coordinator.cleanup_authorization_failure(
-                request,
+        except WorkerAuthorizationError as exc:
+            cleanup_target_id = _cleanup_target_id(
+                cleanup_target_kind,
+                lease_id=request.lease_id,
+                session_id=request.session_id,
+            )
+            try:
+                cleanup_response = self.cleanup_coordinator.cleanup_authorization_failure(
+                    request,
+                    target_kind=cleanup_target_kind,
+                )
+            except WorkerCleanupError as cleanup_exc:
+                return WorkerTransferLifecycleRecord(
+                    authorization_request=request,
+                    cleanup_target_kind=cleanup_target_kind,
+                    cleanup_target_id=cleanup_target_id,
+                    final_state="cleanup_failed",
+                    error=str(cleanup_exc),
+                )
+            return WorkerTransferLifecycleRecord(
+                authorization_request=request,
+                cleanup_target_kind=cleanup_target_kind,
+                cleanup_target_id=cleanup_target_id,
+                cleanup_response=cleanup_response,
+                final_state="authorization_failed",
+                error=str(exc),
+            )
+        result = self.executor.execute(worker_request)
+        status_update = _daemon_status_update_for_result(result)
+        try:
+            status_response = self.status_reporter.report(result)
+        except WorkerStatusReportError as exc:
+            return WorkerTransferLifecycleRecord(
+                authorization_request=request,
+                worker_request=worker_request,
+                result=result,
+                status_update=status_update,
+                final_state="status_failed",
+                error=str(exc),
+            )
+        cleanup_target_id = None
+        if result.state != WorkerTransferState.COMPLETE:
+            cleanup_target_id = _cleanup_target_id(
+                cleanup_target_kind,
+                lease_id=worker_request.authorization.lease_id,
+                session_id=worker_request.authorization.session_id,
+            )
+        try:
+            cleanup_response = self.cleanup_coordinator.cleanup_execution_failure(
+                worker_request,
+                result,
                 target_kind=cleanup_target_kind,
             )
-            raise
-        result = self.executor.execute(worker_request)
-        self.status_reporter.report(result)
-        self.cleanup_coordinator.cleanup_execution_failure(
-            worker_request,
-            result,
-            target_kind=cleanup_target_kind,
+        except WorkerCleanupError as exc:
+            return WorkerTransferLifecycleRecord(
+                authorization_request=request,
+                worker_request=worker_request,
+                result=result,
+                status_update=status_update,
+                status_response=status_response,
+                cleanup_target_kind=cleanup_target_kind,
+                cleanup_target_id=cleanup_target_id,
+                final_state="cleanup_failed",
+                error=str(exc),
+            )
+        return WorkerTransferLifecycleRecord(
+            authorization_request=request,
+            worker_request=worker_request,
+            result=result,
+            status_update=status_update,
+            status_response=status_response,
+            cleanup_target_kind=cleanup_target_kind,
+            cleanup_target_id=cleanup_target_id,
+            cleanup_response=cleanup_response,
+            final_state=result.state.value,
+            error=result.error,
         )
-        return result
 
 
 def _buffer_from_payload(payload: object) -> BufferRegistration:
@@ -323,6 +488,21 @@ def _daemon_state_for_worker_state(
     if worker_state == WorkerTransferState.COMPLETE:
         return TransferStatusState.COMPLETE
     return TransferStatusState.FAILED
+
+
+def _daemon_status_update_for_result(result: WorkerTransferResult) -> dict[str, object]:
+    daemon_state = _daemon_state_for_worker_state(result.state)
+    error = result.error
+    if result.state == WorkerTransferState.UNSUPPORTED and error is None:
+        error = "worker execution is unsupported"
+    if result.state == WorkerTransferState.FAILED and error is None:
+        error = "worker transfer failed"
+    return {
+        "transfer_id": result.transfer_id,
+        "state": daemon_state.value,
+        "bytes_completed": result.bytes_completed,
+        "error": error,
+    }
 
 
 def _cleanup_target_id(target_kind: str, lease_id: str, session_id: str) -> str:
