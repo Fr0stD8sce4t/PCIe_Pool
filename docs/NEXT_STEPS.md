@@ -15,10 +15,12 @@ Required first deliverables:
 Current status:
 
 - the shared planner model types now exist in `turbobus/planner_types.py`;
+- a backend-neutral Python planner engine now exists in
+  `turbobus/planner_engine.py`;
 - `transfer_plan_to_dict` accepts the new planner plan model and the old native
   plan shape;
-- the next code cut is the actual planner and scheduler logic built on those
-  types.
+- the next code cut is scheduler policy: relay lease requirements, fallback
+  decisions, and daemon-owned plan issuance.
 
 ## Upcoming
 

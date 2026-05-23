@@ -13,6 +13,8 @@ now has its first structural cut:
 - daemon protocol definitions are no longer duplicated in the daemon package.
 - planner model types now live in `turbobus/planner_types.py`, and
   `transfer_plan_to_dict` accepts them directly.
+- `turbobus/planner_engine.py` can now build direct, relay, and pooled chunk
+  plans without depending on CUDA-specific native objects.
 
 ## What Was Updated
 
@@ -25,14 +27,14 @@ now has its first structural cut:
 - Added a focused protocol serialization test at
   `test/python/test_schema.py`.
 - Added planner model tests at `test/python/test_planner_types.py`.
+- Added planner engine tests at `test/python/test_planner_engine.py`.
 
 ## Immediate Goal
 
 Start the planner and scheduler model on top of the new shared types:
 
-1. define backend-neutral device, link, path, chunk, plan, lease, and stats
-   objects in the Python layer;
-2. make chunk assignment and fallback rules explicit in the planner layer;
+1. make scheduler policy consume `PlannerTransferPlan` and `PlannerLease`;
+2. move relay fallback and denial reasons out of the runtime hot path;
 3. keep the runtime facade thin so later daemon-managed execution can replace
    the old single-process assumptions.
 
@@ -54,10 +56,11 @@ $env:PYTHONPATH='.'; python test/python/test_vllm_integration.py
 $env:PYTHONPATH='.'; python test/python/test_vllm_connector.py
 $env:PYTHONPATH='.'; python test/python/test_vllm_kv_connector.py
 $env:PYTHONPATH='.'; python test/python/test_planner_types.py
+$env:PYTHONPATH='.'; python test/python/test_planner_engine.py
 ```
 
 ## Remaining Work
 
-- define the planner-side generic types and chunk assignment logic;
+- make daemon-side scheduling consume the new planner model;
 - keep the new docs as the source of truth for the rewrite plan;
 - avoid reintroducing the old single-process assumptions in future code.

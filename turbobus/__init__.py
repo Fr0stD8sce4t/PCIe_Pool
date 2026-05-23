@@ -20,6 +20,12 @@ from .planner_types import (
     PlannerStats,
     PlannerTransferPlan,
 )
+from .planner_engine import (
+    PlannerEngine,
+    PlannerEngineOptions,
+    plan_transfer,
+    plan_transfer_ranges,
+)
 from .training_offload import TrainingOffloadManager, TrainingOffloadStore
 from .inference import (
     FrameworkKVSlot,
@@ -72,6 +78,8 @@ __all__ = [
     "PlannerPathAssignment",
     "PlannerStats",
     "PlannerTransferPlan",
+    "PlannerEngine",
+    "PlannerEngineOptions",
     "OffloadBlock",
     "OffloadBatch",
     "OffloadBlockInfo",
@@ -104,5 +112,7 @@ __all__ = [
     "make_vllm_layer_groups_from_kv_caches",
     "make_vllm_layer_range_refs_from_ids",
     "summarize_transfer_handles",
+    "plan_transfer",
+    "plan_transfer_ranges",
     "vllm_block_name",
 ]
