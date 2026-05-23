@@ -432,12 +432,32 @@ class TurboBusDaemon:
                 job_id=job_id,
                 session_id=session.session_id,
             )
+            planning_relays = self._eligible_relays_for_session_locked(session)
 
             profile_entry = self._profile_cache.get(
-                self._profile_key(session.target_gpu, session.relay_gpus)
+                self._profile_key(session.target_gpu, planning_relays)
+            )
+            if profile_entry is None and planning_relays != tuple(session.relay_gpus):
+                profile_entry = self._profile_cache.get(
+                    self._profile_key(session.target_gpu, session.relay_gpus)
+                )
+            planning_session = (
+                session
+                if planning_relays == tuple(session.relay_gpus)
+                else Session(
+                    session_id=session.session_id,
+                    target_gpu=session.target_gpu,
+                    relay_gpus=list(planning_relays),
+                    max_inflight_chunks=session.max_inflight_chunks,
+                    active_chunks=session.active_chunks,
+                    active=session.active,
+                    created_at=session.created_at,
+                    last_seen=session.last_seen,
+                    closed_at=session.closed_at,
+                )
             )
             decision = self._scheduler.plan_transfer(
-                session=session,
+                session=planning_session,
                 profile_entry=profile_entry,
                 relay_quotas=self._relay_quotas,
                 total_bytes=total_bytes,
@@ -871,6 +891,14 @@ class TurboBusDaemon:
         if request.request_type == RequestType.PROFILE:
             return self.describe()
         return DaemonResponse(ok=False, error=f"unsupported request: {request.request_type}")
+
+    def _eligible_relays_for_session_locked(self, session: Session) -> tuple[int, ...]:
+        inventory = self._topology_provider.snapshot()
+        eligible = inventory.eligible_relay_devices(
+            target_device=session.target_gpu,
+            requested_relays=session.relay_gpus,
+        )
+        return tuple(gpu for gpu in eligible if gpu in self._relay_quotas)
 
     def handle_wire_message(self, data: bytes | str) -> DaemonResponse:
         try:

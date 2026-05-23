@@ -91,6 +91,9 @@ transfer request objects:
 - `TurboBusDaemon` now owns a topology provider and exposes its resource
   inventory through `GET_INVENTORY`; `TurboBusDaemonClient.get_inventory()`
   can query the same control-plane path.
+- `TurboBusDaemon.plan_transfer` now uses daemon-owned inventory to filter
+  relay eligibility before profile lookup and scheduler input, while preserving
+  cached profile lookup and direct fallback behavior.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -138,11 +141,14 @@ phase:
 14. daemon-owned resource inventory now has a backend-neutral shape for GPUs,
     PCIe paths, and scale-up fabric links, with static injection for tests and
     a daemon control-plane query path.
+15. daemon planning now starts relay eligibility from the daemon-owned
+    inventory, so disabled or missing fabric paths are not handed to the
+    scheduler as usable relay paths.
 
-The next immediate goal is to connect scheduler inputs to the daemon-owned
-inventory skeleton so relay eligibility and profile lookup can start from
-daemon resource state while preserving the existing cached profile path and
-direct fallback behavior.
+The next immediate goal is to surface inventory-derived planning metadata in
+daemon plan responses, such as eligible relay ids and why requested relays were
+filtered out. This should remain control-plane observability only and should
+not change transfer execution or add real hardware discovery.
 
 ## Verification
 
@@ -177,7 +183,8 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
 - add a daemon-owned resource and topology inventory skeleton that later
   scheduling can consume; done as the first inventory cut;
 - connect daemon scheduling inputs to the inventory skeleton without changing
-  direct fallback behavior;
+  direct fallback behavior; done as the first scheduling-input cut;
+- surface inventory-derived planning metadata in daemon responses;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

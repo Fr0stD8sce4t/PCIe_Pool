@@ -85,13 +85,17 @@ Current status:
 - daemon now has a backend-neutral, injectable resource inventory skeleton for
   GPUs, PCIe paths, and scale-up fabric links, exposed through `GET_INVENTORY`
   on the daemon control path.
+- daemon planning now derives relay eligibility from the daemon-owned inventory
+  before profile lookup and scheduling, while keeping the cached profile path
+  and direct fallback behavior intact.
 
 Next code cut:
 
-- connect daemon scheduling inputs to the daemon-owned inventory skeleton so
-  profile and relay eligibility checks can start from daemon resource state;
-- keep the existing cached profile path and direct fallback behavior intact;
-- do not add real NVML, ROCm SMI, CUDA IPC, or hardware discovery yet.
+- surface inventory-derived planning metadata in daemon plan responses, such as
+  eligible relay ids and why requested relays were filtered out;
+- keep this as control-plane observability only, without changing transfer
+  execution or adding real hardware discovery;
+- preserve existing direct fallback and cached profile behavior.
 
 ## Upcoming
 

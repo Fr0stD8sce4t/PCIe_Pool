@@ -335,6 +335,38 @@ class SchemaTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             DaemonResourceInventory(source="")
 
+    def test_inventory_filters_relay_eligibility_by_fabric_links(self) -> None:
+        inventory = DaemonResourceInventory(
+            gpus=(
+                GpuInventoryRecord(device_id=0, role="target"),
+                GpuInventoryRecord(device_id=1, role="relay"),
+                GpuInventoryRecord(device_id=2, role="relay"),
+            ),
+            pcie_paths=(
+                PciePathRecord(device_id=1),
+                PciePathRecord(device_id=2),
+            ),
+            fabric_links=(
+                FabricLinkRecord(
+                    src_device_id=1,
+                    dst_device_id=0,
+                    fabric="nvlink",
+                    enabled=True,
+                ),
+                FabricLinkRecord(
+                    src_device_id=2,
+                    dst_device_id=0,
+                    fabric="nvlink",
+                    enabled=False,
+                ),
+            ),
+        )
+
+        self.assertEqual(
+            inventory.eligible_relay_devices(target_device=0, requested_relays=[1, 2]),
+            (1,),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

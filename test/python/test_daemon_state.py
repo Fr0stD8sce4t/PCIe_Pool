@@ -213,6 +213,151 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual([gpu["device_id"] for gpu in payload["gpus"]], [1, 2])
         self.assertEqual([gpu["role"] for gpu in payload["gpus"]], ["relay", "relay"])
 
+    def test_plan_transfer_uses_inventory_eligible_relays_for_profile_lookup(self) -> None:
+        inventory = DaemonResourceInventory(
+            gpus=(
+                GpuInventoryRecord(device_id=0, role="target"),
+                GpuInventoryRecord(device_id=1, role="relay"),
+                GpuInventoryRecord(device_id=2, role="relay"),
+            ),
+            pcie_paths=(
+                PciePathRecord(device_id=1),
+                PciePathRecord(device_id=2),
+            ),
+            fabric_links=(
+                FabricLinkRecord(
+                    src_device_id=1,
+                    dst_device_id=0,
+                    fabric="nvlink",
+                    bandwidth_gbps=100.0,
+                    enabled=True,
+                ),
+                FabricLinkRecord(
+                    src_device_id=2,
+                    dst_device_id=0,
+                    fabric="nvlink",
+                    bandwidth_gbps=100.0,
+                    enabled=False,
+                ),
+            ),
+            source="test",
+        )
+        daemon = TurboBusDaemon(
+            relay_gpus=[1, 2],
+            max_sessions_per_relay=1,
+            max_inflight_chunks_per_relay=8,
+            topology_provider=StaticTopologyProvider(inventory),
+        )
+        register = daemon.register_session(
+            target_gpu=0,
+            requested_relays=[1, 2],
+            max_inflight_chunks=8,
+        )
+        session_id = register.payload["session"]["session_id"]
+        daemon.put_profile(
+            target_gpu=0,
+            relay_gpus=[1],
+            profile={
+                "target_device": 0,
+                "direct_h2d_bw_gbps": 7.5,
+                "direct_d2h_bw_gbps": 6.5,
+                "relays": [
+                    {
+                        "relay_device": 1,
+                        "target_device": 0,
+                        "h2d_bw_gbps": 7.5,
+                        "d2h_bw_gbps": 6.5,
+                        "p2p_bw_gbps": 40.0,
+                        "effective_bw_gbps": 7.5,
+                        "effective_d2h_bw_gbps": 6.5,
+                        "p2p_enabled": True,
+                    }
+                ],
+            },
+        )
+
+        planned = daemon.plan_transfer(
+            session_id=session_id,
+            total_bytes=64,
+            chunk_bytes=16,
+            mode="pool",
+            direction="h2d",
+        )
+
+        self.assertTrue(planned.ok)
+        self.assertEqual(planned.payload["stats"]["resolved_mode"], "pool")
+        self.assertEqual(
+            planned.payload["reservations"][0]["relay_gpu"],
+            1,
+        )
+        self.assertEqual(daemon.describe().payload["relay_quotas"][1]["active_chunks"], 2)
+        self.assertEqual(daemon.describe().payload["relay_quotas"][2]["active_chunks"], 0)
+
+    def test_plan_transfer_falls_back_direct_when_inventory_has_no_fabric_path(self) -> None:
+        inventory = DaemonResourceInventory(
+            gpus=(
+                GpuInventoryRecord(device_id=0, role="target"),
+                GpuInventoryRecord(device_id=1, role="relay"),
+            ),
+            pcie_paths=(PciePathRecord(device_id=1),),
+            fabric_links=(
+                FabricLinkRecord(
+                    src_device_id=1,
+                    dst_device_id=0,
+                    fabric="nvlink",
+                    enabled=False,
+                ),
+            ),
+            source="test",
+        )
+        daemon = TurboBusDaemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=1,
+            max_inflight_chunks_per_relay=8,
+            topology_provider=StaticTopologyProvider(inventory),
+        )
+        register = daemon.register_session(
+            target_gpu=0,
+            requested_relays=[1],
+            max_inflight_chunks=8,
+        )
+        session_id = register.payload["session"]["session_id"]
+        daemon.put_profile(
+            target_gpu=0,
+            relay_gpus=[1],
+            profile={
+                "target_device": 0,
+                "direct_h2d_bw_gbps": 7.5,
+                "direct_d2h_bw_gbps": 6.5,
+                "relays": [
+                    {
+                        "relay_device": 1,
+                        "target_device": 0,
+                        "h2d_bw_gbps": 7.5,
+                        "d2h_bw_gbps": 6.5,
+                        "p2p_bw_gbps": 40.0,
+                        "effective_bw_gbps": 7.5,
+                        "effective_d2h_bw_gbps": 6.5,
+                        "p2p_enabled": True,
+                    }
+                ],
+            },
+        )
+
+        planned = daemon.plan_transfer(
+            session_id=session_id,
+            total_bytes=64,
+            chunk_bytes=16,
+            mode="pool",
+            direction="h2d",
+        )
+
+        self.assertTrue(planned.ok)
+        self.assertEqual(planned.payload["stats"]["resolved_mode"], "direct")
+        self.assertEqual(planned.payload["reservations"], [])
+        self.assertEqual(planned.payload["stats"]["relay_bytes"], 0)
+        self.assertEqual(daemon.describe().payload["relay_quotas"][1]["active_chunks"], 0)
+
     def test_profile_cache_get_put_round_trip(self) -> None:
         daemon = TurboBusDaemon(relay_gpus=[1])
         profile = {

@@ -131,6 +131,28 @@ class DaemonResourceInventory:
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
 
+    def eligible_relay_devices(
+        self,
+        target_device: int,
+        requested_relays: Iterable[int],
+    ) -> tuple[int, ...]:
+        candidates = tuple(sorted({int(gpu) for gpu in requested_relays}))
+        if not candidates:
+            return ()
+
+        if self.gpus:
+            known_gpus = {gpu.device_id for gpu in self.gpus}
+            candidates = tuple(gpu for gpu in candidates if gpu in known_gpus)
+        if self.pcie_paths:
+            pcie_devices = {path.device_id for path in self.pcie_paths}
+            candidates = tuple(gpu for gpu in candidates if gpu in pcie_devices)
+        if self.fabric_links:
+            target = int(target_device)
+            candidates = tuple(
+                gpu for gpu in candidates if _has_enabled_fabric_link(self, gpu, target)
+            )
+        return candidates
+
 
 class TopologyProvider:
     def snapshot(self) -> DaemonResourceInventory:
@@ -158,3 +180,24 @@ class StaticTopologyProvider(TopologyProvider):
 
     def snapshot(self) -> DaemonResourceInventory:
         return self._inventory
+
+
+def _has_enabled_fabric_link(
+    inventory: DaemonResourceInventory,
+    relay_device: int,
+    target_device: int,
+) -> bool:
+    relay = int(relay_device)
+    target = int(target_device)
+    for link in inventory.fabric_links:
+        if not link.enabled:
+            continue
+        if link.src_device_id == relay and link.dst_device_id == target:
+            return True
+        if (
+            link.bidirectional
+            and link.src_device_id == target
+            and link.dst_device_id == relay
+        ):
+            return True
+    return False
