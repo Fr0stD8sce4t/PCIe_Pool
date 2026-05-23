@@ -278,6 +278,11 @@ transfer request objects:
   complete but whose inner completion records name a different transfer or
   lease is rejected and cleans the relay reservation with
   `worker_completion_invalid`.
+- worker-managed client completion handling now also validates nested completed
+  byte counts against the daemon-requested transfer size. A helper response
+  whose outer envelope is complete but whose worker result or daemon status
+  record reports a partial byte count is rejected and cleans the relay
+  reservation with `worker_completion_invalid`.
 
 ## What Was Updated
 
@@ -842,6 +847,11 @@ phase:
 94. worker-managed client completion envelopes now also bind nested helper
     records to the daemon authorization. Mismatched worker result, daemon
     status update, or daemon status response transfer/lease identity is
+    rejected before the client accepts helper completion or releases the relay
+    reservation.
+95. worker-managed client completion envelopes now also bind nested helper
+    byte counts to the daemon-requested transfer size. A complete helper
+    envelope with a partial worker result or daemon status byte count is
     rejected before the client accepts helper completion or releases the relay
     reservation.
 

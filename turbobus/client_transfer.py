@@ -217,6 +217,7 @@ class WorkerManagedTransferClient:
             worker_execution = _submit_worker_execution(
                 self.worker_client,
                 authorization_request,
+                expected_bytes=transfer_request.total_bytes,
             )
         except _WorkerCompletionEnvelopeError:
             _cleanup_planned_relay_lease(
@@ -610,12 +611,18 @@ class _WorkerExecutionResult:
 def _submit_worker_execution(
     worker_client,
     request: WorkerTransferAuthorizationRequest,
+    *,
+    expected_bytes: int,
 ) -> _WorkerExecutionResult:
     lifecycle_submitter = getattr(worker_client, "submit_report_cleanup_lifecycle", None)
     if callable(lifecycle_submitter):
         lifecycle = lifecycle_submitter(request, cleanup_target_kind="reservation")
         completion = lifecycle.completion_envelope()
-        _require_worker_completion_matches_request(completion, request)
+        _require_worker_completion_matches_request(
+            completion,
+            request,
+            expected_bytes=expected_bytes,
+        )
         return _WorkerExecutionResult(
             final_state=lifecycle.final_state,
             error=lifecycle.error,
@@ -641,7 +648,11 @@ def _submit_worker_execution(
                 cleanup_target_kind="reservation",
             )
         )
-        _require_worker_completion_matches_request(completion, request)
+        _require_worker_completion_matches_request(
+            completion,
+            request,
+            expected_bytes=expected_bytes,
+        )
         return _WorkerExecutionResult(
             final_state=completion.final_state,
             error=completion.error,
@@ -654,6 +665,8 @@ def _submit_worker_execution(
 def _require_worker_completion_matches_request(
     completion: WorkerDataPlaneCompletionEnvelope,
     request: WorkerTransferAuthorizationRequest,
+    *,
+    expected_bytes: int,
 ) -> None:
     if not isinstance(completion, WorkerDataPlaneCompletionEnvelope):
         raise _WorkerCompletionEnvelopeError(
@@ -687,23 +700,35 @@ def _require_worker_completion_matches_request(
             raise _WorkerCompletionEnvelopeError("worker completion missing lease id")
         if completion.worker_result is None:
             raise _WorkerCompletionEnvelopeError("worker completion missing worker result")
-        result_state = str(completion.worker_result.get("state", "")).lower()
+        result_state = _state_text(completion.worker_result.get("state", ""))
         if result_state != "complete":
             raise _WorkerCompletionEnvelopeError("worker result did not complete")
+        _require_worker_completed_bytes(
+            completion.worker_result,
+            int(expected_bytes),
+            label="worker result",
+        )
         if completion.daemon_status_update is not None:
-            update_state = str(
-                completion.daemon_status_update.get("state", "")
-            ).lower()
+            update_state = _state_text(completion.daemon_status_update.get("state", ""))
             if update_state != "complete":
                 raise _WorkerCompletionEnvelopeError(
                     "worker daemon status update did not complete"
                 )
+            _require_worker_completed_bytes(
+                completion.daemon_status_update,
+                int(expected_bytes),
+                label="worker daemon status update",
+            )
         if completion.daemon_status_response is not None and not bool(
             completion.daemon_status_response.get("ok", False)
         ):
             raise _WorkerCompletionEnvelopeError(
                 "worker daemon status response was not ok"
             )
+        _require_worker_daemon_response_completed_bytes(
+            completion.daemon_status_response,
+            int(expected_bytes),
+        )
 
 
 def _require_worker_mapping_matches_request(
@@ -739,6 +764,67 @@ def _require_worker_daemon_response_matches_request(
         request,
         label="worker daemon status response",
     )
+
+
+def _require_worker_daemon_response_completed_bytes(
+    response: Mapping[str, object] | None,
+    expected_bytes: int,
+) -> None:
+    if response is None:
+        return
+    payload = response.get("payload")
+    if not isinstance(payload, Mapping):
+        return
+    status = payload.get("status")
+    if not isinstance(status, Mapping):
+        return
+    status_state = _state_text(status.get("state", ""))
+    if status_state and status_state != "complete":
+        raise _WorkerCompletionEnvelopeError(
+            "worker daemon status response did not complete"
+        )
+    _require_worker_completed_bytes(
+        status,
+        expected_bytes,
+        label="worker daemon status response",
+    )
+
+
+def _require_worker_completed_bytes(
+    payload: Mapping[str, object],
+    expected_bytes: int,
+    *,
+    label: str,
+) -> None:
+    if "bytes_completed" not in payload:
+        raise _WorkerCompletionEnvelopeError(f"{label} missing completed bytes")
+    try:
+        bytes_completed = int(payload["bytes_completed"])
+    except (TypeError, ValueError) as exc:
+        raise _WorkerCompletionEnvelopeError(
+            f"{label} completed bytes are invalid"
+        ) from exc
+    if bytes_completed != int(expected_bytes):
+        raise _WorkerCompletionEnvelopeError(
+            f"{label} completed byte mismatch: "
+            f"{bytes_completed} != {int(expected_bytes)}"
+        )
+    if "bytes_total" not in payload:
+        return
+    try:
+        bytes_total = int(payload["bytes_total"])
+    except (TypeError, ValueError) as exc:
+        raise _WorkerCompletionEnvelopeError(
+            f"{label} total bytes are invalid"
+        ) from exc
+    if bytes_total != int(expected_bytes):
+        raise _WorkerCompletionEnvelopeError(
+            f"{label} total byte mismatch: {bytes_total} != {int(expected_bytes)}"
+        )
+
+
+def _state_text(state: object) -> str:
+    return str(getattr(state, "value", state)).lower()
 
 
 def _require_ok(response: DaemonResponse, message: str) -> None:
