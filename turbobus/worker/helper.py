@@ -8,6 +8,8 @@ from ..schema import (
     BufferRegistration,
     DaemonResponse,
     TransferStatusState,
+    WorkerDataPlaneCompletion,
+    WorkerDataPlaneRequest,
     WorkerTransferAuthorization,
     WorkerTransferAuthorizationRequest,
 )
@@ -38,6 +40,7 @@ class WorkerCleanupError(RuntimeError):
 @dataclass(frozen=True)
 class WorkerTransferRequest:
     authorization: WorkerTransferAuthorization
+    data_plane: WorkerDataPlaneRequest | None = None
 
     @classmethod
     def from_authorization_payload(
@@ -47,8 +50,8 @@ class WorkerTransferRequest:
         authorization_payload = payload.get("authorization", payload)
         if not isinstance(authorization_payload, Mapping):
             raise ValueError("authorization payload must be a mapping")
-        return cls(
-            authorization=WorkerTransferAuthorization(
+        return cls.from_authorization(
+            WorkerTransferAuthorization(
                 transfer_id=str(authorization_payload["transfer_id"]),
                 lease_id=str(authorization_payload["lease_id"]),
                 session_id=str(authorization_payload["session_id"]),
@@ -61,12 +64,53 @@ class WorkerTransferRequest:
             )
         )
 
+    @classmethod
+    def from_authorization(
+        cls,
+        authorization: WorkerTransferAuthorization,
+    ) -> "WorkerTransferRequest":
+        return cls(
+            authorization=authorization,
+            data_plane=WorkerDataPlaneRequest.from_authorization(authorization),
+        )
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.authorization, WorkerTransferAuthorization):
+            raise TypeError("authorization must be a WorkerTransferAuthorization")
+        data_plane = self.data_plane
+        if data_plane is None:
+            data_plane = WorkerDataPlaneRequest.from_authorization(self.authorization)
+        if not isinstance(data_plane, WorkerDataPlaneRequest):
+            raise TypeError("data_plane must be a WorkerDataPlaneRequest")
+        if data_plane.transfer_id != self.authorization.transfer_id:
+            raise ValueError("data-plane transfer id does not match authorization")
+        if data_plane.lease_id != self.authorization.lease_id:
+            raise ValueError("data-plane lease id does not match authorization")
+        if data_plane.session_id != self.authorization.session_id:
+            raise ValueError("data-plane session id does not match authorization")
+        if data_plane.job_id != self.authorization.job_id:
+            raise ValueError("data-plane job id does not match authorization")
+        if data_plane.relay_gpu != self.authorization.relay_gpu:
+            raise ValueError("data-plane relay does not match authorization")
+        if data_plane.direction != self.authorization.direction:
+            raise ValueError("data-plane direction does not match authorization")
+        if data_plane.src_handle.buffer_id != self.authorization.src_buffer.buffer_id:
+            raise ValueError("data-plane src handle does not match authorization")
+        if data_plane.dst_handle.buffer_id != self.authorization.dst_buffer.buffer_id:
+            raise ValueError("data-plane dst handle does not match authorization")
+        if data_plane.ranges != self.authorization.ranges:
+            raise ValueError("data-plane ranges do not match authorization")
+        object.__setattr__(self, "data_plane", data_plane)
+
     @property
     def transfer_id(self) -> str:
         return self.authorization.transfer_id
 
     def as_dict(self) -> dict[str, object]:
-        return {"authorization": asdict(self.authorization)}
+        return {
+            "authorization": asdict(self.authorization),
+            "data_plane": asdict(self.data_plane),
+        }
 
 
 @dataclass(frozen=True)
@@ -98,6 +142,21 @@ class WorkerTransferResult:
             "bytes_completed": self.bytes_completed,
             "metadata": dict(self.metadata),
         }
+
+    def data_plane_completion(self, lease_id: str) -> WorkerDataPlaneCompletion:
+        status_update = _daemon_status_update_for_result(self)
+        return WorkerDataPlaneCompletion(
+            transfer_id=self.transfer_id,
+            lease_id=lease_id,
+            state=status_update["state"],
+            bytes_completed=self.bytes_completed,
+            error=(
+                status_update["error"]
+                if status_update["state"] == TransferStatusState.FAILED.value
+                else None
+            ),
+            metadata=dict(self.metadata),
+        )
 
 
 @dataclass(frozen=True)
@@ -791,3 +850,27 @@ def _smoke_ranges(
     if bytes_count <= 0:
         raise RuntimeError("relay reservation has no bytes to smoke-test")
     return [{"src_offset": 0, "dst_offset": 0, "bytes": bytes_count}]
+
+
+__all__ = [
+    "UnsupportedWorkerExecution",
+    "WorkerAuthorizationError",
+    "WorkerCleanupError",
+    "WorkerDataPlaneCompletion",
+    "WorkerDataPlaneRequest",
+    "WorkerServiceRequestEnvelope",
+    "WorkerServiceResponseEnvelope",
+    "WorkerStatusReportError",
+    "WorkerTransferAuthorizer",
+    "WorkerTransferClient",
+    "WorkerTransferCleanupCoordinator",
+    "WorkerTransferLifecycleRecord",
+    "WorkerTransferRequest",
+    "WorkerTransferResult",
+    "WorkerTransferService",
+    "WorkerTransferState",
+    "WorkerTransferStatusReporter",
+    "WorkerTransferUnsupportedExecutor",
+    "parse_worker_authorization_request_payload",
+    "run_worker_service_control_plane_smoke",
+]

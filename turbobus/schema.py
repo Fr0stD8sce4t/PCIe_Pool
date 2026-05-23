@@ -271,6 +271,246 @@ class WorkerTransferAuthorization:
                 raise ValueError("relay_gpu must be non-negative")
 
 
+@dataclass(frozen=True)
+class WorkerBufferHandle:
+    buffer_id: str
+    job_id: str
+    kind: str
+    size_bytes: int
+    access: str
+    device_index: int | None = None
+    address: int | None = None
+    pinned: bool = False
+    handle_type: str = "registered_buffer"
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_buffer_registration(
+        cls,
+        buffer: BufferRegistration,
+        access: str,
+    ) -> "WorkerBufferHandle":
+        if not isinstance(buffer, BufferRegistration):
+            raise TypeError("buffer must be a BufferRegistration")
+        return cls(
+            buffer_id=buffer.buffer_id,
+            job_id=buffer.job_id,
+            kind=buffer.kind,
+            size_bytes=buffer.size_bytes,
+            access=access,
+            device_index=buffer.device_index,
+            address=buffer.address,
+            pinned=buffer.pinned,
+        )
+
+    def __post_init__(self) -> None:
+        if not str(self.buffer_id).strip():
+            raise ValueError("buffer_id must be non-empty")
+        if not str(self.job_id).strip():
+            raise ValueError("job_id must be non-empty")
+        if not str(self.kind).strip():
+            raise ValueError("kind must be non-empty")
+        size_bytes = int(self.size_bytes)
+        if size_bytes < 0:
+            raise ValueError("size_bytes must be non-negative")
+        access = str(self.access).lower()
+        if access not in {"read", "write", "read_write"}:
+            raise ValueError("access must be read, write, or read_write")
+        handle_type = str(self.handle_type)
+        if not handle_type.strip():
+            raise ValueError("handle_type must be non-empty")
+        if self.device_index is not None and int(self.device_index) < 0:
+            raise ValueError("device_index must be non-negative")
+        if self.address is not None and int(self.address) < 0:
+            raise ValueError("address must be non-negative")
+        object.__setattr__(self, "buffer_id", str(self.buffer_id))
+        object.__setattr__(self, "job_id", str(self.job_id))
+        object.__setattr__(self, "kind", str(self.kind))
+        object.__setattr__(self, "size_bytes", size_bytes)
+        object.__setattr__(self, "access", access)
+        object.__setattr__(self, "handle_type", handle_type)
+        object.__setattr__(self, "metadata", dict(self.metadata))
+        if self.device_index is not None:
+            object.__setattr__(self, "device_index", int(self.device_index))
+        if self.address is not None:
+            object.__setattr__(self, "address", int(self.address))
+
+
+@dataclass(frozen=True)
+class WorkerStagingBufferRequirement:
+    relay_gpu: int
+    total_bytes: int
+    max_chunk_bytes: int
+    chunk_count: int
+    alignment_bytes: int = 256
+    buffer_kind: str = "relay_staging"
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        relay_gpu = int(self.relay_gpu)
+        if relay_gpu < 0:
+            raise ValueError("relay_gpu must be non-negative")
+        total_bytes = int(self.total_bytes)
+        max_chunk_bytes = int(self.max_chunk_bytes)
+        chunk_count = int(self.chunk_count)
+        alignment_bytes = int(self.alignment_bytes)
+        if total_bytes <= 0:
+            raise ValueError("staging total_bytes must be positive")
+        if max_chunk_bytes <= 0:
+            raise ValueError("staging max_chunk_bytes must be positive")
+        if max_chunk_bytes > total_bytes:
+            raise ValueError("staging max_chunk_bytes cannot exceed total_bytes")
+        if chunk_count <= 0:
+            raise ValueError("staging chunk_count must be positive")
+        if alignment_bytes <= 0:
+            raise ValueError("staging alignment_bytes must be positive")
+        if not str(self.buffer_kind).strip():
+            raise ValueError("staging buffer_kind must be non-empty")
+        object.__setattr__(self, "relay_gpu", relay_gpu)
+        object.__setattr__(self, "total_bytes", total_bytes)
+        object.__setattr__(self, "max_chunk_bytes", max_chunk_bytes)
+        object.__setattr__(self, "chunk_count", chunk_count)
+        object.__setattr__(self, "alignment_bytes", alignment_bytes)
+        object.__setattr__(self, "buffer_kind", str(self.buffer_kind))
+        object.__setattr__(self, "metadata", dict(self.metadata))
+
+
+@dataclass(frozen=True)
+class WorkerDataPlaneRequest:
+    transfer_id: str
+    lease_id: str
+    session_id: str
+    job_id: str
+    relay_gpu: int
+    direction: str
+    src_handle: WorkerBufferHandle
+    dst_handle: WorkerBufferHandle
+    staging: WorkerStagingBufferRequirement
+    ranges: tuple[dict[str, int], ...] = field(default_factory=tuple)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_authorization(
+        cls,
+        authorization: WorkerTransferAuthorization,
+        *,
+        staging_alignment_bytes: int = 256,
+        metadata: dict[str, Any] | None = None,
+    ) -> "WorkerDataPlaneRequest":
+        if not isinstance(authorization, WorkerTransferAuthorization):
+            raise TypeError("authorization must be a WorkerTransferAuthorization")
+        if authorization.relay_gpu is None:
+            raise ValueError("relay_gpu is required for worker data-plane request")
+        ranges = tuple(authorization.ranges)
+        if not ranges:
+            raise ValueError("worker data-plane request requires chunk ranges")
+        total_bytes = sum(item["bytes"] for item in ranges)
+        return cls(
+            transfer_id=authorization.transfer_id,
+            lease_id=authorization.lease_id,
+            session_id=authorization.session_id,
+            job_id=authorization.job_id,
+            relay_gpu=authorization.relay_gpu,
+            direction=authorization.direction,
+            src_handle=WorkerBufferHandle.from_buffer_registration(
+                authorization.src_buffer,
+                access="read",
+            ),
+            dst_handle=WorkerBufferHandle.from_buffer_registration(
+                authorization.dst_buffer,
+                access="write",
+            ),
+            staging=WorkerStagingBufferRequirement(
+                relay_gpu=authorization.relay_gpu,
+                total_bytes=total_bytes,
+                max_chunk_bytes=max(item["bytes"] for item in ranges),
+                chunk_count=len(ranges),
+                alignment_bytes=staging_alignment_bytes,
+            ),
+            ranges=ranges,
+            metadata={} if metadata is None else metadata,
+        )
+
+    def __post_init__(self) -> None:
+        if not str(self.transfer_id).strip():
+            raise ValueError("transfer_id must be non-empty")
+        if not str(self.lease_id).strip():
+            raise ValueError("lease_id must be non-empty")
+        if not str(self.session_id).strip():
+            raise ValueError("session_id must be non-empty")
+        if not str(self.job_id).strip():
+            raise ValueError("job_id must be non-empty")
+        relay_gpu = int(self.relay_gpu)
+        if relay_gpu < 0:
+            raise ValueError("relay_gpu must be non-negative")
+        direction = str(self.direction).lower()
+        if direction not in {"h2d", "d2h"}:
+            raise ValueError("direction must be h2d or d2h")
+        if not isinstance(self.src_handle, WorkerBufferHandle):
+            raise TypeError("src_handle must be a WorkerBufferHandle")
+        if not isinstance(self.dst_handle, WorkerBufferHandle):
+            raise TypeError("dst_handle must be a WorkerBufferHandle")
+        if not isinstance(self.staging, WorkerStagingBufferRequirement):
+            raise TypeError("staging must be a WorkerStagingBufferRequirement")
+        ranges = _normalize_worker_ranges(self.ranges)
+        if not ranges:
+            raise ValueError("worker data-plane request requires chunk ranges")
+        total_bytes = sum(item["bytes"] for item in ranges)
+        if total_bytes > self.staging.total_bytes:
+            raise ValueError("ranges exceed staging total_bytes")
+        if max(item["bytes"] for item in ranges) > self.staging.max_chunk_bytes:
+            raise ValueError("ranges exceed staging max_chunk_bytes")
+        if self.staging.chunk_count < len(ranges):
+            raise ValueError("staging chunk_count cannot be smaller than range count")
+        if self.src_handle.job_id != str(self.job_id):
+            raise ValueError("src handle job does not match request job")
+        if self.dst_handle.job_id != str(self.job_id):
+            raise ValueError("dst handle job does not match request job")
+        if self.staging.relay_gpu != relay_gpu:
+            raise ValueError("staging relay does not match request relay")
+        object.__setattr__(self, "transfer_id", str(self.transfer_id))
+        object.__setattr__(self, "lease_id", str(self.lease_id))
+        object.__setattr__(self, "session_id", str(self.session_id))
+        object.__setattr__(self, "job_id", str(self.job_id))
+        object.__setattr__(self, "relay_gpu", relay_gpu)
+        object.__setattr__(self, "direction", direction)
+        object.__setattr__(self, "ranges", tuple(ranges))
+        object.__setattr__(self, "metadata", dict(self.metadata))
+
+
+@dataclass(frozen=True)
+class WorkerDataPlaneCompletion:
+    transfer_id: str
+    lease_id: str
+    state: TransferStatusState
+    bytes_completed: int
+    error: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not str(self.transfer_id).strip():
+            raise ValueError("transfer_id must be non-empty")
+        if not str(self.lease_id).strip():
+            raise ValueError("lease_id must be non-empty")
+        state = TransferStatusState(self.state)
+        if state not in {TransferStatusState.COMPLETE, TransferStatusState.FAILED}:
+            raise ValueError("worker completion state must be complete or failed")
+        bytes_completed = int(self.bytes_completed)
+        if bytes_completed < 0:
+            raise ValueError("bytes_completed must be non-negative")
+        if state == TransferStatusState.FAILED and self.error is None:
+            raise ValueError("failed worker completion requires error")
+        if state == TransferStatusState.COMPLETE and self.error is not None:
+            raise ValueError("complete worker completion cannot include error")
+        object.__setattr__(self, "transfer_id", str(self.transfer_id))
+        object.__setattr__(self, "lease_id", str(self.lease_id))
+        object.__setattr__(self, "state", state)
+        object.__setattr__(self, "bytes_completed", bytes_completed)
+        if self.error is not None:
+            object.__setattr__(self, "error", str(self.error))
+        object.__setattr__(self, "metadata", dict(self.metadata))
+
+
 def _normalize_worker_ranges(ranges: tuple[dict[str, int], ...]) -> tuple[dict[str, int], ...]:
     normalized_ranges: list[dict[str, int]] = []
     for item in ranges:
@@ -379,4 +619,8 @@ __all__ = [
     "TransferStatusState",
     "WorkerTransferAuthorization",
     "WorkerTransferAuthorizationRequest",
+    "WorkerBufferHandle",
+    "WorkerDataPlaneCompletion",
+    "WorkerDataPlaneRequest",
+    "WorkerStagingBufferRequirement",
 ]

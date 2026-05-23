@@ -19,6 +19,10 @@ from turbobus.schema import (
     TransferReservation,
     TransferStatus,
     TransferStatusState,
+    WorkerBufferHandle,
+    WorkerDataPlaneCompletion,
+    WorkerDataPlaneRequest,
+    WorkerStagingBufferRequirement,
     WorkerTransferAuthorization,
     WorkerTransferAuthorizationRequest,
 )
@@ -186,6 +190,15 @@ class SchemaTest(unittest.TestCase):
             relay_gpu=1,
             ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 4096},),
         )
+        data_plane_request = WorkerDataPlaneRequest.from_authorization(
+            worker_authorization
+        )
+        data_plane_completion = WorkerDataPlaneCompletion(
+            transfer_id="transfer-1",
+            lease_id="lease-1",
+            state=TransferStatusState.COMPLETE,
+            bytes_completed=4096,
+        )
 
         payload = json.loads(
             json.dumps(
@@ -197,6 +210,8 @@ class SchemaTest(unittest.TestCase):
                     "cleanup": asdict(cleanup),
                     "worker_request": asdict(worker_request),
                     "worker_authorization": asdict(worker_authorization),
+                    "data_plane_request": asdict(data_plane_request),
+                    "data_plane_completion": asdict(data_plane_completion),
                 }
             )
         )
@@ -213,6 +228,20 @@ class SchemaTest(unittest.TestCase):
             payload["worker_authorization"]["src_buffer"]["buffer_id"],
             "buffer-1",
         )
+        self.assertEqual(payload["data_plane_request"]["relay_gpu"], 1)
+        self.assertEqual(
+            payload["data_plane_request"]["src_handle"]["access"],
+            "read",
+        )
+        self.assertEqual(
+            payload["data_plane_request"]["dst_handle"]["access"],
+            "write",
+        )
+        self.assertEqual(
+            payload["data_plane_request"]["staging"]["total_bytes"],
+            4096,
+        )
+        self.assertEqual(payload["data_plane_completion"]["state"], "complete")
 
     def test_daemon_baseline_message_validation_rejects_invalid_values(self) -> None:
         with self.assertRaises(ValueError):
@@ -268,7 +297,86 @@ class SchemaTest(unittest.TestCase):
                 direction="sideways",
             )
         with self.assertRaises(ValueError):
+            WorkerBufferHandle(
+                buffer_id="buffer-1",
+                job_id="job-1",
+                kind="gpu",
+                size_bytes=1,
+                access="execute",
+            )
+        with self.assertRaises(ValueError):
+            WorkerStagingBufferRequirement(
+                relay_gpu=1,
+                total_bytes=0,
+                max_chunk_bytes=1,
+                chunk_count=1,
+            )
+        with self.assertRaises(ValueError):
+            WorkerDataPlaneRequest(
+                transfer_id="transfer-1",
+                lease_id="lease-1",
+                session_id="session-1",
+                job_id="job-1",
+                relay_gpu=1,
+                direction="h2d",
+                src_handle=WorkerBufferHandle(
+                    buffer_id="cpu-buffer",
+                    job_id="other-job",
+                    kind="cpu_pinned",
+                    size_bytes=1,
+                    access="read",
+                ),
+                dst_handle=WorkerBufferHandle(
+                    buffer_id="gpu-buffer",
+                    job_id="job-1",
+                    kind="gpu",
+                    size_bytes=1,
+                    access="write",
+                ),
+                staging=WorkerStagingBufferRequirement(
+                    relay_gpu=1,
+                    total_bytes=1,
+                    max_chunk_bytes=1,
+                    chunk_count=1,
+                ),
+                ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 1},),
+            )
+        with self.assertRaises(ValueError):
+            WorkerDataPlaneCompletion(
+                transfer_id="transfer-1",
+                lease_id="lease-1",
+                state=TransferStatusState.FAILED,
+                bytes_completed=0,
+            )
+        with self.assertRaises(ValueError):
             CleanupRequest(target_kind="", target_id="session-1", reason="timeout")
+
+    def test_worker_data_plane_request_requires_authorized_relay(self) -> None:
+        authorization = WorkerTransferAuthorization(
+            transfer_id="transfer-1",
+            lease_id="lease-1",
+            session_id="session-1",
+            job_id="job-1",
+            src_buffer=BufferRegistration(
+                buffer_id="cpu-buffer",
+                job_id="job-1",
+                kind="cpu_pinned",
+                size_bytes=64,
+                pinned=True,
+            ),
+            dst_buffer=BufferRegistration(
+                buffer_id="gpu-buffer",
+                job_id="job-1",
+                kind="gpu",
+                size_bytes=64,
+                device_index=0,
+            ),
+            direction="h2d",
+            ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
+        )
+
+        with self.assertRaisesRegex(ValueError, "relay_gpu is required"):
+            WorkerDataPlaneRequest.from_authorization(authorization)
 
     def test_daemon_resource_inventory_is_serializable(self) -> None:
         inventory = DaemonResourceInventory(

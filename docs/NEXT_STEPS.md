@@ -126,16 +126,22 @@ Current status:
 - an in-process worker service smoke helper now wires daemon-owned planning,
   worker service envelope handling, daemon status reporting, and daemon
   reservation cleanup together without sockets, IPC, or real data movement.
+- worker data-plane request records now describe daemon-approved relay
+  execution inputs, including source/destination buffer handles, relay staging
+  needs, relay device, direction, chunk ranges, and completion/error reporting
+  fields.
+- worker helper requests now derive that data-plane shape from daemon
+  authorization results and reject mismatched local data-plane authority.
 
 Next code cut:
 
-- define the first worker data-plane request shape for daemon-approved relay
-  execution, including source/destination buffer handles, staging-buffer needs,
-  relay device, direction, chunk ranges, and completion/error reporting fields;
-- keep this as schema and worker-layer plumbing only, with focused validation
-  tests and no CUDA IPC, sockets, real data movement, or hardware discovery yet;
-- make the shape consume the existing daemon worker authorization result instead
-  of letting worker code invent transfer authority locally.
+- add a worker staging-pool skeleton that can allocate, describe, and release
+  relay staging slots from a `WorkerDataPlaneRequest`;
+- keep it in memory only, with no CUDA IPC, sockets, real data movement, or
+  hardware discovery yet;
+- add focused tests for slot sizing, relay ownership, release, double-release,
+  and rejection when a request tries to use a staging slot for the wrong relay
+  or transfer.
 
 ## Upcoming
 

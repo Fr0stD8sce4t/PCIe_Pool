@@ -13,6 +13,10 @@ from ..schema import (
     TransferReservation,
     TransferStatus,
     TransferStatusState,
+    WorkerBufferHandle,
+    WorkerDataPlaneCompletion,
+    WorkerDataPlaneRequest,
+    WorkerStagingBufferRequirement,
     WorkerTransferAuthorization,
     WorkerTransferAuthorizationRequest,
 )
@@ -40,6 +44,10 @@ __all__ = [
     "TransferReservation",
     "TransferStatus",
     "TransferStatusState",
+    "WorkerBufferHandle",
+    "WorkerDataPlaneCompletion",
+    "WorkerDataPlaneRequest",
+    "WorkerStagingBufferRequirement",
     "WorkerTransferAuthorization",
     "WorkerTransferAuthorizationRequest",
 ]

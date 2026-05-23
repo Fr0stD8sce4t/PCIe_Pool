@@ -5,6 +5,7 @@ import unittest
 from turbobus.schema import (
     BufferRegistration,
     DaemonResponse,
+    WorkerDataPlaneRequest,
     WorkerTransferAuthorization,
     WorkerTransferAuthorizationRequest,
 )
@@ -229,6 +230,64 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(request.authorization.dst_buffer.buffer_id, "gpu-buffer")
         self.assertEqual(request.authorization.ranges[0]["bytes"], 16)
 
+    def test_worker_request_builds_data_plane_request_from_authorization(self) -> None:
+        request = WorkerTransferRequest.from_authorization_payload(authorization_payload())
+
+        self.assertIsInstance(request.data_plane, WorkerDataPlaneRequest)
+        self.assertEqual(request.data_plane.transfer_id, "transfer-1")
+        self.assertEqual(request.data_plane.lease_id, "lease-1")
+        self.assertEqual(request.data_plane.relay_gpu, 1)
+        self.assertEqual(request.data_plane.direction, "h2d")
+        self.assertEqual(request.data_plane.src_handle.buffer_id, "cpu-buffer")
+        self.assertEqual(request.data_plane.src_handle.access, "read")
+        self.assertEqual(request.data_plane.dst_handle.buffer_id, "gpu-buffer")
+        self.assertEqual(request.data_plane.dst_handle.access, "write")
+        self.assertEqual(request.data_plane.staging.relay_gpu, 1)
+        self.assertEqual(request.data_plane.staging.total_bytes, 16)
+        self.assertEqual(request.as_dict()["data_plane"]["staging"]["chunk_count"], 1)
+
+    def test_worker_request_rejects_mismatched_data_plane_authority(self) -> None:
+        request = WorkerTransferRequest.from_authorization_payload(authorization_payload())
+        bad_data_plane = WorkerDataPlaneRequest(
+            transfer_id="other-transfer",
+            lease_id=request.data_plane.lease_id,
+            session_id=request.data_plane.session_id,
+            job_id=request.data_plane.job_id,
+            relay_gpu=request.data_plane.relay_gpu,
+            direction=request.data_plane.direction,
+            src_handle=request.data_plane.src_handle,
+            dst_handle=request.data_plane.dst_handle,
+            staging=request.data_plane.staging,
+            ranges=request.data_plane.ranges,
+        )
+
+        with self.assertRaisesRegex(ValueError, "transfer id"):
+            WorkerTransferRequest(
+                authorization=request.authorization,
+                data_plane=bad_data_plane,
+            )
+
+    def test_worker_request_rejects_mismatched_data_plane_handles(self) -> None:
+        request = WorkerTransferRequest.from_authorization_payload(authorization_payload())
+        bad_data_plane = WorkerDataPlaneRequest(
+            transfer_id=request.data_plane.transfer_id,
+            lease_id=request.data_plane.lease_id,
+            session_id=request.data_plane.session_id,
+            job_id=request.data_plane.job_id,
+            relay_gpu=request.data_plane.relay_gpu,
+            direction=request.data_plane.direction,
+            src_handle=request.data_plane.dst_handle,
+            dst_handle=request.data_plane.dst_handle,
+            staging=request.data_plane.staging,
+            ranges=request.data_plane.ranges,
+        )
+
+        with self.assertRaisesRegex(ValueError, "src handle"):
+            WorkerTransferRequest(
+                authorization=request.authorization,
+                data_plane=bad_data_plane,
+            )
+
     def test_unsupported_executor_reports_no_data_movement(self) -> None:
         request = WorkerTransferRequest.from_authorization_payload(authorization_payload())
         executor = WorkerTransferUnsupportedExecutor()
@@ -240,6 +299,22 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertIn("not implemented", result.error)
         self.assertEqual(result.metadata["relay_gpu"], 1)
         self.assertEqual(result.metadata["src_buffer_id"], "cpu-buffer")
+
+    def test_worker_result_builds_data_plane_completion_report(self) -> None:
+        result = WorkerTransferResult(
+            transfer_id="transfer-1",
+            state=WorkerTransferState.UNSUPPORTED,
+            error="worker execution is not implemented yet",
+            bytes_completed=0,
+        )
+
+        completion = result.data_plane_completion("lease-1")
+
+        self.assertEqual(completion.transfer_id, "transfer-1")
+        self.assertEqual(completion.lease_id, "lease-1")
+        self.assertEqual(completion.state.value, "failed")
+        self.assertEqual(completion.bytes_completed, 0)
+        self.assertIn("not implemented", completion.error)
 
     def test_unsupported_executor_can_raise_explicit_error(self) -> None:
         request = WorkerTransferRequest.from_authorization_payload(authorization_payload())

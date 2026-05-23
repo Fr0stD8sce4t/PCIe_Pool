@@ -130,6 +130,13 @@ transfer request objects:
   reservation cleanup together in process, proving the service boundary can
   fail unsupported execution and reclaim the relay lease without sockets, IPC,
   or real data movement.
+- `WorkerBufferHandle`, `WorkerStagingBufferRequirement`,
+  `WorkerDataPlaneRequest`, and `WorkerDataPlaneCompletion` now define the
+  first worker data-plane request and completion shapes for daemon-approved
+  relay execution.
+- `WorkerTransferRequest` now derives its data-plane request from the daemon
+  worker authorization result and rejects mismatched transfer, lease, relay,
+  direction, buffer, or range authority.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -205,12 +212,14 @@ phase:
     planned relay transfer can pass through the service envelope path, report
     unsupported execution as daemon `failed`, and reclaim the daemon
     reservation.
+26. worker data-plane request records now capture daemon-approved relay
+    execution inputs and completion reports without adding CUDA IPC, sockets,
+    real data movement, or hardware discovery.
 
-The next immediate goal is to define the first worker data-plane request shape
-for daemon-approved relay execution. This should stay at schema and
-worker-layer plumbing level, consume the existing daemon worker authorization
-result, and should not add CUDA IPC, sockets, real data movement, or hardware
-discovery yet.
+The next immediate goal is to add an in-memory worker staging-pool skeleton for
+relay staging slots. It should allocate, describe, and release slots from a
+`WorkerDataPlaneRequest`, reject mismatched relay or transfer use, and should
+not add CUDA IPC, sockets, real data movement, or hardware discovery yet.
 
 ## Verification
 
@@ -267,7 +276,9 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
 - add worker service control-plane smoke coverage for daemon-owned planned
   transfers; done through `run_worker_service_control_plane_smoke`;
 - define the first worker data-plane request shape for daemon-approved relay
-  execution;
+  execution; done through `WorkerDataPlaneRequest` and related worker schema
+  records;
+- add an in-memory worker staging-pool skeleton for relay staging slots;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper
