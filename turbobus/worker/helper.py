@@ -497,6 +497,47 @@ class WorkerTransferService:
             cleanup_target_kind=cleanup_target_kind,
         ).as_dict()
 
+    def parse_authorization_request(
+        self,
+        payload: Mapping[str, object],
+    ) -> WorkerTransferAuthorizationRequest:
+        return parse_worker_authorization_request_payload(payload)
+
+    def handle_payload(
+        self,
+        payload: Mapping[str, object],
+        cleanup_target_kind: str = "reservation",
+    ) -> dict[str, object]:
+        return self.handle(
+            self.parse_authorization_request(payload),
+            cleanup_target_kind=cleanup_target_kind,
+        )
+
+
+def parse_worker_authorization_request_payload(
+    payload: Mapping[str, object],
+) -> WorkerTransferAuthorizationRequest:
+    if not isinstance(payload, Mapping):
+        raise ValueError("worker authorization payload must be a mapping")
+    authorization_payload = payload.get("authorization_request", payload)
+    if not isinstance(authorization_payload, Mapping):
+        raise ValueError("worker authorization payload must be a mapping")
+    try:
+        return WorkerTransferAuthorizationRequest(
+            transfer_id=str(authorization_payload["transfer_id"]),
+            lease_id=str(authorization_payload["lease_id"]),
+            token=str(authorization_payload["token"]),
+            session_id=str(authorization_payload["session_id"]),
+            job_id=str(authorization_payload["job_id"]),
+            src_buffer_id=str(authorization_payload["src_buffer_id"]),
+            dst_buffer_id=str(authorization_payload["dst_buffer_id"]),
+            direction=str(authorization_payload["direction"]),
+            ranges=tuple(authorization_payload.get("ranges", ())),
+            relay_gpu=authorization_payload.get("relay_gpu"),
+        )
+    except KeyError as exc:
+        raise ValueError(f"missing worker authorization field: {exc.args[0]}") from exc
+
 
 def _buffer_from_payload(payload: object) -> BufferRegistration:
     if not isinstance(payload, Mapping):

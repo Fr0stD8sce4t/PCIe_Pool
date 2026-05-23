@@ -115,15 +115,19 @@ Current status:
   existing worker control path, and returns a serialized lifecycle record for
   unsupported execution, authorization denial, status failure, and cleanup
   failure.
+- worker service payload parsing helpers now accept plain daemon JSON
+  dictionaries, validate them into `WorkerTransferAuthorizationRequest`
+  objects, and feed parsed payloads through the same serialized lifecycle
+  output path.
 
 Next code cut:
 
-- add worker service payload parsing helpers so a future worker process can
-  accept plain daemon JSON dictionaries and convert them into
-  `WorkerTransferAuthorizationRequest` objects before calling the service;
-- add focused tests for valid payload parsing, missing required fields, invalid
-  direction/ranges, and preserving lifecycle output from parsed payloads;
-- keep this as in-process payload validation only, without adding CUDA IPC,
+- add worker service request/response envelope records so a future helper
+  process can wrap payload parsing errors and lifecycle payloads in one stable
+  response shape;
+- add focused tests for successful envelope responses, malformed payload
+  responses, and daemon lifecycle failure responses;
+- keep this as in-process response shaping only, without adding CUDA IPC,
   sockets, real data movement, or hardware discovery.
 
 ## Upcoming

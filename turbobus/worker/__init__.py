@@ -13,6 +13,7 @@ from .helper import (
     WorkerTransferState,
     WorkerTransferStatusReporter,
     WorkerTransferUnsupportedExecutor,
+    parse_worker_authorization_request_payload,
 )
 
 __all__ = [
@@ -30,4 +31,5 @@ __all__ = [
     "WorkerTransferState",
     "WorkerTransferStatusReporter",
     "WorkerTransferUnsupportedExecutor",
+    "parse_worker_authorization_request_payload",
 ]

@@ -31,6 +31,7 @@ from turbobus.worker import (
     WorkerTransferState,
     WorkerTransferStatusReporter,
     WorkerTransferUnsupportedExecutor,
+    parse_worker_authorization_request_payload,
 )
 
 
@@ -74,6 +75,21 @@ def authorization_request() -> WorkerTransferAuthorizationRequest:
         ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
         relay_gpu=1,
     )
+
+
+def authorization_request_payload() -> dict:
+    return {
+        "transfer_id": "transfer-1",
+        "lease_id": "lease-1",
+        "token": "lease-token",
+        "session_id": "session-1",
+        "job_id": "job-1",
+        "src_buffer_id": "cpu-buffer",
+        "dst_buffer_id": "gpu-buffer",
+        "direction": "h2d",
+        "ranges": [{"src_offset": 0, "dst_offset": 0, "bytes": 16}],
+        "relay_gpu": 1,
+    }
 
 
 class FakeDaemonClient:
@@ -658,6 +674,59 @@ class WorkerHelperTest(unittest.TestCase):
 
         self.assertIsInstance(lifecycle, WorkerTransferLifecycleRecord)
         self.assertEqual(lifecycle.final_state, "unsupported")
+
+    def test_worker_authorization_payload_parser_accepts_plain_dict(self) -> None:
+        request = parse_worker_authorization_request_payload(
+            authorization_request_payload()
+        )
+
+        self.assertEqual(request.transfer_id, "transfer-1")
+        self.assertEqual(request.lease_id, "lease-1")
+        self.assertEqual(request.direction, "h2d")
+        self.assertEqual(request.ranges[0]["bytes"], 16)
+        self.assertEqual(request.relay_gpu, 1)
+
+    def test_worker_authorization_payload_parser_accepts_nested_dict(self) -> None:
+        request = parse_worker_authorization_request_payload(
+            {"authorization_request": authorization_request_payload()}
+        )
+
+        self.assertEqual(request.session_id, "session-1")
+        self.assertEqual(request.src_buffer_id, "cpu-buffer")
+
+    def test_worker_authorization_payload_parser_rejects_missing_required_field(self) -> None:
+        payload = authorization_request_payload()
+        payload.pop("token")
+
+        with self.assertRaisesRegex(ValueError, "missing worker authorization field: token"):
+            parse_worker_authorization_request_payload(payload)
+
+    def test_worker_authorization_payload_parser_rejects_invalid_direction(self) -> None:
+        payload = authorization_request_payload()
+        payload["direction"] = "sideways"
+
+        with self.assertRaisesRegex(ValueError, "direction must be h2d or d2h"):
+            parse_worker_authorization_request_payload(payload)
+
+    def test_worker_authorization_payload_parser_rejects_invalid_range(self) -> None:
+        payload = authorization_request_payload()
+        payload["ranges"] = [{"src_offset": 0, "dst_offset": 0, "bytes": 0}]
+
+        with self.assertRaisesRegex(ValueError, "range bytes must be positive"):
+            parse_worker_authorization_request_payload(payload)
+
+    def test_worker_service_handle_payload_preserves_lifecycle_output(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        service = WorkerTransferService(daemon_client)
+
+        payload = service.handle_payload(authorization_request_payload())
+
+        self.assertEqual(payload["authorization_request"]["transfer_id"], "transfer-1")
+        self.assertEqual(payload["final_state"], "unsupported")
+        self.assertEqual(payload["status_update"]["state"], "failed")
+        self.assertEqual(payload["cleanup_target"]["target_id"], "lease-1")
 
 
 if __name__ == "__main__":

@@ -119,6 +119,9 @@ transfer request objects:
   boundary that accepts a worker authorization request and returns serialized
   lifecycle records across unsupported execution, authorization denial, status
   failure, and cleanup failure paths.
+- worker service payload parsing helpers now convert plain daemon JSON
+  dictionaries into `WorkerTransferAuthorizationRequest` objects and preserve
+  serialized lifecycle output from parsed payloads.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -186,12 +189,14 @@ phase:
     explicit and serializable for future helper processes.
 22. an in-process worker helper service skeleton now returns serialized
     lifecycle records without adding sockets, IPC, or real data movement.
+23. worker service payload parsing now validates plain dictionaries into
+    worker authorization requests before they enter the service path.
 
-The next immediate goal is to add worker service payload parsing helpers so a
-future worker process can accept plain daemon JSON dictionaries and convert them
-into `WorkerTransferAuthorizationRequest` objects before calling the service.
-This should stay inside in-process payload validation and should not add CUDA
-IPC, sockets, real data movement, or hardware discovery.
+The next immediate goal is to add worker service request/response envelope
+records so a future helper process can wrap payload parsing errors and lifecycle
+payloads in one stable response shape. This should stay inside in-process
+response shaping and should not add CUDA IPC, sockets, real data movement, or
+hardware discovery.
 
 ## Verification
 
@@ -242,7 +247,8 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
 - add an in-process worker helper service skeleton that returns lifecycle
   records; done through `WorkerTransferService`;
 - add worker service payload parsing helpers for future worker process
-  boundaries;
+  boundaries; done through `parse_worker_authorization_request_payload`;
+- add worker service request/response envelope records;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper
