@@ -178,17 +178,18 @@ Current status:
 - worker endpoint `describe()` snapshots now include endpoint configuration
   fields: `max_events`, `retained_event_count`, and `history_bounded`, while
   preserving encoded response payloads.
+- worker endpoint event snapshots now expose retained `WorkerEndpointEvent`
+  records as copied dictionaries for future transports without exposing the
+  mutable internal event list.
 
 Next code cut:
 
-- add an in-process worker endpoint event snapshot helper that returns retained
-  `WorkerEndpointEvent` records as dictionaries for future socket or IPC
-  transports;
+- include the retained worker endpoint event snapshot inside `describe()` under
+  a stable field for future socket or IPC observability clients;
 - keep it in process only, with no CUDA IPC, sockets, real data movement, or
   hardware discovery yet;
-- add focused tests that bounded endpoints expose only retained events,
-  unbounded endpoints expose all retained events, and encoded response payloads
-  stay unchanged.
+- add focused tests that empty, bounded, and unbounded describe snapshots expose
+  event records consistently while encoded response payloads stay unchanged.
 
 ## Upcoming
 

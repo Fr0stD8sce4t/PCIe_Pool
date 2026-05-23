@@ -89,6 +89,9 @@ class WorkerServiceEndpoint:
         self.last_event = None
         return snapshot
 
+    def event_snapshot(self) -> tuple[dict[str, object], ...]:
+        return tuple(event.as_dict() for event in self.events)
+
     def _trim_events(self) -> None:
         if self.max_events is None:
             return

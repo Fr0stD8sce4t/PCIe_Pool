@@ -1453,6 +1453,87 @@ class WorkerHelperTest(unittest.TestCase):
             "parse_failed",
         )
 
+    def test_worker_service_endpoint_returns_unbounded_event_snapshot(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        endpoint = WorkerServiceEndpoint(daemon_client=daemon_client)
+        request_message = encode_worker_request_envelope(
+            WorkerServiceRequestEnvelope(payload=authorization_request_payload())
+        )
+
+        success_response = endpoint.handle_message(request_message)
+        parse_error_response = endpoint.handle_message("{not-json")
+        events = endpoint.event_snapshot()
+        success_payload = decode_worker_response_envelope(success_response).as_dict()
+        parse_error_payload = decode_worker_response_envelope(
+            parse_error_response
+        ).as_dict()
+
+        self.assertEqual(len(events), 2)
+        self.assertEqual([event["final_state"] for event in events], [
+            "unsupported",
+            "parse_failed",
+        ])
+        self.assertEqual(events[0]["request_bytes"], len(request_message.encode("utf-8")))
+        self.assertTrue(events[0]["has_completion"])
+        self.assertFalse(events[1]["has_completion"])
+        self.assertEqual(success_payload["final_state"], "unsupported")
+        self.assertEqual(parse_error_payload["final_state"], "parse_failed")
+
+    def test_worker_service_endpoint_returns_bounded_event_snapshot(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        endpoint = WorkerServiceEndpoint(
+            daemon_client=daemon_client,
+            max_events=2,
+        )
+        request_message = encode_worker_request_envelope(
+            WorkerServiceRequestEnvelope(payload=authorization_request_payload())
+        )
+
+        first_response = endpoint.handle_message(request_message)
+        parse_error_response = endpoint.handle_message("{not-json")
+        daemon_client.status_response = DaemonResponse(
+            ok=False,
+            error="unknown transfer",
+        )
+        status_response = endpoint.handle_message(request_message)
+        events = endpoint.event_snapshot()
+        first_payload = decode_worker_response_envelope(first_response).as_dict()
+        parse_error_payload = decode_worker_response_envelope(
+            parse_error_response
+        ).as_dict()
+        status_payload = decode_worker_response_envelope(status_response).as_dict()
+
+        self.assertEqual(len(events), 2)
+        self.assertEqual(
+            [event["final_state"] for event in events],
+            ["parse_failed", "status_failed"],
+        )
+        self.assertFalse(events[0]["has_completion"])
+        self.assertTrue(events[1]["has_completion"])
+        self.assertEqual(first_payload["final_state"], "unsupported")
+        self.assertEqual(parse_error_payload["final_state"], "parse_failed")
+        self.assertEqual(status_payload["final_state"], "status_failed")
+
+    def test_worker_service_endpoint_event_snapshot_is_a_copy(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        endpoint = WorkerServiceEndpoint(daemon_client=daemon_client)
+        request_message = encode_worker_request_envelope(
+            WorkerServiceRequestEnvelope(payload=authorization_request_payload())
+        )
+
+        endpoint.handle_message(request_message)
+        events = endpoint.event_snapshot()
+        events[0]["final_state"] = "changed"
+
+        self.assertEqual(endpoint.last_event.final_state, "unsupported")
+        self.assertEqual(endpoint.event_snapshot()[0]["final_state"], "unsupported")
+
     def test_worker_service_endpoint_clear_events_resets_snapshot(self) -> None:
         daemon_client = FakeDaemonClient(
             DaemonResponse(ok=True, payload=authorization_payload())

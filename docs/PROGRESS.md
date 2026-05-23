@@ -177,6 +177,8 @@ transfer request objects:
   long-running helper processes can bound retained endpoint event records.
 - `WorkerServiceEndpoint.describe()` now reports endpoint configuration fields
   for `max_events`, retained event count, and whether event history is bounded.
+- `WorkerServiceEndpoint.event_snapshot()` now returns retained endpoint event
+  records as copied dictionaries for future transport observability.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -291,10 +293,13 @@ phase:
 39. worker endpoint describe snapshots now report `max_events`,
     `retained_event_count`, and `history_bounded` without changing encoded
     worker response payloads.
+40. worker endpoint event snapshots now expose retained events as copied
+    dictionaries without giving callers direct access to the mutable event
+    list.
 
-The next immediate goal is to add an in-process worker endpoint event snapshot
-helper. It should return retained `WorkerEndpointEvent` records as dictionaries
-for future socket or IPC transports while keeping encoded responses unchanged.
+The next immediate goal is to include the retained worker endpoint event
+snapshot inside `describe()` under a stable field for future socket or IPC
+observability clients while keeping encoded responses unchanged.
 
 ## Verification
 
@@ -382,7 +387,10 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
 - add endpoint configuration fields to worker endpoint describe snapshots; done
   through `WorkerServiceEndpoint.describe()`;
 - add an in-process endpoint event snapshot helper that exposes retained events
-  without giving callers direct access to the mutable event list;
+  without giving callers direct access to the mutable event list; done through
+  `WorkerServiceEndpoint.event_snapshot()`;
+- include retained endpoint event snapshots in `WorkerServiceEndpoint.describe()`
+  under a stable field for future transport observability clients;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper
