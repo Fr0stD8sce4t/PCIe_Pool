@@ -63,11 +63,14 @@ Current status:
 - socket clients can query daemon transfer status, and the socket round-trip
   coverage now verifies a planned relay-backed transfer through release and
   completion.
+- daemon-issued relay reservations now carry unguessable lease tokens, and the
+  daemon exposes a `VALIDATE_LEASE` request that future worker/helper code can
+  use before touching relay resources.
 
 Next code cut:
 
-- add lease-token handling that worker/helper code can later validate without
-  trusting client-owned relay access;
+- connect lease validation to registered transfer buffers and job/session
+  ownership so worker/helper code can check more than the bearer token;
 - keep the daemon as the owner of planning/control decisions;
 - do not add worker execution yet, but shape the protocol so worker/helper
   execution can consume the same `TransferRequest` and lease records later.

@@ -65,6 +65,10 @@ transfer request objects:
 - `TurboBusDaemonClient` now exposes the same transfer-status request path over
   the daemon socket, and the socket round-trip test checks submitted-to-complete
   status transitions after releasing a relay reservation.
+- `TurboBusDaemon` now issues lease tokens for relay reservations and planned
+  relay leases, stores them internally, invalidates them on release or cleanup,
+  and validates them through a `VALIDATE_LEASE` request for future worker/helper
+  use.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -96,11 +100,13 @@ phase:
    new protocol path.
 8. daemon-issued plans now have transfer ids and status records that can be
    queried, updated, and completed when relay reservations are released.
+9. daemon-issued relay reservations now have lease tokens that can be validated
+   without exposing the daemon's internal lease-token table through profile
+   snapshots.
 
-The next immediate goal is the daemon protocol baseline: job registration,
-buffer registration, transfer status, lease-token records, and cleanup
-messages. This starts the privileged-daemon work, but does not add worker
-execution yet.
+The next immediate goal is to connect lease validation to registered transfer
+buffers and job/session ownership. This continues the privileged-daemon work,
+but does not add worker execution yet.
 
 ## Verification
 
@@ -131,7 +137,7 @@ $env:PYTHONPATH='.'; python test/python/test_vllm_kv_connector_sweep.py
 
 - define daemon protocol records for job identity, buffer registration,
   lease tokens, and worker-facing cleanup;
-- add daemon state and validation tests for lease token handling;
+- tie lease validation to registered CPU/GPU buffers and ownership checks;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

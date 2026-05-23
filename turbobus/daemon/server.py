@@ -15,6 +15,7 @@ from .protocol import (
     DaemonRequest,
     DaemonResponse,
     JobIdentity,
+    LeaseToken,
     RelayQuota,
     RequestType,
     Session,
@@ -47,6 +48,7 @@ class TurboBusDaemon:
         self._sessions: dict[str, Session] = {}
         self._reservations: dict[str, TransferReservation] = {}
         self._reservation_transfers: dict[str, str] = {}
+        self._lease_tokens: dict[str, LeaseToken] = {}
         self._transfer_statuses: dict[str, TransferStatus] = {}
         self._cleanup_events: list[CleanupRequest] = []
         self._profile_cache: dict[str, dict] = {}
@@ -245,10 +247,22 @@ class TurboBusDaemon:
                 direction=direction_value,
             )
             self._reservations[reservation.reservation_id] = reservation
+            lease_token = self._issue_lease_token_locked(
+                lease_id=reservation.reservation_id,
+                session_id=session_id,
+                relay_gpu=relay_gpu,
+                now=now,
+            )
             session.active_chunks += chunks
             quota.active_chunks += chunks
             self._touch_session_locked(session_id, now)
-            return DaemonResponse(ok=True, payload={"reservation": asdict(reservation)})
+            return DaemonResponse(
+                ok=True,
+                payload={
+                    "reservation": asdict(reservation),
+                    "lease_token": asdict(lease_token),
+                },
+            )
 
     def release_transfer(self, reservation_id: str) -> DaemonResponse:
         with self._lock:
@@ -285,6 +299,34 @@ class TurboBusDaemon:
             )
             self._transfer_statuses[updated.transfer_id] = updated
             return DaemonResponse(ok=True, payload={"status": asdict(updated)})
+
+    def validate_lease(
+        self,
+        lease_id: str,
+        token: str,
+        session_id: str | None = None,
+        relay_gpu: int | None = None,
+        job_id: str | None = None,
+        now: float | None = None,
+    ) -> DaemonResponse:
+        checked_at = time.time() if now is None else float(now)
+        with self._lock:
+            lease = self._lease_tokens.get(str(lease_id))
+            if lease is None:
+                return DaemonResponse(ok=False, error="unknown lease")
+            if lease.token != str(token):
+                return DaemonResponse(ok=False, error="invalid lease token")
+            if session_id is not None and lease.session_id != str(session_id):
+                return DaemonResponse(ok=False, error="lease session mismatch")
+            if relay_gpu is not None and lease.relay_gpu != int(relay_gpu):
+                return DaemonResponse(ok=False, error="lease relay mismatch")
+            if job_id is not None and lease.job_id != str(job_id):
+                return DaemonResponse(ok=False, error="lease job mismatch")
+            if lease.expires_at and checked_at > lease.expires_at:
+                return DaemonResponse(ok=False, error="lease expired")
+            if lease.lease_id not in self._reservations:
+                return DaemonResponse(ok=False, error="lease is not active")
+            return DaemonResponse(ok=True, payload={"lease_token": asdict(lease)})
 
     def plan_transfer(
         self,
@@ -337,6 +379,11 @@ class TurboBusDaemon:
             payload["transfer_id"] = transfer_id
             payload["transfer_status"] = asdict(status)
             payload["reservations"] = [asdict(reservation) for reservation in reservations]
+            payload["lease_tokens"] = [
+                asdict(self._lease_tokens[reservation.reservation_id])
+                for reservation in reservations
+                if reservation.reservation_id in self._lease_tokens
+            ]
             return DaemonResponse(ok=True, payload=payload)
 
     def get_profile(self, target_gpu: int, relay_gpus: Iterable[int]) -> DaemonResponse:
@@ -394,6 +441,7 @@ class TurboBusDaemon:
         reservation = self._reservations.pop(reservation_id, None)
         if reservation is None:
             return None
+        self._lease_tokens.pop(reservation_id, None)
         transfer_id = self._reservation_transfers.pop(reservation_id, None)
         session = self._sessions.get(reservation.session_id)
         if session is not None:
@@ -422,6 +470,15 @@ class TurboBusDaemon:
                 direction=lease.direction,
             )
             self._reservations[reservation.reservation_id] = reservation
+            self._lease_tokens[reservation.reservation_id] = LeaseToken(
+                lease_id=reservation.reservation_id,
+                session_id=reservation.session_id,
+                relay_gpu=reservation.relay_gpu,
+                token=str(uuid.uuid4()),
+                job_id=lease.job_id,
+                issued_at=lease.granted_at,
+                expires_at=lease.expires_at,
+            )
             session.active_chunks += reservation.chunks
             quota = self._relay_quotas.get(reservation.relay_gpu)
             if quota is not None:
@@ -430,6 +487,27 @@ class TurboBusDaemon:
                 self._reservation_transfers[reservation.reservation_id] = transfer_id
             reservations.append(reservation)
         return reservations
+
+    def _issue_lease_token_locked(
+        self,
+        lease_id: str,
+        session_id: str,
+        relay_gpu: int,
+        now: float,
+        job_id: str | None = None,
+        expires_at: float = 0.0,
+    ) -> LeaseToken:
+        lease_token = LeaseToken(
+            lease_id=lease_id,
+            session_id=session_id,
+            relay_gpu=relay_gpu,
+            token=str(uuid.uuid4()),
+            job_id=job_id,
+            issued_at=float(now),
+            expires_at=float(expires_at),
+        )
+        self._lease_tokens[lease_token.lease_id] = lease_token
+        return lease_token
 
     def _mark_transfer_terminal_if_unblocked_locked(
         self,
@@ -613,6 +691,15 @@ class TurboBusDaemon:
                 state=payload.get("state"),
                 bytes_completed=payload.get("bytes_completed"),
                 error=payload.get("error"),
+            )
+        if request.request_type == RequestType.VALIDATE_LEASE:
+            payload = request.payload
+            return self.validate_lease(
+                lease_id=str(payload["lease_id"]),
+                token=str(payload["token"]),
+                session_id=payload.get("session_id"),
+                relay_gpu=payload.get("relay_gpu"),
+                job_id=payload.get("job_id"),
             )
         if request.request_type == RequestType.CLEANUP:
             payload = request.payload

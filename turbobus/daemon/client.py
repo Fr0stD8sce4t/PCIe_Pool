@@ -142,6 +142,31 @@ class TurboBusDaemonClient:
             )
         )
 
+    def validate_lease(
+        self,
+        lease_id: str,
+        token: str,
+        session_id: str | None = None,
+        relay_gpu: int | None = None,
+        job_id: str | None = None,
+    ) -> DaemonResponse:
+        payload: dict[str, object] = {
+            "lease_id": str(lease_id),
+            "token": str(token),
+        }
+        if session_id is not None:
+            payload["session_id"] = str(session_id)
+        if relay_gpu is not None:
+            payload["relay_gpu"] = int(relay_gpu)
+        if job_id is not None:
+            payload["job_id"] = str(job_id)
+        return self.send(
+            DaemonRequest(
+                request_type=RequestType.VALIDATE_LEASE,
+                payload=payload,
+            )
+        )
+
     def get_profile(self, target_gpu: int, relay_gpus: list[int]) -> DaemonResponse:
         return self.send(
             DaemonRequest(

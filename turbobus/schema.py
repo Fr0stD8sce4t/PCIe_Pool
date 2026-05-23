@@ -36,6 +36,7 @@ class RequestType(str, Enum):
     TRANSFER_STATUS = "TRANSFER_STATUS"
     RESERVE_TRANSFER = "RESERVE_TRANSFER"
     ISSUE_LEASE = "ISSUE_LEASE"
+    VALIDATE_LEASE = "VALIDATE_LEASE"
     RELEASE_TRANSFER = "RELEASE_TRANSFER"
     CLEANUP = "CLEANUP"
     CLOSE_SESSION = "CLOSE_SESSION"
@@ -112,6 +113,7 @@ class LeaseToken:
     lease_id: str
     session_id: str
     relay_gpu: int
+    token: str
     job_id: str | None = None
     issued_at: float = 0.0
     expires_at: float = 0.0
@@ -123,6 +125,9 @@ class LeaseToken:
             raise ValueError("session_id must be non-empty")
         if int(self.relay_gpu) < 0:
             raise ValueError("relay_gpu must be non-negative")
+        token = str(self.token)
+        if not token.strip():
+            raise ValueError("token must be non-empty")
         issued_at = float(self.issued_at)
         expires_at = float(self.expires_at)
         if expires_at and expires_at < issued_at:
@@ -130,6 +135,7 @@ class LeaseToken:
         object.__setattr__(self, "lease_id", str(self.lease_id))
         object.__setattr__(self, "session_id", str(self.session_id))
         object.__setattr__(self, "relay_gpu", int(self.relay_gpu))
+        object.__setattr__(self, "token", token)
         if self.job_id is not None:
             object.__setattr__(self, "job_id", str(self.job_id))
         object.__setattr__(self, "issued_at", issued_at)

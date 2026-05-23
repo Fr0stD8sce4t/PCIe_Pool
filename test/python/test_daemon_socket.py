@@ -288,13 +288,30 @@ class DaemonSocketTest(unittest.TestCase):
             self.assertEqual(planned.payload["stats"]["resolved_mode"], "pool")
             transfer_id = planned.payload["transfer_id"]
             reservation_id = planned.payload["reservations"][0]["reservation_id"]
+            lease_token = planned.payload["lease_tokens"][0]
 
             submitted = client.transfer_status(transfer_id)
             self.assertTrue(submitted.ok)
             self.assertEqual(submitted.payload["status"]["state"], "submitted")
 
+            validated = client.validate_lease(
+                lease_id=lease_token["lease_id"],
+                token=lease_token["token"],
+                session_id=session_id,
+                relay_gpu=1,
+            )
+            self.assertTrue(validated.ok)
+
             released = client.release_transfer(reservation_id)
             self.assertTrue(released.ok)
+
+            invalidated = client.validate_lease(
+                lease_id=lease_token["lease_id"],
+                token=lease_token["token"],
+                session_id=session_id,
+                relay_gpu=1,
+            )
+            self.assertFalse(invalidated.ok)
 
             completed = client.transfer_status(transfer_id)
             self.assertTrue(completed.ok)

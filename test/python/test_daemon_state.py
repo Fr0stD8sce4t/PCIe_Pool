@@ -454,6 +454,92 @@ class DaemonStateTest(unittest.TestCase):
         self.assertTrue(released.ok)
         self.assertEqual(daemon.describe().payload["relay_quotas"][1]["active_chunks"], 0)
 
+    def test_plan_transfer_issues_validatable_lease_tokens(self) -> None:
+        daemon = TurboBusDaemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=1,
+            max_inflight_chunks_per_relay=8,
+        )
+        register = daemon.register_session(
+            target_gpu=0,
+            requested_relays=[1],
+            max_inflight_chunks=8,
+        )
+        session_id = register.payload["session"]["session_id"]
+        daemon.put_profile(
+            target_gpu=0,
+            relay_gpus=[1],
+            profile={
+                "target_device": 0,
+                "direct_h2d_bw_gbps": 7.5,
+                "direct_d2h_bw_gbps": 6.5,
+                "relays": [
+                    {
+                        "relay_device": 1,
+                        "target_device": 0,
+                        "h2d_bw_gbps": 7.5,
+                        "d2h_bw_gbps": 6.5,
+                        "p2p_bw_gbps": 40.0,
+                        "effective_bw_gbps": 7.5,
+                        "effective_d2h_bw_gbps": 6.5,
+                        "p2p_enabled": True,
+                    }
+                ],
+            },
+        )
+
+        planned = daemon.plan_transfer(
+            session_id=session_id,
+            total_bytes=64,
+            chunk_bytes=16,
+            mode="pool",
+            direction="h2d",
+            job_id="job-1",
+        )
+
+        self.assertTrue(planned.ok)
+        lease_token = planned.payload["lease_tokens"][0]
+        self.assertEqual(
+            lease_token["lease_id"],
+            planned.payload["reservations"][0]["reservation_id"],
+        )
+        self.assertEqual(lease_token["session_id"], session_id)
+        self.assertEqual(lease_token["relay_gpu"], 1)
+        self.assertEqual(lease_token["job_id"], "job-1")
+        self.assertTrue(lease_token["token"])
+        self.assertNotIn("lease_tokens", daemon.describe().payload)
+
+        validated = daemon.validate_lease(
+            lease_id=lease_token["lease_id"],
+            token=lease_token["token"],
+            session_id=session_id,
+            relay_gpu=1,
+            job_id="job-1",
+        )
+        self.assertTrue(validated.ok)
+
+        wrong_token = daemon.validate_lease(
+            lease_id=lease_token["lease_id"],
+            token="wrong",
+            session_id=session_id,
+            relay_gpu=1,
+            job_id="job-1",
+        )
+        self.assertFalse(wrong_token.ok)
+        self.assertIn("invalid lease token", wrong_token.error)
+
+        released = daemon.release_transfer(lease_token["lease_id"])
+        self.assertTrue(released.ok)
+        inactive = daemon.validate_lease(
+            lease_id=lease_token["lease_id"],
+            token=lease_token["token"],
+            session_id=session_id,
+            relay_gpu=1,
+            job_id="job-1",
+        )
+        self.assertFalse(inactive.ok)
+        self.assertIn("unknown lease", inactive.error)
+
     def test_plan_transfer_records_and_completes_transfer_status(self) -> None:
         daemon = TurboBusDaemon(
             relay_gpus=[1],
