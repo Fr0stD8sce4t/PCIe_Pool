@@ -391,15 +391,20 @@ class WorkerServiceRequestEnvelope:
 class WorkerServiceResponseEnvelope:
     ok: bool
     lifecycle: Mapping[str, object] | None = None
+    completion: Mapping[str, object] | None = None
     error: str | None = None
     final_state: str | None = None
 
     def __post_init__(self) -> None:
         if self.lifecycle is not None and not isinstance(self.lifecycle, Mapping):
             raise TypeError("lifecycle must be a mapping")
+        if self.completion is not None and not isinstance(self.completion, Mapping):
+            raise TypeError("completion must be a mapping")
         object.__setattr__(self, "ok", bool(self.ok))
         if self.lifecycle is not None:
             object.__setattr__(self, "lifecycle", dict(self.lifecycle))
+        if self.completion is not None:
+            object.__setattr__(self, "completion", dict(self.completion))
         if self.error is not None:
             object.__setattr__(self, "error", str(self.error))
         if self.final_state is not None:
@@ -414,6 +419,7 @@ class WorkerServiceResponseEnvelope:
         return cls(
             ok=True,
             lifecycle=payload,
+            completion=lifecycle.completion_envelope().as_dict(),
             final_state=str(payload["final_state"]),
             error=payload.get("error"),
         )
@@ -426,6 +432,9 @@ class WorkerServiceResponseEnvelope:
         return {
             "ok": self.ok,
             "lifecycle": dict(self.lifecycle) if self.lifecycle is not None else None,
+            "completion": (
+                dict(self.completion) if self.completion is not None else None
+            ),
             "error": self.error,
             "final_state": self.final_state,
         }

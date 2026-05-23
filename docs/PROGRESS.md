@@ -153,6 +153,9 @@ transfer request objects:
   boundary a completion-specific serialized shape for allocated staging slots,
   worker results, daemon status updates and responses, daemon cleanup responses,
   and staging release records.
+- `WorkerServiceResponseEnvelope` now includes that completion envelope
+  alongside the full lifecycle payload, so future helper process boundaries can
+  read completion, status, cleanup, and staging-release output directly.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -244,11 +247,13 @@ phase:
 30. worker data-plane completion envelopes now serialize lifecycle completion
     output without losing staging release information on unsupported,
     status-failed, or cleanup-failed paths.
+31. worker service response envelopes now carry the completion envelope without
+    dropping the existing lifecycle payload.
 
-The next immediate goal is to thread the worker data-plane completion envelope
-through the in-process worker service response path. That keeps future helper
-process callers from needing to parse full lifecycle records just to observe
-completion, cleanup, and staging-release output.
+The next immediate goal is to add a minimal JSON-safe worker process message
+codec around the existing request and response envelopes. This should stay
+in-process and only prepare the future helper socket or IPC boundary; it should
+not add CUDA IPC, sockets, real data movement, or hardware discovery yet.
 
 ## Verification
 
@@ -317,7 +322,9 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
 - add a worker data-plane completion envelope for future helper process
   boundaries; done through `WorkerDataPlaneCompletionEnvelope`;
 - thread the worker data-plane completion envelope through worker service
-  responses;
+  responses; done through `WorkerServiceResponseEnvelope.completion`;
+- add a minimal worker process message codec for request and response
+  envelopes;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

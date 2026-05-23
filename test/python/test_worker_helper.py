@@ -1127,6 +1127,11 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(response["final_state"], "unsupported")
         self.assertEqual(response["lifecycle"]["result"]["state"], "unsupported")
         self.assertEqual(response["lifecycle"]["cleanup_target"]["target_id"], "lease-1")
+        self.assertEqual(response["completion"]["worker_result"]["state"], "unsupported")
+        self.assertEqual(response["completion"]["daemon_status_update"]["state"], "failed")
+        self.assertTrue(response["completion"]["daemon_cleanup_response"]["ok"])
+        self.assertEqual(response["completion"]["staging_release"]["slot_id"], "staging-1")
+        self.assertFalse(response["completion"]["staging_release"]["active"])
 
     def test_worker_service_returns_malformed_payload_envelope(self) -> None:
         daemon_client = FakeDaemonClient(
@@ -1142,6 +1147,7 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(response["final_state"], "parse_failed")
         self.assertIn("missing worker authorization field: token", response["error"])
         self.assertIsNone(response["lifecycle"])
+        self.assertIsNone(response["completion"])
         self.assertEqual(daemon_client.requests, [])
 
     def test_worker_service_returns_status_failure_envelope(self) -> None:
@@ -1157,6 +1163,10 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(response["final_state"], "status_failed")
         self.assertIn("unknown transfer", response["error"])
         self.assertEqual(response["lifecycle"]["status_update"]["state"], "failed")
+        self.assertEqual(response["completion"]["daemon_status_update"]["state"], "failed")
+        self.assertIsNone(response["completion"]["daemon_status_response"])
+        self.assertIsNone(response["completion"]["daemon_cleanup_response"])
+        self.assertFalse(response["completion"]["staging_release"]["active"])
 
     def test_worker_service_returns_cleanup_failure_envelope(self) -> None:
         daemon_client = FakeDaemonClient(
@@ -1171,6 +1181,10 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(response["final_state"], "cleanup_failed")
         self.assertIn("unknown reservation", response["error"])
         self.assertEqual(response["lifecycle"]["cleanup_target"]["target_id"], "lease-1")
+        self.assertEqual(response["completion"]["daemon_status_update"]["state"], "failed")
+        self.assertTrue(response["completion"]["daemon_status_response"]["ok"])
+        self.assertIsNone(response["completion"]["daemon_cleanup_response"])
+        self.assertFalse(response["completion"]["staging_release"]["active"])
 
 
 if __name__ == "__main__":

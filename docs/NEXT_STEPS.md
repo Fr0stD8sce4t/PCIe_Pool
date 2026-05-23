@@ -145,16 +145,21 @@ Current status:
   slot, worker result, daemon status update, daemon status response, daemon
   cleanup response, and staging release from lifecycle records without adding
   CUDA IPC, sockets, real data movement, or hardware discovery.
+- worker service responses now carry both the full lifecycle record and the
+  completion envelope, so future helper process callers can consume completion,
+  status, cleanup, and staging-release output without parsing the full
+  lifecycle payload.
 
 Next code cut:
 
-- thread the worker data-plane completion envelope through the in-process
-  worker service response path, so future helper process boundaries can consume
-  completion-specific output without parsing the full lifecycle record;
+- add a minimal worker process message codec around
+  `WorkerServiceRequestEnvelope` and `WorkerServiceResponseEnvelope`, so the
+  future helper socket/IPC boundary has one JSON-safe encode/decode path before
+  any real socket, CUDA IPC, or data movement code is added;
 - keep it in process only, with no CUDA IPC, sockets, real data movement, or
   hardware discovery yet;
-- add focused tests that normal, status-failed, and cleanup-failed service
-  responses carry the completion envelope without dropping lifecycle output.
+- add focused tests for request/response round trips, malformed payloads, and
+  preservation of the completion envelope.
 
 ## Upcoming
 
