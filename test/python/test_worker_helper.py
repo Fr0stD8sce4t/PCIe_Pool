@@ -22,6 +22,7 @@ from turbobus.worker import (
     WorkerAuthorizationError,
     WorkerCleanupError,
     WorkerDataPlaneCompletionEnvelope,
+    WorkerEndpointEvent,
     WorkerMessageCodecError,
     WorkerServiceRequestEnvelope,
     WorkerServiceResponseEnvelope,
@@ -1287,6 +1288,28 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(daemon_client.status_updates[0]["state"], "failed")
         self.assertEqual(daemon_client.cleanup_requests[0]["target_id"], "lease-1")
 
+    def test_worker_service_endpoint_records_success_event(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        request_message = encode_worker_request_envelope(
+            WorkerServiceRequestEnvelope(payload=authorization_request_payload())
+        )
+        endpoint = WorkerServiceEndpoint(daemon_client=daemon_client)
+
+        response_message = endpoint.handle_message(request_message)
+        event = endpoint.last_event
+
+        self.assertIsInstance(event, WorkerEndpointEvent)
+        self.assertEqual(len(endpoint.events), 1)
+        self.assertEqual(event.request_bytes, len(request_message.encode("utf-8")))
+        self.assertEqual(event.response_bytes, len(response_message.encode("utf-8")))
+        self.assertTrue(event.ok)
+        self.assertEqual(event.final_state, "unsupported")
+        self.assertIn("not implemented", event.error)
+        self.assertTrue(event.has_completion)
+        self.assertEqual(event.as_dict()["final_state"], "unsupported")
+
     def test_worker_service_endpoint_matches_message_handler_parse_error(self) -> None:
         daemon_client = FakeDaemonClient(
             DaemonResponse(ok=True, payload=authorization_payload())
@@ -1302,6 +1325,25 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertIn("Expecting property name", response["error"])
         self.assertIsNone(response["lifecycle"])
         self.assertIsNone(response["completion"])
+        self.assertEqual(daemon_client.requests, [])
+
+    def test_worker_service_endpoint_records_parse_error_event(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        endpoint = WorkerServiceEndpoint(daemon_client=daemon_client)
+
+        response_message = endpoint.handle_message(b"{not-json")
+        response = decode_worker_response_envelope(response_message).as_dict()
+        event = endpoint.last_event
+
+        self.assertFalse(response["ok"])
+        self.assertEqual(event.request_bytes, len(b"{not-json"))
+        self.assertEqual(event.response_bytes, len(response_message.encode("utf-8")))
+        self.assertFalse(event.ok)
+        self.assertEqual(event.final_state, "parse_failed")
+        self.assertIn("Expecting property name", event.error)
+        self.assertFalse(event.has_completion)
         self.assertEqual(daemon_client.requests, [])
 
     def test_worker_service_endpoint_matches_message_handler_status_failure(self) -> None:
@@ -1329,6 +1371,27 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(response["final_state"], "status_failed")
         self.assertEqual(response["completion"]["daemon_status_update"]["state"], "failed")
         self.assertFalse(response["completion"]["staging_release"]["active"])
+
+    def test_worker_service_endpoint_records_status_failure_event(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload()),
+            status_response=DaemonResponse(ok=False, error="unknown transfer"),
+        )
+        endpoint = WorkerServiceEndpoint(daemon_client=daemon_client)
+        request_message = encode_worker_request_envelope(
+            WorkerServiceRequestEnvelope(payload=authorization_request_payload())
+        )
+
+        response_message = endpoint.handle_message(request_message)
+        response = decode_worker_response_envelope(response_message).as_dict()
+        event = endpoint.last_event
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["final_state"], "status_failed")
+        self.assertTrue(event.ok)
+        self.assertEqual(event.final_state, "status_failed")
+        self.assertIn("unknown transfer", event.error)
+        self.assertTrue(event.has_completion)
 
     def test_worker_service_endpoint_requires_service_or_daemon_client(self) -> None:
         with self.assertRaisesRegex(ValueError, "daemon_client"):

@@ -29,7 +29,7 @@ from .codec import (
     encode_worker_response_envelope,
     handle_worker_service_message,
 )
-from .endpoint import WorkerServiceEndpoint
+from .endpoint import WorkerEndpointEvent, WorkerServiceEndpoint
 from .staging_pool import (
     WorkerStagingPool,
     WorkerStagingPoolError,
@@ -42,6 +42,7 @@ __all__ = [
     "WorkerCleanupError",
     "WorkerServiceRequestEnvelope",
     "WorkerServiceResponseEnvelope",
+    "WorkerEndpointEvent",
     "WorkerServiceEndpoint",
     "WorkerStatusReportError",
     "WorkerDataPlaneCompletion",

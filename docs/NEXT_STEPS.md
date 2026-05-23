@@ -163,16 +163,19 @@ Current status:
   `WorkerTransferService`, accepts encoded messages through the existing
   in-process message handler, and exposes a single `handle_message` entry point
   for future socket or IPC transports without adding those transports yet.
+- worker endpoint request/response events now record message size, response
+  size, ok/error status, final state, and whether completion data was present
+  for each `handle_message` call without changing the encoded response payload.
 
 Next code cut:
 
-- add a worker endpoint request/response event record for observability around
-  `handle_message`, capturing message size, response size, final state, ok/error
-  status, and whether completion data was present;
+- add a worker endpoint `describe()` snapshot that summarizes recorded
+  `handle_message` events, including total requests, last event, final-state
+  counts, error count, and completion count;
 - keep it in process only, with no CUDA IPC, sockets, real data movement, or
   hardware discovery yet;
-- add focused tests that success, parse-error, and status-failure endpoint
-  calls record events without changing the encoded response payload.
+- add focused tests that success, parse-error, and status-failure endpoint calls
+  produce the expected snapshot without changing encoded response payloads.
 
 ## Upcoming
 

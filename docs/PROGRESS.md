@@ -165,6 +165,9 @@ transfer request objects:
 - `WorkerServiceEndpoint` now provides a transport-neutral worker service
   endpoint with a single `handle_message` entry point for future socket or IPC
   transports.
+- `WorkerEndpointEvent` now records request size, response size, ok/error
+  status, final state, and completion presence for each endpoint
+  `handle_message` call.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -267,12 +270,14 @@ phase:
 34. a transport-neutral worker service endpoint now wraps the encoded message
     handler behind one `handle_message` entry point without adding sockets or
     IPC.
+35. worker endpoint request/response events now record message sizes, final
+    states, ok/error status, and completion presence while preserving encoded
+    responses.
 
-The next immediate goal is to add worker endpoint request/response event
-records for observability around `handle_message`. The records should capture
-message size, response size, final state, ok/error status, and whether
-completion data was present while preserving the exact encoded response
-payload.
+The next immediate goal is to add a worker endpoint `describe()` snapshot that
+summarizes recorded `handle_message` events. It should report total requests,
+the last event, final-state counts, error count, and completion count while
+staying in process.
 
 ## Verification
 
@@ -350,7 +355,8 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
 - add a transport-neutral worker service endpoint object for future socket or
   IPC transports; done through `WorkerServiceEndpoint`;
 - add worker endpoint request/response event records for observability around
-  encoded message handling;
+  encoded message handling; done through `WorkerEndpointEvent`;
+- add a worker endpoint describe snapshot for recorded message events;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper
