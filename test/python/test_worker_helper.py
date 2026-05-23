@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import unittest
 
 from turbobus.schema import (
@@ -262,6 +263,12 @@ def daemon_with_relay_transfer_path() -> tuple[TurboBusDaemon, str]:
         kind="cpu_pinned",
         size_bytes=64,
         pinned=True,
+        handle_type="shared_pinned_cpu",
+        metadata={
+            "shared_memory_name": "tb-job-1-src",
+            "offset_bytes": 0,
+            "shared_memory_size_bytes": 64,
+        },
     )
     daemon.register_buffer(
         buffer_id="gpu-buffer",
@@ -269,6 +276,8 @@ def daemon_with_relay_transfer_path() -> tuple[TurboBusDaemon, str]:
         kind="gpu",
         size_bytes=64,
         device_index=0,
+        handle_type="cuda_ipc_device",
+        metadata={"cuda_ipc_handle": (b"t" * 64).hex()},
     )
     daemon.put_profile(
         target_gpu=0,
@@ -423,7 +432,10 @@ class WorkerHelperTest(unittest.TestCase):
             job_id=request.data_plane.job_id,
             relay_gpu=request.data_plane.relay_gpu,
             direction=request.data_plane.direction,
-            src_handle=request.data_plane.dst_handle,
+            src_handle=replace(
+                request.data_plane.src_handle,
+                buffer_id="other-cpu-buffer",
+            ),
             dst_handle=request.data_plane.dst_handle,
             staging=request.data_plane.staging,
             ranges=request.data_plane.ranges,
@@ -544,6 +556,23 @@ class WorkerHelperTest(unittest.TestCase):
 
         self.assertEqual(lifecycle.final_state, "authorization_failed")
         self.assertIn("src buffer size", lifecycle.error)
+        self.assertIsNone(lifecycle.worker_request)
+        self.assertIsNone(lifecycle.staging_slot)
+        self.assertEqual(staging_pool.describe(), {"active_slots": {}})
+        self.assertEqual(daemon_client.cleanup_requests[0]["target_id"], "lease-1")
+
+    def test_worker_client_rejects_handle_mismatch_before_staging(self) -> None:
+        payload = authorization_payload()
+        payload["authorization"]["src_buffer"] = dict(payload["authorization"]["dst_buffer"])
+        payload["authorization"]["src_buffer"]["buffer_id"] = "cpu-buffer"
+        daemon_client = FakeDaemonClient(DaemonResponse(ok=True, payload=payload))
+        staging_pool = WorkerStagingPool()
+        client = WorkerTransferClient(daemon_client, staging_pool=staging_pool)
+
+        lifecycle = client.submit_report_cleanup_lifecycle(authorization_request())
+
+        self.assertEqual(lifecycle.final_state, "authorization_failed")
+        self.assertIn("h2d worker source", lifecycle.error)
         self.assertIsNone(lifecycle.worker_request)
         self.assertIsNone(lifecycle.staging_slot)
         self.assertEqual(staging_pool.describe(), {"active_slots": {}})

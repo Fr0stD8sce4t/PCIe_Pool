@@ -155,6 +155,10 @@ Completed current code cut:
 - Reject worker-authorized ranges that exceed registered buffer sizes before
   staging allocation or resource binding, so a bad daemon/helper request cannot
   reach native CUDA copy with out-of-bounds source or destination offsets.
+- Reject worker data-plane requests whose buffer handles do not match the
+  transfer direction before staging allocation: H2D must bind shared pinned CPU
+  to CUDA IPC device memory, and D2H must bind CUDA IPC device memory to shared
+  pinned CPU.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -170,6 +174,8 @@ Completed current code cut:
      worker authorization and exact-plan presence before staging allocation.
    - Validate authorized ranges against registered source and destination
      buffer sizes before worker staging allocation.
+   - Validate direction-specific worker handle types before worker staging
+     allocation.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor

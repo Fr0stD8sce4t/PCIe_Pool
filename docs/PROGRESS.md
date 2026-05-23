@@ -116,6 +116,10 @@ transfer request objects:
   registered source or destination buffer sizes before worker staging
   allocation or resource binding, preventing out-of-bounds native copy inputs
   from reaching the CUDA executor;
+- worker data-plane requests now validate direction-specific buffer handle
+  types before worker staging allocation: H2D requires shared pinned CPU to
+  CUDA IPC device memory, and D2H requires CUDA IPC device memory to shared
+  pinned CPU;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -349,6 +353,9 @@ transfer request objects:
 - Added schema and worker-helper coverage proving worker-authorized ranges
   cannot exceed registered source or destination buffer sizes and that these
   failures occur before staging allocation.
+- Added schema, worker-helper, and staging-pool coverage for direction-specific
+  worker buffer handle types, with the staging tests using real shared pinned
+  CPU and CUDA IPC handle metadata.
 
 ## Immediate Goal
 
@@ -531,6 +538,10 @@ phase:
     registered source or destination buffer size before staging allocation or
     resource binding, so native CUDA execution only sees in-bounds buffer
     spans.
+59. worker data-plane requests now reject direction/handle mismatches before
+    staging allocation. H2D requests must use shared pinned CPU source handles
+    and CUDA IPC destination handles; D2H requests must use CUDA IPC source
+    handles and shared pinned CPU destination handles.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

@@ -501,6 +501,11 @@ class WorkerDataPlaneRequest:
             raise ValueError("dst handle job does not match request job")
         if self.staging.relay_gpu != relay_gpu:
             raise ValueError("staging relay does not match request relay")
+        _validate_worker_handle_direction(
+            direction,
+            src_handle=self.src_handle,
+            dst_handle=self.dst_handle,
+        )
         _validate_worker_range_bounds(
             ranges,
             src_size_bytes=self.src_handle.size_bytes,
@@ -583,6 +588,24 @@ def _validate_worker_range_bounds(
             raise ValueError("worker range exceeds src buffer size")
         if item["dst_offset"] + item["bytes"] > dst_size:
             raise ValueError("worker range exceeds dst buffer size")
+
+
+def _validate_worker_handle_direction(
+    direction: str,
+    *,
+    src_handle: WorkerBufferHandle,
+    dst_handle: WorkerBufferHandle,
+) -> None:
+    if direction == "h2d":
+        if src_handle.handle_type != "shared_pinned_cpu":
+            raise ValueError("h2d worker source must be shared_pinned_cpu")
+        if dst_handle.handle_type != "cuda_ipc_device":
+            raise ValueError("h2d worker destination must be cuda_ipc_device")
+        return
+    if src_handle.handle_type != "cuda_ipc_device":
+        raise ValueError("d2h worker source must be cuda_ipc_device")
+    if dst_handle.handle_type != "shared_pinned_cpu":
+        raise ValueError("d2h worker destination must be shared_pinned_cpu")
 
 
 def _normalize_buffer_handle_metadata(

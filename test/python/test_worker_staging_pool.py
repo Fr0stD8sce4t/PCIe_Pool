@@ -25,6 +25,12 @@ def data_plane_request(
             kind="cpu_pinned",
             size_bytes=bytes_count,
             pinned=True,
+            handle_type="shared_pinned_cpu",
+            metadata={
+                "shared_memory_name": "tb-job-1-src",
+                "offset_bytes": 0,
+                "shared_memory_size_bytes": bytes_count,
+            },
         ),
         dst_buffer=BufferRegistration(
             buffer_id="gpu-buffer",
@@ -32,6 +38,8 @@ def data_plane_request(
             kind="gpu",
             size_bytes=bytes_count,
             device_index=0,
+            handle_type="cuda_ipc_device",
+            metadata={"cuda_ipc_handle": (b"t" * 64).hex()},
         ),
         direction="h2d",
         ranges=({"src_offset": 0, "dst_offset": 0, "bytes": bytes_count},),
