@@ -103,6 +103,11 @@ transfer request objects:
   same helper-socket worker-managed path against a daemon-issued
   direct-plus-relay plan and verifies that worker completion reports both
   direct and relay byte movement;
+- worker-managed transfer cleanup now covers executor and worker-boundary
+  exceptions. Worker executor failures are converted into daemon-visible
+  failed transfer status, staging slots are released, relay reservations are
+  cleaned up, and client-side worker boundary exceptions do best-effort
+  reservation cleanup before returning the original error;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -499,6 +504,11 @@ phase:
 55. the CUDA-server verification entry point now has a pool mode. It can verify
     daemon-issued direct-plus-relay worker-managed plans for H2D or D2H and
     checks that the worker reports both path classes.
+56. worker-managed failure cleanup now covers the real helper execution path:
+    executor exceptions become daemon `failed` transfer status with staging
+    release and relay reservation cleanup, and client-side worker-boundary
+    exceptions release the daemon reservation without hiding the original
+    worker error.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
@@ -561,6 +571,9 @@ $env:PYTHONPATH='.'; python -m compileall turbobus
   H2D and D2H worker-managed relay runs;
 - verify daemon-issued pool mode on a CUDA server for the same helper-socket
   worker-managed path;
+- verify the worker-managed failure cleanup on a CUDA server by forcing a
+  helper or native CUDA executor failure and confirming daemon reservations are
+  released;
 - defer more protocol, socket, observability, and smoke-test work unless it
   directly unblocks the functional data path;
 - reconnect vLLM, model loading, and training offload only after the

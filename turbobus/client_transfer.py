@@ -193,10 +193,19 @@ class WorkerManagedTransferClient:
             ranges=(),
             relay_gpu=int(lease_token["relay_gpu"]),
         )
-        worker_execution = _submit_worker_execution(
-            self.worker_client,
-            authorization_request,
-        )
+        try:
+            worker_execution = _submit_worker_execution(
+                self.worker_client,
+                authorization_request,
+            )
+        except Exception:
+            _cleanup_planned_relay_lease(
+                self.daemon_client,
+                lease_token,
+                reason="worker_execution_exception",
+                strict=False,
+            )
+            raise
         status = self.daemon_client.transfer_status(
             str(planned.payload["transfer_id"])
         )
@@ -322,6 +331,9 @@ def _require_single_relay_worker_plan(
 def _cleanup_planned_relay_lease(
     daemon_client,
     lease_token: Mapping[str, object],
+    *,
+    reason: str = "unsupported_worker_plan",
+    strict: bool = True,
 ) -> None:
     cleanup = getattr(daemon_client, "cleanup", None)
     if not callable(cleanup):
@@ -329,10 +341,11 @@ def _cleanup_planned_relay_lease(
     response = cleanup(
         target_kind="reservation",
         target_id=str(lease_token["lease_id"]),
-        reason="unsupported_worker_plan",
+        reason=reason,
         force=True,
     )
-    _require_ok(response, "daemon reservation cleanup failed")
+    if strict:
+        _require_ok(response, "daemon reservation cleanup failed")
 
 
 @dataclass(frozen=True)

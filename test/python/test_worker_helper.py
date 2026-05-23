@@ -1019,6 +1019,32 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(daemon_client.cleanup_requests[0]["target_id"], "lease-1")
         self.assertFalse(lifecycle.staging_release.active)
 
+    def test_worker_client_reports_executor_exception_and_releases_staging(self) -> None:
+        class RaisingExecutor:
+            def execute(self, request, staging_slot):
+                raise RuntimeError("cuda launch failed")
+
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        staging_pool = WorkerStagingPool()
+        client = WorkerTransferClient(
+            daemon_client,
+            executor=RaisingExecutor(),
+            staging_pool=staging_pool,
+        )
+
+        lifecycle = client.submit_report_cleanup_lifecycle(authorization_request())
+
+        self.assertEqual(lifecycle.final_state, "failed")
+        self.assertIn("cuda launch failed", lifecycle.error)
+        self.assertEqual(lifecycle.result.state, WorkerTransferState.FAILED)
+        self.assertEqual(lifecycle.status_update["state"], "failed")
+        self.assertEqual(daemon_client.status_updates[0]["state"], "failed")
+        self.assertEqual(daemon_client.cleanup_requests[0]["target_id"], "lease-1")
+        self.assertFalse(lifecycle.staging_release.active)
+        self.assertEqual(staging_pool.describe(), {"active_slots": {}})
+
     def test_worker_client_lifecycle_authorization_failure_does_not_allocate_staging(self) -> None:
         daemon_client = FakeDaemonClient(DaemonResponse(ok=False, error="denied"))
         staging_pool = WorkerStagingPool()

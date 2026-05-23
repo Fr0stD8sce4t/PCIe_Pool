@@ -143,6 +143,11 @@ Completed current code cut:
   `python -m turbobus.verification --mode pool` now requires a multi-chunk
   transfer, runs the worker-managed call with a daemon `direct + relay` plan,
   and checks that worker completion reports both direct and relay bytes.
+- Release daemon relay reservations when worker-managed execution fails before
+  normal completion. Worker executor exceptions are now reported as daemon
+  `failed` transfer status with staging release and reservation cleanup, and
+  client-side worker boundary exceptions perform best-effort reservation
+  cleanup before surfacing the original error.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -157,7 +162,9 @@ Completed current code cut:
    - Validate lease tokens before touching relay resources.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
-   - Release reservations on failure or completion.
+   - Release reservations on failure or completion; done for worker executor
+     exceptions and client-side worker boundary exceptions, pending CUDA-server
+     verification against helper-process failures.
 
 3. Extend the worker executor only after the functional call works.
    - Add D2H through the same resource binding path; done for worker resource

@@ -704,18 +704,11 @@ class WorkerTransferClient:
         staging_slot = self.staging_pool.allocate(worker_request.data_plane)
         try:
             result = self._execute(worker_request, staging_slot)
-        except WorkerDataPlaneResourceError as exc:
-            result = WorkerTransferResult(
-                transfer_id=worker_request.transfer_id,
-                state=WorkerTransferState.FAILED,
-                error=str(exc),
-                bytes_completed=0,
-                metadata={
-                    "relay_gpu": worker_request.authorization.relay_gpu,
-                    "src_buffer_id": worker_request.authorization.src_buffer.buffer_id,
-                    "dst_buffer_id": worker_request.authorization.dst_buffer.buffer_id,
-                    "staging_slot_id": staging_slot.slot_id,
-                },
+        except Exception as exc:
+            result = _failed_worker_result_from_exception(
+                worker_request,
+                staging_slot,
+                exc,
             )
         status_update = _daemon_status_update_for_result(result)
         try:
@@ -922,6 +915,25 @@ def _daemon_status_update_for_result(result: WorkerTransferResult) -> dict[str, 
         "bytes_completed": result.bytes_completed,
         "error": error,
     }
+
+
+def _failed_worker_result_from_exception(
+    worker_request: WorkerTransferRequest,
+    staging_slot: WorkerStagingSlot,
+    exc: Exception,
+) -> WorkerTransferResult:
+    return WorkerTransferResult(
+        transfer_id=worker_request.transfer_id,
+        state=WorkerTransferState.FAILED,
+        error=str(exc) or exc.__class__.__name__,
+        bytes_completed=0,
+        metadata={
+            "relay_gpu": worker_request.authorization.relay_gpu,
+            "src_buffer_id": worker_request.authorization.src_buffer.buffer_id,
+            "dst_buffer_id": worker_request.authorization.dst_buffer.buffer_id,
+            "staging_slot_id": staging_slot.slot_id,
+        },
+    )
 
 
 def _cleanup_target_id(target_kind: str, lease_id: str, session_id: str) -> str:
