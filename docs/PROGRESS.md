@@ -320,11 +320,13 @@ phase:
 46. an in-process worker endpoint observability message handler now returns an
     encoded observability snapshot for future socket or IPC observability
     requests without changing worker response payloads.
+47. an in-process worker observability request envelope and codec helper now
+    let future transports explicitly trigger the endpoint observability
+    handler without changing worker response payloads.
 
-The next immediate goal is to add a tiny in-process worker observability
-request envelope and codec helper so future socket or IPC transports can
-trigger the new endpoint handler explicitly while keeping encoded worker
-response payloads unchanged.
+The next immediate goal is to add in-process worker endpoint observability
+request/response event tracking so future transports can measure observability
+message size without changing snapshot payloads.
 
 ## Verification
 
@@ -433,6 +435,11 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
   `WorkerServiceEndpoint.handle_observability_message()`;
 - add a tiny worker observability request envelope and codec helper so future
   socket or IPC transports can trigger the new endpoint handler explicitly;
+  done through `WorkerServiceObservabilityRequestEnvelope` and the worker
+  observability codec helpers;
+- add in-process worker endpoint observability request/response event tracking
+  so future transports can measure observability message size without changing
+  snapshot payloads;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

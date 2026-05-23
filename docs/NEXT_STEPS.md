@@ -195,16 +195,19 @@ Current status:
 - an in-process worker endpoint observability message handler now returns an
   encoded observability snapshot for future socket or IPC observability
   requests without changing worker response payloads.
+- an in-process worker observability request envelope and codec helper now let
+  future transports explicitly trigger the endpoint observability handler
+  without changing worker response payloads.
 
 Next code cut:
 
-- add a tiny in-process worker observability request envelope and codec helper
-  so future socket or IPC transports can trigger the new endpoint handler
-  explicitly;
+- add in-process worker endpoint observability request/response event tracking
+  so future transports can measure observability message size without changing
+  snapshot payloads;
 - keep it in process only, with no CUDA IPC, sockets, real data movement, or
   hardware discovery yet;
-- add focused tests that the request path returns encoded empty and populated
-  snapshots while encoded worker response payloads stay unchanged.
+- add focused tests that observability requests are recorded while encoded
+  worker response payloads stay unchanged.
 
 ## Upcoming
 

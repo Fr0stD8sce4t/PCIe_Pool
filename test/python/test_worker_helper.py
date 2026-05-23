@@ -24,6 +24,7 @@ from turbobus.worker import (
     WorkerDataPlaneCompletionEnvelope,
     WorkerEndpointEvent,
     WorkerMessageCodecError,
+    WorkerServiceObservabilityRequestEnvelope,
     WorkerServiceRequestEnvelope,
     WorkerServiceResponseEnvelope,
     WorkerServiceEndpoint,
@@ -40,12 +41,15 @@ from turbobus.worker import (
     WorkerTransferState,
     WorkerTransferStatusReporter,
     WorkerTransferUnsupportedExecutor,
+    decode_worker_observability_request_envelope,
     decode_worker_observability_snapshot,
     decode_worker_request_envelope,
     decode_worker_response_envelope,
+    encode_worker_observability_request_envelope,
     encode_worker_observability_snapshot,
     encode_worker_request_envelope,
     encode_worker_response_envelope,
+    handle_worker_observability_message,
     handle_worker_service_message,
     parse_worker_authorization_request_payload,
     run_worker_service_control_plane_smoke,
@@ -1257,6 +1261,15 @@ class WorkerHelperTest(unittest.TestCase):
             len(request_message.encode("utf-8")),
         )
 
+    def test_worker_observability_request_codec_round_trips(self) -> None:
+        envelope = WorkerServiceObservabilityRequestEnvelope()
+
+        message = encode_worker_observability_request_envelope(envelope)
+        decoded = decode_worker_observability_request_envelope(message)
+
+        self.assertIsInstance(message, str)
+        self.assertEqual(decoded, envelope)
+
     def test_worker_observability_codec_rejects_missing_fields(self) -> None:
         with self.assertRaisesRegex(WorkerMessageCodecError, "describe"):
             decode_worker_observability_snapshot('{"events":[]}')
@@ -1851,13 +1864,19 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(success_payload["final_state"], "unsupported")
         self.assertEqual(parse_error_payload["final_state"], "parse_failed")
 
-    def test_worker_service_endpoint_observability_message_empty(self) -> None:
+    def test_worker_service_observability_message_empty(self) -> None:
         daemon_client = FakeDaemonClient(
             DaemonResponse(ok=True, payload=authorization_payload())
         )
         endpoint = WorkerServiceEndpoint(daemon_client=daemon_client)
 
-        observability_message = endpoint.handle_observability_message()
+        request_message = encode_worker_observability_request_envelope(
+            WorkerServiceObservabilityRequestEnvelope()
+        )
+        observability_message = handle_worker_observability_message(
+            endpoint,
+            request_message,
+        )
         observability = decode_worker_observability_snapshot(observability_message)
         expected_observability = decode_worker_observability_snapshot(
             encode_worker_observability_snapshot(endpoint.observability_snapshot())
@@ -1870,7 +1889,7 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(observability["health"]["status"], "ready")
         self.assertEqual(observability["metrics"]["request_bytes_total"], 0)
 
-    def test_worker_service_endpoint_observability_message_populated(self) -> None:
+    def test_worker_service_observability_message_populated(self) -> None:
         daemon_client = FakeDaemonClient(
             DaemonResponse(ok=True, payload=authorization_payload())
         )
@@ -1881,7 +1900,13 @@ class WorkerHelperTest(unittest.TestCase):
 
         response_message = endpoint.handle_message(request_message)
         event_snapshot = endpoint.event_snapshot()
-        observability_message = endpoint.handle_observability_message()
+        observability_request_message = encode_worker_observability_request_envelope(
+            WorkerServiceObservabilityRequestEnvelope()
+        )
+        observability_message = handle_worker_observability_message(
+            endpoint,
+            observability_request_message,
+        )
         observability = decode_worker_observability_snapshot(observability_message)
         expected_observability = decode_worker_observability_snapshot(
             encode_worker_observability_snapshot(endpoint.observability_snapshot())
@@ -1907,6 +1932,15 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(
             observability["metrics"]["response_bytes_total"],
             len(response_message.encode("utf-8")),
+        )
+        repeated_response_message = endpoint.handle_message(request_message)
+        repeated_response = decode_worker_response_envelope(
+            repeated_response_message
+        ).as_dict()
+        self.assertEqual(repeated_response["final_state"], "unsupported")
+        self.assertEqual(
+            repeated_response["completion"]["worker_result"]["state"],
+            "unsupported",
         )
 
     def test_worker_service_endpoint_clear_events_resets_snapshot(self) -> None:

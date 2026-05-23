@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 from typing import Mapping
 
-from .helper import WorkerServiceRequestEnvelope, WorkerServiceResponseEnvelope
+from .helper import (
+    WorkerServiceObservabilityRequestEnvelope,
+    WorkerServiceRequestEnvelope,
+    WorkerServiceResponseEnvelope,
+)
 
 
 class WorkerMessageCodecError(ValueError):
@@ -55,6 +59,28 @@ def decode_worker_response_envelope(
         raise WorkerMessageCodecError(str(exc)) from exc
 
 
+def encode_worker_observability_request_envelope(
+    envelope: WorkerServiceObservabilityRequestEnvelope,
+) -> str:
+    if not isinstance(envelope, WorkerServiceObservabilityRequestEnvelope):
+        raise TypeError(
+            "envelope must be a WorkerServiceObservabilityRequestEnvelope"
+        )
+    return _encode_json(envelope.as_dict())
+
+
+def decode_worker_observability_request_envelope(
+    message: str | bytes,
+) -> WorkerServiceObservabilityRequestEnvelope:
+    payload = _decode_json_mapping(message)
+    try:
+        return WorkerServiceObservabilityRequestEnvelope(
+            request_type=str(payload["request_type"])
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise WorkerMessageCodecError(str(exc)) from exc
+
+
 def handle_worker_service_message(
     service,
     message: str | bytes,
@@ -67,6 +93,17 @@ def handle_worker_service_message(
         )
     response = service.handle_envelope(request)
     return encode_worker_response_envelope(response)
+
+
+def handle_worker_observability_message(
+    endpoint,
+    message: str | bytes,
+) -> str:
+    try:
+        decode_worker_observability_request_envelope(message)
+    except WorkerMessageCodecError as exc:
+        raise WorkerMessageCodecError(str(exc)) from exc
+    return endpoint.handle_observability_message()
 
 
 def encode_worker_observability_snapshot(
@@ -135,11 +172,14 @@ def _optional_mapping(
 
 __all__ = [
     "WorkerMessageCodecError",
+    "decode_worker_observability_request_envelope",
     "decode_worker_observability_snapshot",
     "decode_worker_request_envelope",
     "decode_worker_response_envelope",
+    "encode_worker_observability_request_envelope",
     "encode_worker_observability_snapshot",
     "encode_worker_request_envelope",
     "encode_worker_response_envelope",
+    "handle_worker_observability_message",
     "handle_worker_service_message",
 ]
