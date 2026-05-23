@@ -649,11 +649,9 @@ class Runtime:
         return TransferHandle(self, handle, reservations)
 
     def wait(self, handle: "TransferHandle") -> None:
+        reservations = list(handle._daemon_reservations)
         try:
             self._runtime.wait(handle.native)
-            handle._status = "complete"
-            handle._stats = self.stats(handle)
-            self._report_daemon_transfer_status_for_handle(handle, "complete")
         except Exception as exc:
             self._report_daemon_transfer_status_for_handle(
                 handle,
@@ -661,10 +659,25 @@ class Runtime:
                 error=str(exc),
                 strict=False,
             )
-            raise
-        finally:
-            self._release_daemon_reservations(handle._daemon_reservations)
+            self._cleanup_daemon_reservations(
+                reservations,
+                reason="runtime_wait_failed",
+            )
             handle._daemon_reservations = []
+            raise
+        try:
+            handle._status = "complete"
+            handle._stats = self.stats(handle)
+            self._report_daemon_transfer_status_for_handle(handle, "complete")
+        except Exception:
+            self._cleanup_daemon_reservations(
+                reservations,
+                reason="daemon_status_report_failed",
+            )
+            handle._daemon_reservations = []
+            raise
+        self._release_daemon_reservations(reservations)
+        handle._daemon_reservations = []
 
     def stats(self, handle: "TransferHandle"):
         stats = self._runtime.stats(handle.native)
@@ -947,6 +960,29 @@ class Runtime:
             return
         for reservation_id in list(reservations):
             self._daemon_client.release_transfer(reservation_id)
+
+    def _cleanup_daemon_reservations(
+        self,
+        reservations: list[str],
+        *,
+        reason: str,
+    ) -> None:
+        if self._daemon_client is None:
+            return
+        cleanup = getattr(self._daemon_client, "cleanup", None)
+        if not callable(cleanup):
+            self._release_daemon_reservations(reservations)
+            return
+        for reservation_id in list(reservations):
+            try:
+                cleanup(
+                    target_kind="reservation",
+                    target_id=str(reservation_id),
+                    reason=reason,
+                    force=True,
+                )
+            except Exception:
+                continue
 
     def _report_daemon_transfer_status_for_handle(
         self,

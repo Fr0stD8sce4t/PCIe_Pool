@@ -673,6 +673,8 @@ class RuntimeDaemonReservationTest(unittest.TestCase):
             self.reserve_calls = []
             self.release_calls = []
             self.status_updates = []
+            self.cleanup_calls = []
+            self.status_response = None
 
         def register_session(self, target_gpu, relay_gpus, max_inflight_chunks=8):
             self.register_calls.append(
@@ -728,7 +730,26 @@ class RuntimeDaemonReservationTest(unittest.TestCase):
                     "error": error,
                 }
             )
+            if self.status_response is not None:
+                return self.status_response
             return DaemonResponse(ok=True, payload={"status": self.status_updates[-1]})
+
+        def cleanup(
+            self,
+            target_kind,
+            target_id,
+            reason,
+            force=False,
+        ):
+            self.cleanup_calls.append(
+                {
+                    "target_kind": str(target_kind),
+                    "target_id": str(target_id),
+                    "reason": str(reason),
+                    "force": bool(force),
+                }
+            )
+            return DaemonResponse(ok=True, payload={"cleanup": self.cleanup_calls[-1]})
 
     class PlanningDaemonClient(FakeDaemonClient):
         def __init__(self, plan_response: DaemonResponse) -> None:
@@ -1117,6 +1138,105 @@ class RuntimeDaemonReservationTest(unittest.TestCase):
             ],
         )
         self.assertEqual(client.release_calls, ["lease-1"])
+        self.assertEqual(handle._daemon_reservations, [])
+
+    def test_transfer_handle_wait_cleans_daemon_plan_on_native_failure(self) -> None:
+        self.RelayProfile.relays = [self.Relay()]
+        client = self.PlanningDaemonClient(
+            DaemonResponse(
+                ok=True,
+                payload={
+                    "transfer_id": "transfer-1",
+                    "transfer_status": {
+                        "transfer_id": "transfer-1",
+                        "bytes_total": 64,
+                    },
+                    "stats": {"resolved_mode": "pool", "fallback_reason": None},
+                    "leases": [{"relay_device": 1, "chunk_limit": 2, "bytes_limit": 64}],
+                    "reservations": [{"reservation_id": "lease-1"}],
+                },
+            )
+        )
+        runtime = self.make_runtime(client)
+        runtime.options.transfer_mode = TransferMode.POOL
+        reservations = runtime._resolve_transfer_with_daemon(
+            64,
+            direction="h2d",
+            range_count=2,
+        )
+        runtime._runtime = FailingRuntime()
+        handle = TransferHandle(runtime, NativeHandle(), reservations)
+
+        with self.assertRaisesRegex(RuntimeError, "simulated wait failure"):
+            handle.wait()
+
+        self.assertEqual(
+            client.status_updates,
+            [
+                {
+                    "transfer_id": "transfer-1",
+                    "state": "failed",
+                    "bytes_completed": 0,
+                    "error": "simulated wait failure",
+                }
+            ],
+        )
+        self.assertEqual(
+            client.cleanup_calls,
+            [
+                {
+                    "target_kind": "reservation",
+                    "target_id": "lease-1",
+                    "reason": "runtime_wait_failed",
+                    "force": True,
+                }
+            ],
+        )
+        self.assertEqual(client.release_calls, [])
+        self.assertEqual(handle._daemon_reservations, [])
+
+    def test_transfer_handle_wait_cleans_daemon_plan_on_status_report_failure(self) -> None:
+        self.RelayProfile.relays = [self.Relay()]
+        client = self.PlanningDaemonClient(
+            DaemonResponse(
+                ok=True,
+                payload={
+                    "transfer_id": "transfer-1",
+                    "transfer_status": {
+                        "transfer_id": "transfer-1",
+                        "bytes_total": 64,
+                    },
+                    "stats": {"resolved_mode": "pool", "fallback_reason": None},
+                    "leases": [{"relay_device": 1, "chunk_limit": 2, "bytes_limit": 64}],
+                    "reservations": [{"reservation_id": "lease-1"}],
+                },
+            )
+        )
+        client.status_response = DaemonResponse(ok=False, error="status unavailable")
+        runtime = self.make_runtime(client)
+        runtime.options.transfer_mode = TransferMode.POOL
+        reservations = runtime._resolve_transfer_with_daemon(
+            64,
+            direction="h2d",
+            range_count=2,
+        )
+        handle = TransferHandle(runtime, NativeHandle(), reservations)
+
+        with self.assertRaisesRegex(RuntimeError, "status unavailable"):
+            handle.wait()
+
+        self.assertEqual(
+            client.cleanup_calls,
+            [
+                {
+                    "target_kind": "reservation",
+                    "target_id": "lease-1",
+                    "reason": "daemon_status_report_failed",
+                    "force": True,
+                }
+            ],
+        )
+        self.assertEqual(client.release_calls, [])
         self.assertEqual(handle._daemon_reservations, [])
 
     def test_runtime_initializes_and_closes_daemon_session(self) -> None:

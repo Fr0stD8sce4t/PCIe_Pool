@@ -287,6 +287,10 @@ Completed current code cut:
 - Report daemon-plan completion from the runtime exact-plan baseline before
   releasing its relay reservation, keeping daemon status ownership aligned
   with worker/helper completion semantics.
+- Clean daemon-planned runtime baseline reservations when native wait or
+  daemon completion status reporting fails. These failure paths now use daemon
+  cleanup instead of normal release, so stricter planned-release semantics do
+  not leave relay reservations active.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -334,6 +338,8 @@ Completed current code cut:
    - Reject lease validation after the daemon-owned transfer status is terminal.
    - Reject normal reservation release for daemon-planned transfers until the
      daemon-owned transfer status is complete.
+   - Clean daemon-planned runtime baseline reservations when native wait or
+     daemon completion status reporting fails.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor

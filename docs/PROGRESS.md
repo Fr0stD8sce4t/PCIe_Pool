@@ -264,6 +264,10 @@ transfer request objects:
   releasing daemon-planned relay reservations after native wait succeeds,
   keeping the compatibility baseline aligned with the worker/helper status
   sequence.
+- the runtime exact-plan baseline now also cleans daemon-planned relay
+  reservations when native wait fails or daemon completion status reporting
+  fails. Those paths no longer call normal release after the daemon has a
+  failed or incomplete planned transfer.
 
 ## What Was Updated
 
@@ -817,6 +821,10 @@ phase:
     status to be complete first. Incomplete and failed planned transfers use
     cleanup, while the runtime exact-plan baseline reports complete status
     before releasing its relay reservation.
+92. runtime exact-plan failures now clean daemon-planned relay reservations.
+    Native wait failures and daemon completion status-report failures call
+    cleanup instead of normal release, preserving the stricter
+    daemon-planned completion rule without leaking relay quota.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
