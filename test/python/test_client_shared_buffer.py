@@ -12,9 +12,13 @@ from turbobus.schema import DaemonResponse
 
 class FakeCudaBackend:
     def __init__(self) -> None:
+        self.set_device_calls: list[int] = []
         self.register_calls: list[tuple[int, int]] = []
         self.unregister_calls: list[int] = []
         self.export_ipc_calls: list[int] = []
+
+    def set_device(self, device_index: int) -> None:
+        self.set_device_calls.append(int(device_index))
 
     def register_host_memory(self, host_ptr: int, bytes_: int) -> None:
         self.register_calls.append((int(host_ptr), int(bytes_)))
@@ -116,7 +120,7 @@ class SharedPinnedCpuBufferTest(unittest.TestCase):
         buffer = CudaIpcDeviceBuffer.from_device_pointer(
             buffer_id="gpu-buffer",
             job_id="job-1",
-            device_index=0,
+            device_index=3,
             size_bytes=64,
             device_ptr=1234,
             backend=backend,
@@ -124,6 +128,7 @@ class SharedPinnedCpuBufferTest(unittest.TestCase):
         registration = buffer.buffer_registration()
         response = buffer.register_with_daemon(daemon_client)
 
+        self.assertEqual(backend.set_device_calls, [3])
         self.assertEqual(backend.export_ipc_calls, [1234])
         self.assertEqual(registration.handle_type, "cuda_ipc_device")
         self.assertEqual(registration.metadata["cuda_ipc_handle"], (b"c" * 64).hex())

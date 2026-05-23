@@ -22,6 +22,16 @@ class CudaNativeBackend:
     def require_torch(self) -> None:
         self._runtime_engine._require_torch()
 
+    def set_device(self, device_index: int) -> None:
+        device = int(device_index)
+        if device < 0:
+            raise ValueError("device_index must be non-negative")
+        self.require_available()
+        setter = getattr(self._runtime_engine._turbobus, "set_device", None)
+        if not callable(setter):
+            raise RuntimeError("native runtime does not support CUDA device selection")
+        setter(device)
+
     def transfer_mode_value(self, mode: TransferMode | str) -> Any:
         return self._runtime_engine._runtime_transfer_mode_value(mode)
 

@@ -62,6 +62,14 @@ void CheckCuda(cudaError_t result, const char* message) {
 }  // namespace
 
 PYBIND11_MODULE(_turbobus, m) {
+  m.def("set_device",
+        [](int device_index) {
+          if (device_index < 0) {
+            throw std::invalid_argument("device_index must be non-negative");
+          }
+          CheckCuda(cudaSetDevice(device_index), "cudaSetDevice failed");
+        },
+        py::arg("device_index"), py::call_guard<py::gil_scoped_release>());
   m.def("register_host_memory",
         [](std::uintptr_t host_ptr, std::size_t bytes) {
           if (host_ptr == 0) {

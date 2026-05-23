@@ -155,6 +155,10 @@ transfer request objects:
   exact plan for direct and relay byte counts when native stats do not expose
   per-path byte fields, so pooled helper-socket verification can validate the
   daemon-approved direct-plus-relay split accurately;
+- CUDA IPC handle lifecycle now selects the registered GPU before handle
+  export, open, and close. The client exports handles on the buffer's
+  `device_index`, and the worker resource binder opens and closes CUDA IPC
+  pointers on the same registered device;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -622,6 +626,10 @@ phase:
     direct/relay byte counts from the daemon-issued exact plan. This keeps
     `turbobus.verification --mode pool` from treating a native stats object
     without per-path byte fields as an all-relay transfer.
+69. CUDA IPC handle export/open/close now switches to the registered buffer
+    device before touching the native CUDA IPC handle. This removes an
+    implicit GPU-0 assumption from the client-to-worker helper path and lets
+    server verification use nonzero target GPUs.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

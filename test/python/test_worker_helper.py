@@ -54,10 +54,14 @@ from turbobus.worker import (
 
 class FakeCudaBackend:
     def __init__(self) -> None:
+        self.set_device_calls: list[int] = []
         self.register_calls: list[tuple[int, int]] = []
         self.unregister_calls: list[int] = []
         self.open_ipc_calls: list[bytes] = []
         self.close_ipc_calls: list[int] = []
+
+    def set_device(self, device_index: int) -> None:
+        self.set_device_calls.append(int(device_index))
 
     def register_host_memory(self, host_ptr: int, bytes_: int) -> None:
         self.register_calls.append((int(host_ptr), int(bytes_)))
@@ -1146,6 +1150,48 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertTrue(executor.resources[0].cpu_buffer.closed)
         self.assertEqual(backend.open_ipc_calls, [b"t" * 64])
         self.assertEqual(backend.unregister_calls, [backend.register_calls[0][0]])
+        self.assertEqual(backend.close_ipc_calls, [4321])
+        self.assertEqual(daemon_client.release_requests, ["lease-1"])
+
+    def test_worker_client_sets_cuda_device_for_ipc_open_and_close(self) -> None:
+        class CompleteBoundExecutor:
+            def execute_bound(
+                self,
+                request: WorkerTransferRequest,
+                staging_slot: WorkerStagingSlot,
+                resources: WorkerDataPlaneResources,
+            ) -> WorkerTransferResult:
+                return WorkerTransferResult(
+                    transfer_id=request.transfer_id,
+                    state=WorkerTransferState.COMPLETE,
+                    bytes_completed=16,
+                    metadata={
+                        "device_ptr": resources.device_ptr,
+                        "staging_slot_id": staging_slot.slot_id,
+                    },
+                )
+
+        allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-worker-test")
+        backend = FakeCudaBackend()
+        with allocator.allocate("cpu-buffer", "job-1", 64) as source_buffer:
+            payload = authorization_payload_for_shared_cpu(source_buffer)
+            payload["authorization"]["dst_buffer"]["device_index"] = 2
+            daemon_client = FakeDaemonClient(
+                DaemonResponse(ok=True, payload=payload)
+            )
+            client = WorkerTransferClient(
+                daemon_client,
+                executor=CompleteBoundExecutor(),
+                resource_binder=WorkerDataPlaneResourceBinder(backend=backend),
+            )
+
+            lifecycle = client.submit_report_cleanup_lifecycle(
+                authorization_request()
+            )
+
+        self.assertEqual(lifecycle.final_state, "complete")
+        self.assertEqual(backend.set_device_calls, [2, 2])
+        self.assertEqual(backend.open_ipc_calls, [b"t" * 64])
         self.assertEqual(backend.close_ipc_calls, [4321])
         self.assertEqual(daemon_client.release_requests, ["lease-1"])
 

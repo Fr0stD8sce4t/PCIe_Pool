@@ -96,6 +96,7 @@ class WorkerDataPlaneResourceBinding:
         self.register_cuda_host = bool(register_cuda_host)
         self._resources: WorkerDataPlaneResources | None = None
         self._device_ptr: int | None = None
+        self._device_index: int | None = None
 
     def __enter__(self) -> WorkerDataPlaneResources:
         cpu_buffer: SharedPinnedCpuBuffer | None = None
@@ -107,6 +108,8 @@ class WorkerDataPlaneResourceBinding:
             )
             if self.register_cuda_host:
                 cpu_buffer.register_for_cuda(self.backend)
+            self._device_index = device_handle.device_index
+            _set_cuda_device_for_handle(self.backend, device_handle)
             self._device_ptr = _open_cuda_ipc_device_handle(
                 self.backend,
                 device_handle,
@@ -121,6 +124,7 @@ class WorkerDataPlaneResourceBinding:
             return self._resources
         except Exception as exc:
             if self._device_ptr is not None:
+                _set_cuda_device_index(self.backend, self._device_index)
                 self.backend.close_device_ipc_handle(self._device_ptr)
                 self._device_ptr = None
             if cpu_buffer is not None:
@@ -136,8 +140,10 @@ class WorkerDataPlaneResourceBinding:
                 self._resources = None
         finally:
             if self._device_ptr is not None:
+                _set_cuda_device_index(self.backend, self._device_index)
                 self.backend.close_device_ipc_handle(self._device_ptr)
                 self._device_ptr = None
+            self._device_index = None
 
 
 class WorkerDataPlaneResourceBinder:
@@ -197,6 +203,18 @@ def _open_cuda_ipc_device_handle(backend, handle: WorkerBufferHandle) -> int:
             "worker device binding requires a cuda_ipc_device handle"
         )
     return backend.open_device_ipc_handle(handle.metadata["cuda_ipc_handle"])
+
+
+def _set_cuda_device_for_handle(backend, handle: WorkerBufferHandle) -> None:
+    _set_cuda_device_index(backend, handle.device_index)
+
+
+def _set_cuda_device_index(backend, device_index: int | None) -> None:
+    if device_index is None:
+        return
+    setter = getattr(backend, "set_device", None)
+    if callable(setter):
+        setter(int(device_index))
 
 
 __all__ = [

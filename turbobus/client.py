@@ -265,6 +265,7 @@ class CudaIpcDeviceBuffer:
         ptr = int(device_ptr)
         if ptr <= 0:
             raise ValueError("device_ptr must be positive")
+        _set_cuda_device_if_available(backend, int(device_index))
         return cls(
             buffer_id=str(buffer_id),
             job_id=str(job_id),
@@ -301,6 +302,12 @@ class CudaIpcDeviceBuffer:
             handle_type="cuda_ipc_device",
             metadata=self.metadata,
         )
+
+
+def _set_cuda_device_if_available(backend, device_index: int) -> None:
+    setter = getattr(backend, "set_device", None)
+    if callable(setter):
+        setter(int(device_index))
 
 
 __all__ = [

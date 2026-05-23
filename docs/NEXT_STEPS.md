@@ -192,6 +192,10 @@ Completed current code cut:
   exact plan when the native stats object does not expose per-path byte
   fields. Pool verification now keeps the direct-plus-relay split tied to the
   daemon plan instead of defaulting all completed bytes to the relay path.
+- Select the CUDA device around CUDA IPC handle export, open, and close.
+  Client-side target/source handle export and worker-side device binding now
+  switch to the registered buffer's `device_index`, so helper-socket
+  verification is not implicitly limited to target GPU 0.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.

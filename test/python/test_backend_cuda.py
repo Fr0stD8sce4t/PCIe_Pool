@@ -17,11 +17,15 @@ class FakeNativeModule:
 
 class FakeHostRegisterNativeModule:
     def __init__(self) -> None:
+        self.set_device_calls = []
         self.register_host_memory_calls = []
         self.unregister_host_memory_calls = []
         self.export_device_ipc_handle_calls = []
         self.open_device_ipc_handle_calls = []
         self.close_device_ipc_handle_calls = []
+
+    def set_device(self, device_index):
+        self.set_device_calls.append(device_index)
 
     def register_host_memory(self, host_ptr, bytes_):
         self.register_host_memory_calls.append((host_ptr, bytes_))
@@ -257,10 +261,12 @@ class CudaNativeBackendTest(unittest.TestCase):
         engine._turbobus = native
         backend = CudaNativeBackend(engine)
 
+        backend.set_device(2)
         handle = backend.export_device_ipc_handle(100)
         ptr = backend.open_device_ipc_handle(handle.hex())
         backend.close_device_ipc_handle(ptr)
 
+        self.assertEqual(native.set_device_calls, [2])
         self.assertEqual(handle, b"i" * 64)
         self.assertEqual(native.export_device_ipc_handle_calls, [100])
         self.assertEqual(native.open_device_ipc_handle_calls, [b"i" * 64])
