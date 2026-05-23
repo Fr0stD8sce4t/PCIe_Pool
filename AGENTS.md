@@ -1,299 +1,179 @@
-# TurboBus Project Instructions
+# TurboBus Agent Instructions
 
-TurboBus is a research prototype for single-node PCIe bandwidth pooling for
-real large-model memory offload tasks. Treat the project as a daemon-managed
-LLM systems project, not as a memcpy benchmark or inference simulator.
+TurboBus should be treated as a paper-reproduction system project.
 
-The current core idea is:
+The target paper system is:
 
-- use direct `CPU pinned memory -> target GPU` transfer;
-- use relay `CPU pinned memory -> relay GPU -> target GPU` transfer;
-- split large tensor/block transfers across direct and relay paths;
-- use measured path performance to improve scheduling decisions;
-- expose production-shaped Python APIs for real inference/training systems:
-  on-demand model loading, vLLM KV cache offload/restore, and training offload.
+TurboBus: Pooling PCIe Bandwidth for LLM Workloads via Scale-Up Fabrics.
 
-## Scope
+The system goal is to pool otherwise idle PCIe bandwidth in a multi-GPU server
+for large-model memory movement. When a target GPU needs data from CPU memory,
+TurboBus should support both:
 
-Keep the first implementation single-node and CUDA-focused.
+- direct path: CPU pinned memory -> target GPU;
+- relay path: CPU pinned memory -> relay GPU -> target GPU.
 
-In scope:
+The relay path uses the relay GPU's PCIe link for the CPU-to-relay stage, then
+uses a scale-up GPU-GPU fabric such as NVLink, NVSwitch, or Infinity Fabric for
+the relay-to-target stage.
 
-- pinned host memory;
-- H2D and D2H transfers;
-- direct and relay GPU paths;
-- chunk/bucket scheduling;
-- CUDA streams/events;
-- path profiling and tuning;
-- per-path stats and plan tracing;
-- PyTorch tensor API;
-- real framework KV slot adapters;
-- vLLM integration hooks;
-- a per-node daemon for relay ownership, relay quota, and cross-job bandwidth
-  sharing policy.
+## Project Direction
 
-Out of scope unless explicitly requested:
+The next architecture should be designed around a privileged per-node daemon,
+cross-job resource discovery and scheduling, application isolation, real shared
+relay PCIe use, scale-up fabric backends, full LLM framework integration, and
+multi-tenant evaluation.
 
-- RDMA;
-- cross-node transfer;
-- HMC integration;
-- daemon-side CUDA IPC data movement;
-- broad vLLM/SGLang scheduler rewrites;
-- full KV cache state machine.
+Prefer rewriting major components when the existing code assumes a single
+process owns both target and relay GPUs.
 
-## Reference Projects
+Do not preserve old module boundaries just because they already exist.
 
-Use `references/` for design guidance only. Do not edit files under
-`references/`.
+## New Architecture
 
-Important lessons from local references:
+Build TurboBus around these layers:
 
-- LMCache: expose KV-cache style lifecycle APIs such as load, wait, save, and
-  wait-for-save; design for vLLM/SGLang-style connectors later.
-- Mooncake: model TurboBus as a transfer engine with batched data movement,
-  topology-aware path choice, and KV-cache-oriented benchmarks.
-- nvbandwidth: profiling should cover multiple copy patterns, bidirectional
-  behavior, JSON output, and median-based reporting.
-- checkpoint-engine: large object movement should use buckets, double buffering,
-  and pipelined execution when useful.
-- YALIS and MoE-Infinity: offload APIs should support prefetch modes, pinned CPU
-  storage, preallocated GPU buffers, and overlap with computation.
+1. Client API.
+   - Own user-facing transfer requests.
+   - Register CPU pinned buffers and target GPU buffers.
+   - Submit transfer requests to the daemon.
+   - Wait for transfer completion and expose stats.
+   - Do not choose unauthorized relay GPUs locally.
 
-## Development Roadmap
+2. Privileged daemon.
+   - Own global machine state.
+   - Discover GPUs, PCIe topology, NUMA topology, and scale-up fabric links.
+   - Track jobs, sessions, users, containers, and relay permissions.
+   - Measure and cache path profiles.
+   - Observe current PCIe and fabric utilization.
+   - Schedule direct and relay paths across jobs.
+   - Issue relay leases and enforce quotas.
+   - Reclaim resources after failures or timeout.
 
-Prefer small, verifiable steps. The project should move toward the TurboBus
-paper system: daemon-managed PCIe bandwidth pooling through relay GPUs, with
-real large-model integration points instead of simulated inference workloads.
+3. Worker or helper process.
+   - Own privileged data movement when relay GPUs are not visible to clients.
+   - Hold relay GPU access.
+   - Manage relay staging buffers.
+   - Use CUDA IPC, HIP IPC, or equivalent handles where required.
+   - Execute daemon-approved transfer plans.
 
-### Active Roadmap Files
+4. Fabric backend layer.
+   - Provide a common backend interface for CUDA/NVIDIA and ROCm/AMD.
+   - CUDA backend should cover PCIe, P2P, NVLink, and NVSwitch through CUDA
+     runtime/NVML where available.
+   - ROCm backend should cover HIP and Infinity Fabric through ROCm SMI or
+     equivalent APIs.
+   - Planner code must consume generic path capabilities, not CUDA-specific
+     objects.
 
-At the start of each coding turn, read these files and use them to choose the
-next implementation task:
+5. Planner and scheduler.
+   - Convert daemon resource state and request metadata into a chunk-level plan.
+   - Split work across direct and relay paths.
+   - Account for current load, link bandwidth, fabric bandwidth, relay quotas,
+     job policy, request size, and fallback rules.
 
-1. `docs/TURBOBUS_ROADMAP.md`
-2. `docs/NEXT_STEPS.md`
-3. `docs/PROGRESS.md`
+6. LLM framework adapters.
+   - Keep framework-specific logic outside the native data path.
+   - Support vLLM KV cache prefix save/restore first.
+   - Add model weight loading and training state offload adapters.
+   - Later targets may include DeepSpeed/FSDP, TensorRT-LLM, or SGLang.
 
-The task under `## Current` in `docs/NEXT_STEPS.md` is the default task. Do not
-replace this roadmap with isolated test, docs, summary, or benchmark parsing
-work unless that work directly unblocks the current code task.
+## Required System Capabilities
 
-After each coding turn:
+The reproduction target requires these capabilities:
 
-- update `docs/PROGRESS.md` with the work completed, verification performed,
-  commit id if one was created, and any remaining risk;
-- update `docs/NEXT_STEPS.md` when an item is completed or blocked;
-- when `## Current` is completed, move it to `## Completed` and promote the
-  first `## Upcoming` item to `## Current`.
+- privileged per-node daemon;
+- cross-job idle PCIe discovery;
+- daemon-managed relay leases;
+- full-machine transfer scheduling;
+- application isolation;
+- client operation without direct relay GPU visibility;
+- daemon/helper data path using IPC or equivalent safe handles;
+- direct, relay, and pooled transfer execution;
+- block-level pipelining;
+- fine-grained chunk placement;
+- concurrent multi-request scheduling;
+- NVIDIA CUDA/NVLink/NVSwitch backend;
+- AMD ROCm/Infinity Fabric backend;
+- vLLM KV cache connector that works through the real framework lifecycle;
+- model weight loading workload;
+- training offload workload;
+- multi-tenant benchmark suite.
 
-Tests are verification, not the main deliverable.
+## Milestones
 
-### Verification Policy
+M1: Define the new daemon/client/worker protocol.
 
-Do not run the same large test set after every code change. Pick the smallest
-checks that match the files and behavior changed in the current task.
+- Specify job registration, buffer registration, transfer request, transfer
+  planning, relay lease, transfer status, and cleanup messages.
+- Add tests for protocol validation.
 
-Default guidance:
+M2: Implement the new planner data model.
 
-- Documentation, roadmap, comments, or formatting-only edits: usually run only
-  `git diff --check`.
-- Narrow Python helper or API edits: run the directly related Python unit tests
-  and, when useful, `python -m compileall` for the touched package.
-- Runtime, planner, selector, stats, or daemon Python edits: run the related
-  Python test files for that area; do not default to full discovery unless the
-  change crosses several modules.
-- C++/CUDA/pybind edits: run the relevant native build and native correctness
-  checks on a server.
-- vLLM connector or vLLM benchmark edits: run a small vLLM smoke or sweep on
-  the server.
-- Full Python discovery, native CUDA tests, profiler tests, and long vLLM
-  sweeps are milestone checks, not per-commit defaults.
+- Define generic devices, links, path capabilities, chunks, plans, leases, and
+  stats.
+- Support direct-only, relay-only, and pooled plans.
+- Keep CUDA out of planner types.
 
-Each final report should say what was verified and why heavier checks were not
-run when they are not relevant.
+M3: Rebuild single-process CUDA execution on the new interfaces.
 
-After each code-advancement turn, include a small "related test commands"
-section in the final response. The commands must match the current change:
+- Reproduce current direct, relay, and pooled behavior.
+- Use this only as a compatibility baseline.
 
-- list the checks already run;
-- list the next useful local or server commands the user can run, if any;
-- avoid dumping the full CUDA/vLLM suite unless the change needs it;
-- include reinstall commands only after C++/CUDA/pybind changes.
+M4: Add daemon-issued plans with client-side execution.
 
-### Project Direction
+- The daemon chooses relay paths and returns a plan.
+- The client executes only daemon-approved paths.
+- This is an intermediate milestone, not the final isolation model.
 
-Advance TurboBus from a working research prototype into a usable KV/tensor
-transfer system for real inference frameworks. Do not let benchmark scripts
-become the system. Keep the project organized into three layers:
+M5: Add daemon/helper execution with CUDA IPC.
 
-1. Native transfer engine.
-   - Own C++/CUDA transfer execution, chunk planning, peer access, staging
-     buffers, direct/relay/pool paths, profiling, and low-level stats.
-   - Do not put vLLM request, prefix, token, or scheduler policy here.
+- Client should not need direct visibility of relay GPUs.
+- Worker/helper should own relay staging buffers.
+- Add ownership checks and lease-token validation.
 
-2. Python runtime API.
-   - Own `Runtime`, `RuntimeOptions`, transfer mode selection, profile cache,
-     transfer stats, `last_plan_dict()`, `last_auto_decision_dict()`, and
-     `batch_transfer_mode()`.
-   - Keep this API stable enough for framework integrations and benchmarks to
-     share the same entry points.
+M6: Add isolation and policy.
 
-3. Framework integration layer.
-   - Own vLLM connector logic, framework KV slot adapters, examples, and
-     framework-specific compatibility code.
-   - Keep integration code thin: translate framework lifecycle events into
-     TurboBus runtime calls, then report clear timing and transfer stats.
+- Track job/session/user/container identity.
+- Enforce relay access through leases.
+- Prevent unauthorized buffer or relay access.
+- Reclaim stale sessions and clear or protect reused staging buffers.
 
-Project priorities:
+M7: Build full vLLM KV cache integration.
 
-1. Stabilize the Runtime API.
-   - Make direct, relay, pool, and auto transfer behavior clear and
-     explainable.
-   - Keep profile refresh, fallback behavior, and plan reporting test-covered.
-   - Prefer one shared runtime path over duplicated benchmark-only logic.
+- Save prefixes from real vLLM-owned KV tensors.
+- Restore prefixes through the official vLLM connector lifecycle.
+- Report save/restore timing, bytes, chunks, path split, and fallback reason.
 
-2. Engineer the vLLM connector path.
-   - Define supported vLLM versions and configuration keys.
-   - Keep save/restore prefix lifecycle clear: request metadata, allocation,
-     connector metadata, worker transfer, prefix registration, completion, and
-     cleanup.
-   - Reduce example-side special cases as connector lifecycle support matures.
+M8: Add model loading and training offload adapters.
 
-3. Grow daemon and multi-process resource management.
-   - Use the daemon for session lifecycle, relay ownership, relay quota,
-     transfer reservations, shared profile cache, and cleanup after failures.
-   - Keep CUDA data movement in the runtime unless a daemon-side movement
-     design is explicitly requested.
+- Model loading should move CPU-backed weight buckets into GPU memory.
+- Training offload should move parameter or optimizer buckets both directions.
 
-4. Prove value with real workloads.
-   - Benchmarks should answer when TurboBus helps, when it does not, and why.
-   - Track TTFT, prefix restore latency, save overhead, throughput impact, relay
-     GPU pressure, transfer bytes, chunks, path choice, and fallback reason.
-   - Use microbenchmarks to debug transfer behavior, but prioritize real vLLM
-     generation paths for project decisions.
+M9: Add ROCm/Infinity Fabric backend.
 
-Near-term code direction:
+- Implement HIP transfer operations.
+- Discover AMD peer/fabric capabilities.
+- Run equivalent direct, relay, and pooled tests.
 
-1. Align README, examples, and benchmarks around the stable Runtime API.
-2. Consolidate vLLM connector configuration for mode, target GPU, relay GPUs,
-   prefix/session keys, restore/save flags, and prefix capacity.
-3. Keep one minimal real vLLM demo path that saves a prefix, restores it in a
-   later request, and reports connector events plus timing.
-4. Return to auto/chunk/profile strategy only after real workload results show
-   a specific gap.
+M10: Complete multi-tenant evaluation.
 
-Current completed baseline:
-
-- H2D and D2H direct transfers.
-- H2D and D2H relay transfers through a P2P-capable relay GPU.
-- Pooled direct + relay transfer.
-- Chunk planning, path stats, dynamic weights, and JSON/copy summaries.
-- Range batched transfer APIs.
-- A minimal named-block `OffloadStore`.
-- `bandwidth_pool.py` and `kv_offload.py` low-level validation benchmarks.
-- `turbobus.inference` and `turbobus.vllm` framework-facing APIs.
-
-Next steps:
-
-1. Make the Python offload object layer reusable by future connectors.
-   - Keep the C++/CUDA runtime as a transfer engine only.
-   - Keep request, decode-step, and KV-cache policy out of the CUDA executor.
-   - Add connector-shaped concepts at the Python layer: block id, CPU backing,
-     GPU slot, block state, async handle, and per-block stats.
-   - Keep `OffloadStore` backward compatible while it evolves toward an
-     `OffloadManager` / `KVBlockStore` style API.
-
-2. Add batch block operations on top of the existing transfer APIs.
-   - `prefetch_many(names)` and `evict_many(names)` are the stable benchmark
-     and future connector entry points.
-   - The simple per-block path is available and tested.
-   - Packed CPU/GPU backing buffers with per-block offsets are supported by
-     `OffloadStore`, the framework adapters, and the KV benchmark. Shared
-     backing buffers use `fetch_ranges_to_gpu` and `offload_ranges_to_cpu` for
-     many-block transfers.
-   - Keep the per-block path as a fallback for non-packed tensors.
-
-3. Build the real vLLM KV offload integration path.
-   - vLLM is the first real inference framework target.
-   - `turbobus.inference` defines framework KV slot registration and
-     restore/save.
-   - `turbobus.vllm` defines vLLM layer KV groups and block references.
-   - `turbobus.vllm_integration` installs a narrow real-vLLM hook that observes
-     `GPUModelRunner.kv_caches` and `KVCacheManager.allocate_slots()` results.
-   - `examples/vllm_introspect.py` and `examples/vllm_probe.py` are temporary
-     discovery tools for version-specific vLLM internals, not simulator code.
-   - The current server vLLM is
-     `0.17.1rc1.dev171+ga3e2e250f.d20260324`.
-   - The Qwen3-0.6B probe showed 28 layer KV tensors shaped
-     `(2, 9944, 16, 8, 128)` in bfloat16, with 65,536 bytes per layer block.
-   - Next priority: implement a real vLLM restore/save hook using vLLM-owned
-     `GPUModelRunner.kv_caches` tensors and block ids from `KVCacheManager`.
-     The first hook exists in `turbobus.vllm_integration`; keep evolving it
-     toward correctness and measurement inside an actual vLLM generation run.
-   - Compare direct, relay, and pool modes using the same manager API that a
-     future vLLM/SGLang connector would call.
-
-### Immediate vLLM Connector Goal
-
-The next connector milestone is a real vLLM `KVConnectorBase_V1` save/restore
-loop. Restore already runs through the official connector path. Save must also
-move into the connector lifecycle instead of being driven by example-side
-allocation hooks.
-
-Required shape:
-
-1. First request passes `kv_transfer_params` such as `turbobus.do_save`,
-   `turbobus.prefix_key`, `turbobus.save_blocks`, and
-   `turbobus.matched_tokens`.
-2. `TurboBusConnector.update_state_after_alloc()` or
-   `build_connector_meta(scheduler_output)` records the vLLM block ids that
-   should be saved.
-3. `TurboBusConnector.build_connector_meta()` sends save and restore metadata
-   through vLLM's connector metadata path.
-4. Worker-side connector code saves from vLLM-owned KV cache tensors into
-   connector-managed pinned CPU backing.
-5. The connector registers the saved prefix internally after save completes.
-6. `TurboBusConnector.request_finished()` delays block release only for save
-   requests that were actually queued, and `get_finished()` reports completed
-   saves.
-7. A later request passes `turbobus.do_restore` and restores that saved prefix
-   through `get_num_new_matched_tokens()`, `update_state_after_alloc()`,
-   `build_connector_meta()`, and `start_load_kv()`.
-
-The example should not call `register_saved_prefix()` or use the old
-`VllmTurboBusConnector` save path once this loop is in place. It should only
-create vLLM requests with connector `kv_transfer_params` and report the
-connector's emitted save/restore events.
-
-4. Add production-shaped offload clients for the three paper workloads.
-   - On-demand model loading: restore model-weight buckets into GPU memory.
-   - KV cache offloading: vLLM prefix/session save and restore.
-   - Training offload: expose block/bucket transfer hooks suitable for
-     ZeRO-Offload style optimizer or parameter movement.
-
-5. Expand daemon work toward the paper architecture.
-   - Use the daemon for relay quota, session tracking, profile cache sharing,
-     and multi-process coordination.
-   - Add transfer reservation APIs for relay bandwidth sharing across jobs.
-   - Keep process isolation: applications should borrow relay PCIe bandwidth
-     through daemon policy without directly controlling another job's GPU.
+- Measure single-job and multi-job behavior.
+- Measure direct vs relay vs pool.
+- Measure idle-relay benefit and relay contention.
+- Include vLLM KV restore latency, model load time, training step time,
+  throughput, fairness, and isolation tests.
 
 ## Coding Rules
 
-- Keep changes surgical and tied to the current step.
-- Prefer existing C++/CUDA/Python patterns in this repository.
-- Keep default transfer behavior unchanged unless the user explicitly asks to
-  change it.
-- Add tests or benchmark checks for planner, stats, and Python API changes.
-- If C++/pybind/CUDA files change, remind the user to reinstall the package
-  before server testing:
-
-```bash
-pip uninstall -y turbobus
-rm -rf build build-test build-temp *.egg-info turbobus/_turbobus*.so
-pip install -e .
-```
-
-- Prefer GPU pair target `6`, relay `5` for server benchmark examples unless
-  the user provides another topology.
-- Avoid GPU 0 in suggested benchmark commands.
+- Prefer simple, testable interfaces over patching around current assumptions.
+- Keep daemon control plane, worker data plane, planner, backend, and framework
+  adapters separate.
+- Do not let benchmark scripts become the system.
+- Do not place vLLM request or scheduler policy inside CUDA execution code.
+- Do not require application code to control another job's relay GPU in the
+  final design.
+- Keep direct transfer fallback available whenever relay scheduling or lease
+  acquisition fails.
+- Add focused tests with each protocol, scheduler, backend, or adapter change.
+- For documentation-only changes, `git diff --check` is sufficient.

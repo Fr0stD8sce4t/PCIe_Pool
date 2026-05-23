@@ -2,26 +2,8 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from enum import Enum
 
-
-class TransferMode(str, Enum):
-    AUTO = "auto"
-    POOL = "pool"
-    DIRECT = "direct"
-    RELAY = "relay"
-
-
-@dataclass(frozen=True)
-class AutoTransferDecision:
-    requested_mode: TransferMode
-    resolved_mode: TransferMode
-    request_bytes: int
-    request_chunks: int
-    direct_h2d_bw_gbps: float
-    relay_effective_bw_gbps: float
-    eligible_relay_devices: tuple[int, ...]
-    reason: str
+from .schema import AutoTransferDecision, TransferMode
 
 
 @dataclass(frozen=True)
@@ -194,3 +176,6 @@ class AutoTransferSelector:
             ),
             reason=str(reason),
         )
+
+
+__all__ = ["AutoTransferDecision", "AutoTransferSelector", "TransferMode"]

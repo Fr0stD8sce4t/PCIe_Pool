@@ -1,173 +1,118 @@
-# TurboBus MVP Design
+# TurboBus System Design
 
-This repository currently implements the first single-node TurboBus boundary:
+## Design Goal
 
-- pinned host memory to target GPU direct copy
-- pinned host memory to relay GPU staging buffer
-- relay GPU staging buffer to target GPU P2P copy
-- chunk-level scheduling
-- CUDA stream/event based relay flow
-- simple bandwidth profiler
-- thin Python/PyTorch API
-- daemon-managed session, relay quota, and transfer reservation control
+Build a daemon-managed PCIe bandwidth pooling system for LLM workloads.
 
-It intentionally does not implement RDMA, cross-node transfer, HMC integration,
-vLLM/SGLang patching, or a full KV cache state machine.
+The design should support:
+
+- direct CPU-to-target GPU transfer;
+- relay CPU-to-relay-GPU-to-target-GPU transfer;
+- chunked and pipelined transfer execution;
+- application isolation;
+- cross-job relay sharing;
+- CUDA and ROCm scale-up fabrics;
+- framework adapters for vLLM, model loading, and training offload.
+
+## Core Layers
+
+### Client API
+
+The client API is a thin submission layer.
+
+Responsibilities:
+
+- register pinned CPU buffers and destination GPU buffers;
+- submit transfer requests;
+- wait for transfer completion;
+- fetch transfer stats;
+- expose framework-facing adapters.
+
+The client must not decide unauthorized relay access on its own.
+
+### Privileged Daemon
+
+The daemon is the authority for relay sharing.
+
+Responsibilities:
+
+- discover machine topology;
+- observe current utilization;
+- track jobs, sessions, and users;
+- choose relay GPUs;
+- issue relay leases;
+- enforce quota and isolation;
+- reclaim stale resources;
+- publish cached profiles.
+
+### Worker Or Helper
+
+The worker/helper performs relay-side data movement when the client should not
+directly see relay GPUs.
+
+Responsibilities:
+
+- own relay GPU access;
+- manage staging buffers;
+- execute daemon-approved plans;
+- validate lease tokens;
+- clean up staging buffers.
+
+### Backend Layer
+
+Backends implement the actual copy operations.
+
+Required backend capabilities:
+
+- topology discovery;
+- peer capability discovery;
+- H2D, D2H, and P2P copy;
+- staging buffer allocation;
+- timing and stats collection;
+- handle export and import for safe cross-process use when needed.
+
+## Planner Model
+
+Planner inputs:
+
+- request bytes;
+- chunk size;
+- direction;
+- direct bandwidth estimates;
+- relay PCIe estimates;
+- relay fabric estimates;
+- current utilization;
+- relay permissions;
+- fallback policy.
+
+Planner outputs:
+
+- direct path chunk ranges;
+- relay path chunk ranges;
+- lease requirements;
+- estimated completion time;
+- fallback mode.
+
+The planner must be backend-neutral.
 
 ## Data Path
 
-```text
-direct:
-  CPU pinned memory -> target GPU
+1. Client registers job and buffers.
+2. Daemon validates identity and topology.
+3. Daemon grants a relay lease or falls back to direct.
+4. Client or worker submits the approved plan.
+5. Backend executes chunked copy on the selected paths.
+6. Client waits for completion and receives stats.
 
-relay:
-  CPU pinned memory -> relay GPU staging slot
-  relay GPU staging slot -> target GPU
-```
+## Isolation Rules
 
-Each relay owns:
+- A job cannot borrow another job's relay GPU without daemon approval.
+- Relay staging buffers must not leak data between jobs.
+- Lease expiry must trigger cleanup.
+- Unauthorized requests must fail cleanly or fall back.
 
-- one H2D stream
-- one P2P stream
-- a ring of staging slots
-- one `h2d_done` event per staging slot
-- one `p2p_done` event per staging slot
+## Implementation Rule
 
-Before reusing a staging slot, the H2D stream waits for the previous `p2p_done`
-event for that slot. This prevents the next host-to-relay copy from overwriting
-data that is still being forwarded to the target GPU.
-
-## Planner
-
-The first planner is deliberately simple. It builds paths from profiler output:
-
-- direct path bandwidth is `CPU -> target GPU`
-- relay path bandwidth is `min(CPU -> relay GPU, relay GPU -> target GPU)`
-
-Chunks are assigned by the current normalized assigned bytes over path bandwidth.
-This approximates bandwidth-proportional distribution without adding a complex
-runtime scheduler.
-
-The planner supports three transfer modes:
-
-- `pool`: use direct and relay paths together
-- `direct`: use only `CPU -> target GPU`
-- `relay`: use only `CPU -> relay GPU -> target GPU`
-
-In `pool` mode, requests with fewer than `min_chunks_for_relay` chunks fall back
-to direct-only transfer. The default threshold is 2 chunks. This keeps small
-requests from paying relay overhead when there is not enough work to split.
-
-Relay paths can also be filtered conservatively before planning:
-
-- `relay_min_effective_bw_gbps` skips relays below an absolute effective
-  bandwidth
-- `relay_min_direct_ratio` skips relays whose effective bandwidth is below a
-  fraction of the direct H2D bandwidth
-
-Both filters default to 0, so the default planner behavior is unchanged.
-
-The pool benchmark now uses this production planner for pooled transfers instead
-of a hand-written even/odd chunk split.
-
-`benchmarks/bandwidth_pool.py` can emit a JSON report with the run config,
-profile result, per-mode samples, medians, speedups, last transfer plan, and
-optional correctness check. `benchmarks/tune_transfer.py` sweeps chunk sizes and
-staging slot counts and reports the best median pooled bandwidth for the tested
-target/relay pair.
-
-## Python API
-
-The Python wrapper only accepts contiguous PyTorch tensors:
-
-- source tensor must be CPU pinned memory
-- destination tensor must be CUDA memory on the runtime target GPU
-- copy size is derived from the source tensor byte size
-
-The runtime also exposes `offload_to_cpu(gpu_tensor, cpu_tensor)` for D2H
-offload into pinned CPU memory. The first D2H implementation mirrors the H2D
-planner shape: direct copies use `target GPU -> CPU pinned`, and relay copies
-use `target GPU -> relay GPU staging -> CPU pinned`.
-
-The native extension receives raw tensor pointers and byte counts.
-
-`TransferHandle.wait()` populates a lightweight stats object with total bytes,
-direct/relay bytes, per-relay bytes and chunk counts, CUDA event elapsed time,
-submit-to-complete wall-clock time, per-path CUDA timing, GiB/s, and
-direct/relay chunk counts. `gib_per_second` is based on CUDA event timing;
-`submit_gib_per_second` is based on the wall-clock time between submit and wait
-completion.
-
-`TransferStats.path_stats` records one entry per planned path assignment. Each
-entry includes the path kind, transfer direction, relay device, bytes, chunks,
-CUDA elapsed time, and path-local GiB/s. For a pooled direct + relay transfer
-this makes it possible to see which path is the bottleneck without changing the
-transfer schedule.
-
-Dynamic weights can be enabled through `RuntimeOptions.enable_dynamic_weights`.
-When enabled, completed H2D `path_stats` update a per-runtime planner profile
-using an exponential moving average controlled by `dynamic_weight_alpha`. The
-default is disabled, so profile-based planning and transfer behavior stay
-unchanged unless requested.
-
-The runtime keeps the last generated `TransferPlan`. Python callers can inspect
-it through `Runtime.last_plan_dict()` to see which chunks used the direct path
-and which chunks used each relay GPU.
-
-The first batched API supports multiple byte ranges inside one pinned CPU
-buffer and one GPU buffer. `fetch_ranges_to_gpu` and `offload_ranges_to_cpu`
-accept ranges with `src_offset`, `dst_offset`, and `bytes`. The planner splits
-each range by `chunk_bytes`, preserves the range offsets in the generated
-chunks, and then assigns those chunks across direct and relay paths using the
-same bandwidth-proportional scheduler. This keeps the simple contiguous tensor
-API intact while allowing KV-block-like copy batches.
-
-The runtime caches the first profile result and reuses it for subsequent
-transfers. By default, profiling runs on the first transfer. This can be disabled
-through `RuntimeOptions.profile_on_first_transfer`, in which case the runtime
-falls back to equal path weights until `profile()` is called explicitly.
-Calling `profile(force=True)` refreshes the cached measurement.
-
-`RuntimeOptions.from_tuning_json(path)` reads the best chunk size and staging
-slot count from a tuner JSON output. `RuntimeOptions.from_profile_json(path)`
-reads the benchmark profile config fields that are useful for recreating a
-runtime configuration.
-
-## Daemon Boundary
-
-The first daemon version is a resource-control skeleton served over a local
-Unix socket. It tracks:
-
-- sessions
-- relay GPU quotas
-- max sessions per relay
-- max inflight chunks per relay
-
-It does not transfer GPU pointers across processes. Client processes still run
-the CUDA transfer locally after reserving relay resources. This avoids taking on
-CUDA IPC and cross-process pointer lifetime issues before the core relay transfer
-path is validated.
-
-Supported requests in this MVP:
-
-- `REGISTER_SESSION`
-- `PROFILE`
-- `RESERVE_TRANSFER`
-- `RELEASE_TRANSFER`
-- `CLOSE_SESSION`
-
-`FETCH_TO_GPU` is reserved in the protocol enum for later expansion, but it is
-not wired to cross-process execution in this version.
-
-When `RuntimeOptions.daemon_socket_path` is set, Runtime registers a daemon
-session during construction. Before a relay or pooled transfer it reserves the
-relay chunk budget through the daemon, then releases that reservation after
-`TransferHandle.wait()` completes or fails. If the reservation is denied,
-Runtime sets the native transfer mode to direct for that request so another
-process's relay quota is respected.
-
-## Validation Status
-
-No build or runtime tests have been executed in this environment. The code needs
-to be built and validated on a CUDA machine with at least two P2P-capable GPUs
-before claiming functional correctness or performance.
+If a feature requires the client to own both target and relay GPUs, it is not a
+final-system feature. It may be a temporary development check, but not the
+production architecture.

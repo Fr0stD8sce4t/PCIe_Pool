@@ -10,6 +10,16 @@ from .offload_store import (
     summarize_transfer_handles,
 )
 from .model_loading import ModelLoader, ModelWeightLoader
+from .planner_types import (
+    PlannerChunk,
+    PlannerDevice,
+    PlannerLease,
+    PlannerLink,
+    PlannerPath,
+    PlannerPathAssignment,
+    PlannerStats,
+    PlannerTransferPlan,
+)
 from .training_offload import TrainingOffloadManager, TrainingOffloadStore
 from .inference import (
     FrameworkKVSlot,
@@ -18,13 +28,9 @@ from .inference import (
     InferenceKVSlotAdapter,
     make_contiguous_kv_slots,
 )
-from .runtime import (
-    AutoTransferDecision,
-    AutoTransferSelector,
-    Runtime,
-    RuntimeOptions,
-    TransferMode,
-)
+from .runtime import AutoTransferSelector, Runtime
+from .runtime_engine import RuntimeOptions
+from .schema import AutoTransferDecision, TransferMode
 from .vllm import (
     VllmKVBlockRef,
     VllmKVGroup,
@@ -58,6 +64,14 @@ __all__ = [
     "KVBlockStore",
     "ModelLoader",
     "ModelWeightLoader",
+    "PlannerChunk",
+    "PlannerDevice",
+    "PlannerLease",
+    "PlannerLink",
+    "PlannerPath",
+    "PlannerPathAssignment",
+    "PlannerStats",
+    "PlannerTransferPlan",
     "OffloadBlock",
     "OffloadBatch",
     "OffloadBlockInfo",

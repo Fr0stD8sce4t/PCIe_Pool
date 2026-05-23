@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+from .planner_types import PlannerTransferPlan
+
 
 def transfer_plan_to_dict(plan) -> dict:
+    if isinstance(plan, PlannerTransferPlan):
+        return plan.as_dict()
+    as_dict = getattr(plan, "as_dict", None)
+    if callable(as_dict):
+        result = as_dict()
+        if isinstance(result, dict):
+            return result
     assignments = []
     for assignment in plan.assignments:
         path = assignment.path
