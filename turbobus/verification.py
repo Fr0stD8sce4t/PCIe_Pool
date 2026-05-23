@@ -28,6 +28,7 @@ from .worker import WorkerServiceSocketClient, run_worker_helper_process
 @dataclass(frozen=True)
 class WorkerManagedRelayVerificationResult:
     direction: str
+    transfer_mode: str
     transfer_id: str
     job_id: str
     bytes_requested: int
@@ -36,6 +37,9 @@ class WorkerManagedRelayVerificationResult:
     relay_gpu: int
     state: str
     worker_final_state: str | None
+    worker_path: str
+    worker_direct_bytes: int
+    worker_direct_chunks: int
     worker_relay_bytes: int
     worker_relay_chunks: int
     daemon_reservations_released: bool
@@ -61,6 +65,7 @@ def verify_worker_managed_h2d_relay(
     relay_gpu: int = 1,
     bytes_to_copy: int = 1024 * 1024,
     chunk_bytes: int = 1024 * 1024,
+    mode: str = "relay",
     max_inflight_chunks: int = 8,
     socket_dir: str | None = None,
     startup_timeout_seconds: float = 10.0,
@@ -79,6 +84,7 @@ def verify_worker_managed_h2d_relay(
         relay_gpu=relay_gpu,
         bytes_to_copy=bytes_to_copy,
         chunk_bytes=chunk_bytes,
+        mode=mode,
         max_inflight_chunks=max_inflight_chunks,
         socket_dir=socket_dir,
         startup_timeout_seconds=startup_timeout_seconds,
@@ -91,6 +97,7 @@ def verify_worker_managed_d2h_relay(
     relay_gpu: int = 1,
     bytes_to_copy: int = 1024 * 1024,
     chunk_bytes: int = 1024 * 1024,
+    mode: str = "relay",
     max_inflight_chunks: int = 8,
     socket_dir: str | None = None,
     startup_timeout_seconds: float = 10.0,
@@ -104,6 +111,7 @@ def verify_worker_managed_d2h_relay(
         relay_gpu=relay_gpu,
         bytes_to_copy=bytes_to_copy,
         chunk_bytes=chunk_bytes,
+        mode=mode,
         max_inflight_chunks=max_inflight_chunks,
         socket_dir=socket_dir,
         startup_timeout_seconds=startup_timeout_seconds,
@@ -118,6 +126,7 @@ def _verify_worker_managed_relay(
     relay_gpu: int,
     bytes_to_copy: int,
     chunk_bytes: int,
+    mode: str,
     max_inflight_chunks: int,
     socket_dir: str | None,
     startup_timeout_seconds: float,
@@ -126,6 +135,9 @@ def _verify_worker_managed_relay(
     direction = str(direction).lower()
     if direction not in {"h2d", "d2h"}:
         raise ValueError("direction must be h2d or d2h")
+    mode = str(mode).lower()
+    if mode not in {"relay", "pool"}:
+        raise ValueError("mode must be relay or pool")
     target = int(target_gpu)
     relay = int(relay_gpu)
     total_bytes = int(bytes_to_copy)
@@ -134,14 +146,16 @@ def _verify_worker_managed_relay(
         raise ValueError("bytes_to_copy must be positive")
     if chunk_size <= 0:
         raise ValueError("chunk_bytes must be positive")
+    if mode == "pool" and total_bytes <= chunk_size:
+        raise ValueError("pool verification requires at least two chunks")
     if int(max_inflight_chunks) <= 0:
         raise ValueError("max_inflight_chunks must be positive")
 
     torch = _require_cuda_environment(target, relay)
     pattern = _make_pattern(total_bytes)
-    job_id = f"verify-worker-{direction}-{os.getpid()}-{time.time_ns()}"
+    job_id = f"verify-worker-{direction}-{mode}-{os.getpid()}-{time.time_ns()}"
     allocator = SharedPinnedCpuBufferAllocator(
-        name_prefix=f"tb-worker-{direction}-verify"
+        name_prefix=f"tb-worker-{direction}-{mode}-verify"
     )
 
     with tempfile.TemporaryDirectory(dir=socket_dir) as tmpdir:
@@ -210,7 +224,7 @@ def _verify_worker_managed_relay(
                     gpu_buffer,
                     ranges=({"src_offset": 0, "dst_offset": 0, "bytes": total_bytes},),
                     chunk_bytes=chunk_size,
-                    mode="relay",
+                    mode=mode,
                     job_id=job_id,
                 )
                 torch.cuda.synchronize(target)
@@ -240,7 +254,7 @@ def _verify_worker_managed_relay(
                     cpu_buffer,
                     ranges=({"src_offset": 0, "dst_offset": 0, "bytes": total_bytes},),
                     chunk_bytes=chunk_size,
-                    mode="relay",
+                    mode=mode,
                     job_id=job_id,
                 )
                 torch.cuda.synchronize(target)
@@ -265,21 +279,24 @@ def _verify_worker_managed_relay(
                 else dict(worker_completion.worker_result)
             )
             metadata = dict(worker_result.get("metadata") or {})
-            expected_path = f"relay_{direction}"
-            if metadata.get("path") != expected_path:
-                raise RuntimeError(
-                    f"worker did not report the {expected_path} executor path"
-                )
+            worker_path = str(metadata.get("path", ""))
+            direct_bytes = int(metadata.get("direct_bytes", 0) or 0)
+            direct_chunks = int(metadata.get("direct_chunks", 0) or 0)
             relay_bytes = int(metadata.get("relay_bytes", 0) or 0)
             relay_chunks = int(metadata.get("relay_chunks", 0) or 0)
-            if relay_bytes != total_bytes:
-                raise RuntimeError(
-                    f"worker relay bytes mismatch: {relay_bytes} != {total_bytes}"
-                )
-            if relay_chunks <= 0:
-                raise RuntimeError("worker did not report relay chunks")
+            _assert_worker_path_split(
+                direction=direction,
+                mode=mode,
+                total_bytes=total_bytes,
+                worker_path=worker_path,
+                direct_bytes=direct_bytes,
+                direct_chunks=direct_chunks,
+                relay_bytes=relay_bytes,
+                relay_chunks=relay_chunks,
+            )
             return result_type(
                 direction=direction,
+                transfer_mode=mode,
                 transfer_id=transfer.transfer_id,
                 job_id=job_id,
                 bytes_requested=total_bytes,
@@ -290,6 +307,9 @@ def _verify_worker_managed_relay(
                 worker_final_state=(
                     None if worker_completion is None else worker_completion.final_state
                 ),
+                worker_path=worker_path,
+                worker_direct_bytes=direct_bytes,
+                worker_direct_chunks=direct_chunks,
                 worker_relay_bytes=relay_bytes,
                 worker_relay_chunks=relay_chunks,
                 daemon_reservations_released=reservations_released,
@@ -312,6 +332,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         description="Verify TurboBus worker-managed CUDA relay over helper socket",
     )
     parser.add_argument("--direction", choices=["h2d", "d2h"], default="h2d")
+    parser.add_argument("--mode", choices=["relay", "pool"], default="relay")
     parser.add_argument("--target-gpu", type=int, default=0)
     parser.add_argument("--relay-gpu", type=int, default=1)
     parser.add_argument("--bytes", type=int, default=1024 * 1024)
@@ -331,6 +352,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         relay_gpu=args.relay_gpu,
         bytes_to_copy=args.bytes,
         chunk_bytes=args.chunk_bytes,
+        mode=args.mode,
         max_inflight_chunks=args.max_inflight_chunks,
         socket_dir=args.socket_dir,
         startup_timeout_seconds=args.startup_timeout_seconds,
@@ -508,6 +530,41 @@ def _assert_transfer_complete(transfer, total_bytes: int) -> None:
         raise RuntimeError(
             "worker helper did not complete: "
             f"{transfer.worker_completion.final_state}"
+        )
+
+
+def _assert_worker_path_split(
+    *,
+    direction: str,
+    mode: str,
+    total_bytes: int,
+    worker_path: str,
+    direct_bytes: int,
+    direct_chunks: int,
+    relay_bytes: int,
+    relay_chunks: int,
+) -> None:
+    expected_path = f"{mode}_{direction}"
+    if worker_path != expected_path:
+        raise RuntimeError(f"worker did not report the {expected_path} executor path")
+    if relay_chunks <= 0:
+        raise RuntimeError("worker did not report relay chunks")
+    if relay_bytes <= 0:
+        raise RuntimeError("worker did not report relay bytes")
+    if mode == "relay":
+        if direct_bytes != 0 or direct_chunks != 0:
+            raise RuntimeError("relay verification unexpectedly reported direct work")
+        if relay_bytes != total_bytes:
+            raise RuntimeError(
+                f"worker relay bytes mismatch: {relay_bytes} != {total_bytes}"
+            )
+        return
+    if direct_chunks <= 0 or direct_bytes <= 0:
+        raise RuntimeError("pool verification did not report direct chunks")
+    if direct_bytes + relay_bytes != total_bytes:
+        raise RuntimeError(
+            "worker pool byte split mismatch: "
+            f"{direct_bytes} + {relay_bytes} != {total_bytes}"
         )
 
 

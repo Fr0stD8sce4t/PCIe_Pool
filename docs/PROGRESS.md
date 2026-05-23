@@ -99,6 +99,10 @@ transfer request objects:
 - the native CUDA relay executor now clears worker-owned relay staging slots
   when they are allocated, after H2D and D2H relay use, and before release so
   reused relay staging memory does not retain another transfer's bytes;
+- `turbobus.verification` now accepts `--mode relay|pool`. Pool mode runs the
+  same helper-socket worker-managed path against a daemon-issued
+  direct-plus-relay plan and verifies that worker completion reports both
+  direct and relay byte movement;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -324,6 +328,8 @@ transfer request objects:
 - Added verification daemon coverage showing the seeded server profile can
   issue a D2H relay plan and lease for CUDA IPC source to shared pinned CPU
   destination verification.
+- Added verification daemon coverage showing the seeded server profile can
+  issue H2D and D2H pool plans with both direct and relay assignments.
 
 ## Immediate Goal
 
@@ -490,6 +496,9 @@ phase:
 54. the native worker relay path now protects reused staging buffers. Relay
     staging memory is initialized clear, cleared after each relay chunk leaves
     the staging slot, and cleared before the slot is freed.
+55. the CUDA-server verification entry point now has a pool mode. It can verify
+    daemon-issued direct-plus-relay worker-managed plans for H2D or D2H and
+    checks that the worker reports both path classes.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
@@ -500,8 +509,9 @@ The next code should verify the worker-managed relay calls on a CUDA server
 through the helper socket by running `python -m turbobus.verification
 --direction h2d` and `python -m turbobus.verification --direction d2h`. If
 either fails, the next code should fix the failing real data-path layer before
-adding new functionality. If both pass, the next functional expansion should
-deepen direct-plus-relay verification through the same daemon plan path.
+adding new functionality. If both pass, the next functional check should run
+the same verifier with `--mode pool` to prove direct-plus-relay byte movement
+through the daemon plan path.
 
 ## Verification
 
@@ -549,6 +559,8 @@ $env:PYTHONPATH='.'; python -m compileall turbobus
 - keep direct fallback available when relay lease or worker execution fails;
 - verify native relay staging clear/protection on a CUDA server as part of the
   H2D and D2H worker-managed relay runs;
+- verify daemon-issued pool mode on a CUDA server for the same helper-socket
+  worker-managed path;
 - defer more protocol, socket, observability, and smoke-test work unless it
   directly unblocks the functional data path;
 - reconnect vLLM, model loading, and training offload only after the

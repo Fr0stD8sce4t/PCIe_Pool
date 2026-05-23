@@ -139,6 +139,10 @@ Completed current code cut:
   staging slots are zeroed after H2D and D2H relay use, initialized clear when
   allocated, and cleared again before release so reused relay buffers do not
   retain another transfer's bytes.
+- Extend the CUDA-server helper-socket verifier to daemon-issued pool plans.
+  `python -m turbobus.verification --mode pool` now requires a multi-chunk
+  transfer, runs the worker-managed call with a daemon `direct + relay` plan,
+  and checks that worker completion reports both direct and relay bytes.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -161,8 +165,8 @@ Completed current code cut:
      worker-managed call, pending CUDA-server byte verification through
      `python -m turbobus.verification --direction d2h`.
    - Add pooled direct-plus-relay execution through daemon-issued chunks; done
-     for the narrow H2D single-relay worker-managed path, pending CUDA-server
-     byte verification.
+     for the narrow single-relay worker-managed path, pending CUDA-server byte
+     verification through `python -m turbobus.verification --mode pool`.
    - Keep the executor limited to daemon-authorized plans and handles.
 
 ## Defer For Now
