@@ -135,6 +135,10 @@ Completed current code cut:
   turbobus.verification --direction d2h` now allocates a real CUDA IPC source,
   offloads it into a shared pinned CPU destination through the daemon-approved
   worker/helper path, checks destination bytes, and asserts reservation release.
+- Protect worker-owned relay staging memory in the native CUDA data path. Relay
+  staging slots are zeroed after H2D and D2H relay use, initialized clear when
+  allocated, and cleared again before release so reused relay buffers do not
+  retain another transfer's bytes.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -147,7 +151,8 @@ Completed current code cut:
 
 2. Add cleanup and isolation only where the real path needs it.
    - Validate lease tokens before touching relay resources.
-   - Clear or protect reused relay staging buffers.
+   - Clear or protect reused relay staging buffers; done for the native CUDA
+     relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion.
 
 3. Extend the worker executor only after the functional call works.

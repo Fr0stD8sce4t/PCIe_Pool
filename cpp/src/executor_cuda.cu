@@ -155,6 +155,12 @@ struct CudaRelayExecutor::Impl {
     return path_timing;
   }
 
+  void ClearStagingSlot(void* slot, cudaStream_t stream, const char* label) {
+    CheckCuda(cudaMemsetAsync(slot, 0, options.chunk_bytes, stream),
+              (std::string(label) + " cudaMemsetAsync staging clear failed")
+                  .c_str());
+  }
+
   cudaEvent_t RecordCompletion(cudaStream_t stream, const char* label) {
     cudaEvent_t completion = nullptr;
     CheckCuda(cudaEventCreateWithFlags(&completion, cudaEventDisableTiming),
@@ -226,6 +232,7 @@ struct CudaRelayExecutor::Impl {
                                     target_device, slot, relay.relay_device,
                                     chunk.bytes, relay.p2p_stream),
                 "relay p2p cudaMemcpyPeerAsync failed");
+      ClearStagingSlot(slot, relay.p2p_stream, "relay h2d");
       CheckCuda(cudaEventRecord(p2p_done, relay.p2p_stream),
                 "cudaEventRecord relay p2p_done failed");
       relay.slot_ready_events[slot_index] = p2p_done;
@@ -277,6 +284,7 @@ struct CudaRelayExecutor::Impl {
       CheckCuda(cudaMemcpyAsync(host_bytes + chunk.dst_offset, slot, chunk.bytes,
                                 cudaMemcpyDeviceToHost, relay.h2d_stream),
                 "relay d2h cudaMemcpyAsync failed");
+      ClearStagingSlot(slot, relay.h2d_stream, "relay d2h");
       CheckCuda(cudaEventRecord(h2d_done, relay.h2d_stream),
                 "cudaEventRecord relay d2h_done failed");
       relay.slot_ready_events[slot_index] = h2d_done;
@@ -447,6 +455,21 @@ struct CudaRelayExecutor::Impl {
     }
 
     for (auto& [_, relay] : relays) {
+      IgnoreCuda(cudaSetDevice(relay.relay_device));
+      if (relay.h2d_stream != nullptr) {
+        IgnoreCuda(cudaStreamSynchronize(relay.h2d_stream));
+      }
+      if (relay.p2p_stream != nullptr) {
+        IgnoreCuda(cudaStreamSynchronize(relay.p2p_stream));
+      }
+      for (void* slot : relay.staging_slots) {
+        if (slot != nullptr) {
+          if (options.chunk_bytes > 0) {
+            IgnoreCuda(cudaMemset(slot, 0, options.chunk_bytes));
+          }
+          IgnoreCuda(cudaFree(slot));
+        }
+      }
       for (auto event : relay.h2d_done_events) {
         if (event != nullptr) {
           IgnoreCuda(cudaEventDestroy(event));
@@ -462,12 +485,6 @@ struct CudaRelayExecutor::Impl {
       }
       if (relay.p2p_stream != nullptr) {
         IgnoreCuda(cudaStreamDestroy(relay.p2p_stream));
-      }
-      IgnoreCuda(cudaSetDevice(relay.relay_device));
-      for (void* slot : relay.staging_slots) {
-        if (slot != nullptr) {
-          IgnoreCuda(cudaFree(slot));
-        }
       }
     }
     relays.clear();
@@ -525,6 +542,9 @@ void CudaRelayExecutor::Init(int target_device, const std::vector<int>& relay_de
         CheckCuda(cudaMalloc(&relay.staging_slots[static_cast<std::size_t>(i)],
                              options.chunk_bytes),
                   "cudaMalloc relay staging failed");
+        CheckCuda(cudaMemset(relay.staging_slots[static_cast<std::size_t>(i)], 0,
+                             options.chunk_bytes),
+                  "cudaMemset relay staging clear failed");
         CheckCuda(cudaEventCreateWithFlags(&relay.h2d_done_events[static_cast<std::size_t>(i)],
                                            cudaEventDisableTiming),
                   "cudaEventCreate relay h2d_done failed");

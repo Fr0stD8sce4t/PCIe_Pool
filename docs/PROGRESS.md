@@ -96,6 +96,9 @@ transfer request objects:
   verification. The D2H mode allocates a CUDA IPC GPU source, offloads through
   the daemon-approved worker/helper path into shared pinned CPU memory, checks
   destination bytes, and asserts daemon reservation release;
+- the native CUDA relay executor now clears worker-owned relay staging slots
+  when they are allocated, after H2D and D2H relay use, and before release so
+  reused relay staging memory does not retain another transfer's bytes;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -484,6 +487,9 @@ phase:
 53. the CUDA-server verification entry point now has a D2H mode. The same
     spawned daemon and worker helper path can move real bytes from a CUDA IPC
     source into shared pinned CPU memory and check the host destination.
+54. the native worker relay path now protects reused staging buffers. Relay
+    staging memory is initialized clear, cleared after each relay chunk leaves
+    the staging slot, and cleared before the slot is freed.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
@@ -541,7 +547,8 @@ $env:PYTHONPATH='.'; python -m compileall turbobus
 - verify the worker-managed D2H call on a CUDA server against a real CUDA IPC
   source buffer and shared pinned CPU destination;
 - keep direct fallback available when relay lease or worker execution fails;
-- add cleanup and staging-buffer protection required by the real data path;
+- verify native relay staging clear/protection on a CUDA server as part of the
+  H2D and D2H worker-managed relay runs;
 - defer more protocol, socket, observability, and smoke-test work unless it
   directly unblocks the functional data path;
 - reconnect vLLM, model loading, and training offload only after the
