@@ -85,6 +85,12 @@ transfer request objects:
 - `turbobus.worker` now has a status reporter that maps worker unsupported,
   failed, and completed outcomes into daemon `TRANSFER_STATUS` updates, keeping
   transfer state owned by the daemon even before real worker movement exists.
+- `turbobus.daemon.topology` now defines backend-neutral GPU, PCIe path, and
+  scale-up fabric link inventory records, plus an injectable static topology
+  provider.
+- `TurboBusDaemon` now owns a topology provider and exposes its resource
+  inventory through `GET_INVENTORY`; `TurboBusDaemonClient.get_inventory()`
+  can query the same control-plane path.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -129,11 +135,14 @@ phase:
 13. worker/helper outcomes can be reported back through the daemon status path,
     so future worker execution can update daemon-owned transfer status instead
     of maintaining local-only state.
+14. daemon-owned resource inventory now has a backend-neutral shape for GPUs,
+    PCIe paths, and scale-up fabric links, with static injection for tests and
+    a daemon control-plane query path.
 
-The next immediate goal is to add a daemon-owned resource and topology inventory
-skeleton for GPUs, PCIe paths, and scale-up fabric capabilities. This should be
-backend-neutral and injectable for tests, without adding NVML, ROCm SMI, CUDA
-IPC, or real device discovery yet.
+The next immediate goal is to connect scheduler inputs to the daemon-owned
+inventory skeleton so relay eligibility and profile lookup can start from
+daemon resource state while preserving the existing cached profile path and
+direct fallback behavior.
 
 ## Verification
 
@@ -166,7 +175,9 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
 - define daemon protocol records for job identity, buffer registration,
   lease tokens, and worker-facing cleanup;
 - add a daemon-owned resource and topology inventory skeleton that later
-  scheduling can consume;
+  scheduling can consume; done as the first inventory cut;
+- connect daemon scheduling inputs to the inventory skeleton without changing
+  direct fallback behavior;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

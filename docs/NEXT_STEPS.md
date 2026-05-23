@@ -82,15 +82,16 @@ Current status:
 - worker helper code can now report unsupported, failed, and completed worker
   outcomes back to the daemon through `TRANSFER_STATUS`, so worker-side control
   flow can update daemon-owned transfer status before real IPC movement exists.
+- daemon now has a backend-neutral, injectable resource inventory skeleton for
+  GPUs, PCIe paths, and scale-up fabric links, exposed through `GET_INVENTORY`
+  on the daemon control path.
 
 Next code cut:
 
-- add a daemon-owned resource and topology inventory skeleton for GPUs, PCIe
-  paths, and scale-up fabric capabilities;
-- keep the inventory backend-neutral and injectable for tests, without adding
-  NVML, ROCm SMI, CUDA IPC, or real device discovery yet;
-- expose the inventory through the daemon control plane so later scheduling can
-  consume daemon-owned resource state instead of client-local assumptions.
+- connect daemon scheduling inputs to the daemon-owned inventory skeleton so
+  profile and relay eligibility checks can start from daemon resource state;
+- keep the existing cached profile path and direct fallback behavior intact;
+- do not add real NVML, ROCm SMI, CUDA IPC, or hardware discovery yet.
 
 ## Upcoming
 

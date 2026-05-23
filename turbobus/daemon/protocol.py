@@ -16,14 +16,24 @@ from ..schema import (
     WorkerTransferAuthorization,
     WorkerTransferAuthorizationRequest,
 )
+from .topology import (
+    DaemonResourceInventory,
+    FabricLinkRecord,
+    GpuInventoryRecord,
+    PciePathRecord,
+)
 
 __all__ = [
     "BufferRegistration",
     "CleanupRequest",
     "DaemonRequest",
+    "DaemonResourceInventory",
     "DaemonResponse",
+    "FabricLinkRecord",
+    "GpuInventoryRecord",
     "JobIdentity",
     "LeaseToken",
+    "PciePathRecord",
     "RelayQuota",
     "RequestType",
     "Session",

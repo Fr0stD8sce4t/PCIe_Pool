@@ -26,6 +26,7 @@ from .protocol import (
     WorkerTransferAuthorizationRequest,
 )
 from .scheduler import DaemonScheduler, SchedulerDecision
+from .topology import StaticTopologyProvider, TopologyProvider
 
 
 class TurboBusDaemon:
@@ -43,7 +44,9 @@ class TurboBusDaemon:
         max_inflight_chunks_per_relay: int = 8,
         session_timeout_seconds: float = 0.0,
         profile_max_age_seconds: float = 0.0,
+        topology_provider: TopologyProvider | None = None,
     ) -> None:
+        relays = tuple(self._normalize_relays(relay_gpus))
         self._lock = threading.Lock()
         self._jobs: dict[str, JobIdentity] = {}
         self._buffers: dict[str, BufferRegistration] = {}
@@ -55,6 +58,9 @@ class TurboBusDaemon:
         self._cleanup_events: list[CleanupRequest] = []
         self._profile_cache: dict[str, dict] = {}
         self._scheduler = DaemonScheduler()
+        self._topology_provider = topology_provider or StaticTopologyProvider.from_relay_gpus(
+            relays
+        )
         self._session_timeout_seconds = max(0.0, float(session_timeout_seconds))
         self._profile_max_age_seconds = max(0.0, float(profile_max_age_seconds))
         self._relay_quotas = {
@@ -63,8 +69,12 @@ class TurboBusDaemon:
                 max_sessions=max_sessions_per_relay,
                 max_inflight_chunks=max_inflight_chunks_per_relay,
             )
-            for gpu in relay_gpus
+            for gpu in relays
         }
+
+    def get_inventory(self) -> DaemonResponse:
+        inventory = self._topology_provider.snapshot()
+        return DaemonResponse(ok=True, payload={"inventory": inventory.as_dict()})
 
     def register_session(
         self,
@@ -760,6 +770,8 @@ class TurboBusDaemon:
                 address=payload.get("address"),
                 pinned=bool(payload.get("pinned", False)),
             )
+        if request.request_type == RequestType.GET_INVENTORY:
+            return self.get_inventory()
         if request.request_type == RequestType.REGISTER_SESSION:
             payload = request.payload
             return self.register_session(

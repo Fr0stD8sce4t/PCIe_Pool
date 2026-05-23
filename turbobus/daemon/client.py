@@ -238,6 +238,13 @@ class TurboBusDaemonClient:
             )
         )
 
+    def get_inventory(self) -> DaemonResponse:
+        return self.send(
+            DaemonRequest(
+                request_type=RequestType.GET_INVENTORY,
+            )
+        )
+
     def get_profile(self, target_gpu: int, relay_gpus: list[int]) -> DaemonResponse:
         return self.send(
             DaemonRequest(

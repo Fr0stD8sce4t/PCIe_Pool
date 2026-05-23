@@ -22,6 +22,12 @@ from turbobus.schema import (
     WorkerTransferAuthorization,
     WorkerTransferAuthorizationRequest,
 )
+from turbobus.daemon.topology import (
+    DaemonResourceInventory,
+    FabricLinkRecord,
+    GpuInventoryRecord,
+    PciePathRecord,
+)
 
 
 class SchemaTest(unittest.TestCase):
@@ -263,6 +269,71 @@ class SchemaTest(unittest.TestCase):
             )
         with self.assertRaises(ValueError):
             CleanupRequest(target_kind="", target_id="session-1", reason="timeout")
+
+    def test_daemon_resource_inventory_is_serializable(self) -> None:
+        inventory = DaemonResourceInventory(
+            gpus=(
+                GpuInventoryRecord(
+                    device_id=0,
+                    backend="cuda",
+                    vendor="nvidia",
+                    pci_bus_id="0000:01:00.0",
+                    numa_node=0,
+                    memory_bytes=80 * 1024 * 1024 * 1024,
+                    role="target",
+                ),
+                GpuInventoryRecord(
+                    device_id=1,
+                    backend="rocm",
+                    vendor="amd",
+                    pci_bus_id="0000:02:00.0",
+                    numa_node=0,
+                    role="relay",
+                    visible=False,
+                ),
+            ),
+            pcie_paths=(
+                PciePathRecord(
+                    device_id=0,
+                    numa_node=0,
+                    root_complex="rc0",
+                    link_generation=5,
+                    link_width=16,
+                    bandwidth_gbps=63.0,
+                ),
+            ),
+            fabric_links=(
+                FabricLinkRecord(
+                    src_device_id=1,
+                    dst_device_id=0,
+                    fabric="nvlink",
+                    bandwidth_gbps=100.0,
+                    enabled=True,
+                ),
+            ),
+            source="test",
+            discovered_at=1.0,
+            metadata={"note": "injected"},
+        )
+
+        payload = json.loads(json.dumps(inventory.as_dict()))
+
+        self.assertEqual(payload["gpus"][0]["backend"], "cuda")
+        self.assertEqual(payload["gpus"][1]["vendor"], "amd")
+        self.assertFalse(payload["gpus"][1]["visible"])
+        self.assertEqual(payload["pcie_paths"][0]["link_width"], 16)
+        self.assertEqual(payload["fabric_links"][0]["fabric"], "nvlink")
+        self.assertEqual(payload["metadata"]["note"], "injected")
+
+    def test_daemon_resource_inventory_validation_rejects_invalid_values(self) -> None:
+        with self.assertRaises(ValueError):
+            GpuInventoryRecord(device_id=-1)
+        with self.assertRaises(ValueError):
+            PciePathRecord(device_id=0, bandwidth_gbps=-1.0)
+        with self.assertRaises(ValueError):
+            FabricLinkRecord(src_device_id=0, dst_device_id=0)
+        with self.assertRaises(ValueError):
+            DaemonResourceInventory(source="")
 
 
 if __name__ == "__main__":

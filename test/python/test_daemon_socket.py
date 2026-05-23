@@ -11,6 +11,11 @@ import unittest
 from turbobus.daemon import TurboBusDaemonClient
 from turbobus.daemon.protocol import WorkerTransferAuthorizationRequest
 from turbobus.daemon.server import TurboBusDaemon
+from turbobus.daemon.topology import (
+    DaemonResourceInventory,
+    GpuInventoryRecord,
+    StaticTopologyProvider,
+)
 from turbobus.transfer import TransferRequest
 
 
@@ -221,6 +226,50 @@ class DaemonSocketTest(unittest.TestCase):
 
             invalidated = client.invalidate_profile(target_gpu=0, relay_gpus=[1])
             self.assertTrue(invalidated.ok)
+
+    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
+    def test_client_get_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            socket_path = os.path.join(tmpdir, "turbobusd.sock")
+            daemon = TurboBusDaemon(
+                relay_gpus=[1],
+                topology_provider=StaticTopologyProvider(
+                    DaemonResourceInventory(
+                        gpus=(
+                            GpuInventoryRecord(
+                                device_id=1,
+                                backend="cuda",
+                                vendor="nvidia",
+                                role="relay",
+                            ),
+                        ),
+                        source="test",
+                        discovered_at=1.0,
+                    )
+                ),
+            )
+            thread = threading.Thread(
+                target=daemon.serve_forever,
+                args=(socket_path,),
+                daemon=True,
+            )
+            thread.start()
+
+            for _ in range(100):
+                if os.path.exists(socket_path):
+                    break
+                time.sleep(0.01)
+            self.assertTrue(os.path.exists(socket_path))
+
+            client = TurboBusDaemonClient(socket_path)
+            inventory = client.get_inventory()
+
+            self.assertTrue(inventory.ok)
+            self.assertEqual(inventory.payload["inventory"]["source"], "test")
+            self.assertEqual(
+                inventory.payload["inventory"]["gpus"][0]["device_id"],
+                1,
+            )
 
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
     def test_client_plan_transfer_round_trip(self) -> None:

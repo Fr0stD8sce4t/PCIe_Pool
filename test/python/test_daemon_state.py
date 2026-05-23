@@ -9,6 +9,13 @@ from turbobus.daemon.protocol import (
     WorkerTransferAuthorizationRequest,
 )
 from turbobus.daemon.server import TurboBusDaemon
+from turbobus.daemon.topology import (
+    DaemonResourceInventory,
+    FabricLinkRecord,
+    GpuInventoryRecord,
+    PciePathRecord,
+    StaticTopologyProvider,
+)
 
 
 class DaemonStateTest(unittest.TestCase):
@@ -126,6 +133,85 @@ class DaemonStateTest(unittest.TestCase):
             )
         )
         self.assertTrue(closed.ok)
+
+    def test_daemon_exposes_injected_resource_inventory(self) -> None:
+        inventory = DaemonResourceInventory(
+            gpus=(
+                GpuInventoryRecord(
+                    device_id=0,
+                    backend="cuda",
+                    vendor="nvidia",
+                    pci_bus_id="0000:01:00.0",
+                    numa_node=0,
+                    role="target",
+                ),
+                GpuInventoryRecord(
+                    device_id=1,
+                    backend="cuda",
+                    vendor="nvidia",
+                    pci_bus_id="0000:02:00.0",
+                    numa_node=0,
+                    role="relay",
+                    visible=False,
+                ),
+            ),
+            pcie_paths=(
+                PciePathRecord(
+                    device_id=0,
+                    numa_node=0,
+                    root_complex="rc0",
+                    link_generation=5,
+                    link_width=16,
+                    bandwidth_gbps=63.0,
+                ),
+                PciePathRecord(
+                    device_id=1,
+                    numa_node=0,
+                    root_complex="rc0",
+                    link_generation=5,
+                    link_width=16,
+                    bandwidth_gbps=63.0,
+                ),
+            ),
+            fabric_links=(
+                FabricLinkRecord(
+                    src_device_id=1,
+                    dst_device_id=0,
+                    fabric="nvlink",
+                    bandwidth_gbps=100.0,
+                    enabled=True,
+                ),
+            ),
+            source="test",
+            discovered_at=1.0,
+        )
+        daemon = TurboBusDaemon(
+            relay_gpus=[1],
+            topology_provider=StaticTopologyProvider(inventory),
+        )
+
+        response = daemon.handle_request(
+            DaemonRequest(request_type=RequestType.GET_INVENTORY)
+        )
+
+        self.assertTrue(response.ok)
+        payload = response.payload["inventory"]
+        self.assertEqual(payload["source"], "test")
+        self.assertEqual(payload["gpus"][0]["role"], "target")
+        self.assertFalse(payload["gpus"][1]["visible"])
+        self.assertEqual(payload["pcie_paths"][1]["device_id"], 1)
+        self.assertEqual(payload["fabric_links"][0]["fabric"], "nvlink")
+
+    def test_default_inventory_comes_from_configured_relays(self) -> None:
+        daemon = TurboBusDaemon(relay_gpus=[2, 1])
+
+        inventory = daemon.get_inventory()
+
+        self.assertTrue(inventory.ok)
+        payload = inventory.payload["inventory"]
+        self.assertEqual(payload["source"], "configured")
+        self.assertEqual([gpu["device_id"] for gpu in payload["gpus"]], [1, 2])
+        self.assertEqual([gpu["role"] for gpu in payload["gpus"]], ["relay", "relay"])
 
     def test_profile_cache_get_put_round_trip(self) -> None:
         daemon = TurboBusDaemon(relay_gpus=[1])
