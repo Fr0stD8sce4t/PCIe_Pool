@@ -24,6 +24,7 @@ class WorkerServiceEndpoint:
         self,
         daemon_client=None,
         service: WorkerTransferService | None = None,
+        max_events: int | None = None,
     ) -> None:
         if service is None:
             if daemon_client is None:
@@ -31,7 +32,12 @@ class WorkerServiceEndpoint:
             service = WorkerTransferService(daemon_client)
         if not isinstance(service, WorkerTransferService):
             raise TypeError("service must be a WorkerTransferService")
+        if max_events is not None:
+            max_events = int(max_events)
+            if max_events <= 0:
+                raise ValueError("max_events must be positive")
         self.service = service
+        self.max_events = max_events
         self.events: list[WorkerEndpointEvent] = []
         self.last_event: WorkerEndpointEvent | None = None
 
@@ -49,6 +55,7 @@ class WorkerServiceEndpoint:
         )
         self.last_event = event
         self.events.append(event)
+        self._trim_events()
         return response_message
 
     def describe(self) -> dict[str, object]:
@@ -77,6 +84,13 @@ class WorkerServiceEndpoint:
         self.events.clear()
         self.last_event = None
         return snapshot
+
+    def _trim_events(self) -> None:
+        if self.max_events is None:
+            return
+        extra_count = len(self.events) - self.max_events
+        if extra_count > 0:
+            del self.events[:extra_count]
 
 
 def _message_size(message: str | bytes) -> int:

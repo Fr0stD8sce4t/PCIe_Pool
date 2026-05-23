@@ -172,16 +172,18 @@ Current status:
 - worker endpoint `clear_events()` now returns the current event snapshot,
   clears recorded request/response events, and resets `last_event` while
   leaving future encoded responses unchanged.
+- worker endpoints now accept an optional `max_events` history limit that drops
+  the oldest retained event records while preserving the newest event,
+  `last_event`, and encoded response payloads.
 
 Next code cut:
 
-- add an optional worker endpoint event history limit so long-running helper
-  processes can bound in-memory observability state while preserving
-  `last_event` and `describe()` summaries for retained events;
+- extend worker endpoint `describe()` with endpoint configuration fields,
+  including `max_events`, retained event count, and whether history is bounded;
 - keep it in process only, with no CUDA IPC, sockets, real data movement, or
   hardware discovery yet;
-- add focused tests that the limit drops the oldest retained events, keeps the
-  newest event visible, and does not change encoded response payloads.
+- add focused tests that bounded and unbounded endpoints report the expected
+  configuration without changing encoded response payloads.
 
 ## Upcoming
 

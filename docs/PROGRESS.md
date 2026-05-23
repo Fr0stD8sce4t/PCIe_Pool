@@ -173,6 +173,8 @@ transfer request objects:
   completion count.
 - `WorkerServiceEndpoint.clear_events()` now returns the current describe
   snapshot, clears recorded endpoint events, and resets `last_event`.
+- `WorkerServiceEndpoint` now accepts an optional `max_events` history limit so
+  long-running helper processes can bound retained endpoint event records.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -282,11 +284,13 @@ phase:
     without changing encoded responses.
 37. worker endpoint event reset now clears recorded events after returning the
     current snapshot.
+38. worker endpoint event history limits now keep only the newest retained
+    events while preserving `last_event` and encoded responses.
 
-The next immediate goal is to add an optional worker endpoint event history
-limit so long-running helper processes can bound in-memory observability state.
-The limit should keep the newest retained events, preserve `last_event`, and
-leave encoded responses unchanged.
+The next immediate goal is to extend worker endpoint `describe()` with endpoint
+configuration fields. The snapshot should report `max_events`, retained event
+count, and whether event history is bounded while keeping encoded responses
+unchanged.
 
 ## Verification
 
@@ -369,7 +373,9 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
   through `WorkerServiceEndpoint.describe()`;
 - add a worker endpoint event reset helper; done through
   `WorkerServiceEndpoint.clear_events()`;
-- add an optional worker endpoint event history limit;
+- add an optional worker endpoint event history limit; done through
+  `WorkerServiceEndpoint(max_events=...)`;
+- add endpoint configuration fields to worker endpoint describe snapshots;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

@@ -1480,6 +1480,57 @@ class WorkerHelperTest(unittest.TestCase):
             second_payload["completion"]["worker_result"]["state"],
         )
 
+    def test_worker_service_endpoint_limits_retained_events(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        endpoint = WorkerServiceEndpoint(
+            daemon_client=daemon_client,
+            max_events=2,
+        )
+        request_message = encode_worker_request_envelope(
+            WorkerServiceRequestEnvelope(payload=authorization_request_payload())
+        )
+
+        first_response = endpoint.handle_message(request_message)
+        parse_error_response = endpoint.handle_message("{not-json")
+        daemon_client.status_response = DaemonResponse(
+            ok=False,
+            error="unknown transfer",
+        )
+        status_response = endpoint.handle_message(request_message)
+        snapshot = endpoint.describe()
+        first_payload = decode_worker_response_envelope(first_response).as_dict()
+        parse_error_payload = decode_worker_response_envelope(
+            parse_error_response
+        ).as_dict()
+        status_payload = decode_worker_response_envelope(status_response).as_dict()
+
+        self.assertEqual(first_payload["final_state"], "unsupported")
+        self.assertEqual(parse_error_payload["final_state"], "parse_failed")
+        self.assertEqual(status_payload["final_state"], "status_failed")
+        self.assertEqual(len(endpoint.events), 2)
+        self.assertEqual(
+            [event.final_state for event in endpoint.events],
+            ["parse_failed", "status_failed"],
+        )
+        self.assertEqual(endpoint.last_event.final_state, "status_failed")
+        self.assertEqual(snapshot["total_requests"], 2)
+        self.assertEqual(
+            snapshot["final_state_counts"],
+            {"parse_failed": 1, "status_failed": 1},
+        )
+        self.assertEqual(snapshot["completion_count"], 1)
+        self.assertEqual(snapshot["last_event"]["final_state"], "status_failed")
+
+    def test_worker_service_endpoint_rejects_invalid_event_limit(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+
+        with self.assertRaisesRegex(ValueError, "max_events"):
+            WorkerServiceEndpoint(daemon_client=daemon_client, max_events=0)
+
     def test_worker_service_endpoint_requires_service_or_daemon_client(self) -> None:
         with self.assertRaisesRegex(ValueError, "daemon_client"):
             WorkerServiceEndpoint()
