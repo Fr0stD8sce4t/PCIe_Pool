@@ -9,7 +9,7 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
 
 ## Recent Mainline Commits
 
-- Add explicit paper speedup summaries
+- Add explicit paper speedup summaries (`f4434e1`)
   - `benchmarks/paper_validation.py` now emits `paper_speedup` lines after the
     existing `paper_metric` lines for each workload.
   - Model-loading summaries compare direct and relay `ttft_proxy_ms` against
