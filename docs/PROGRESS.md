@@ -256,6 +256,14 @@ transfer request objects:
   daemon-owned status is already terminal. A failed, canceled, or completed
   worker-managed transfer cannot keep validating its lease while relay
   reservation cleanup is still pending.
+- normal relay reservation release for daemon-planned transfers now requires
+  the daemon-owned transfer status to be complete first. Incomplete or failed
+  planned transfers must use cleanup to reclaim relay quota, preventing
+  `release_transfer` from masking a missing worker/helper completion report.
+- the runtime exact-plan baseline now reports daemon completion before
+  releasing daemon-planned relay reservations after native wait succeeds,
+  keeping the compatibility baseline aligned with the worker/helper status
+  sequence.
 
 ## What Was Updated
 
@@ -805,6 +813,10 @@ phase:
 90. daemon lease validation now rejects terminal transfer statuses too. This
     keeps failed, canceled, and completed transfers from presenting a still-
     active lease as valid before cleanup releases the relay reservation.
+91. daemon-planned reservation release now requires the daemon-owned transfer
+    status to be complete first. Incomplete and failed planned transfers use
+    cleanup, while the runtime exact-plan baseline reports complete status
+    before releasing its relay reservation.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

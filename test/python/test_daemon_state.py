@@ -960,8 +960,13 @@ class DaemonStateTest(unittest.TestCase):
         )
         self.assertEqual(daemon.describe().payload["relay_quotas"][1]["active_chunks"], 2)
 
-        released = daemon.release_transfer(reservation["reservation_id"])
-        self.assertTrue(released.ok)
+        cleaned = daemon.cleanup(
+            target_kind="reservation",
+            target_id=reservation["reservation_id"],
+            reason="test_cleanup",
+            force=True,
+        )
+        self.assertTrue(cleaned.ok)
         self.assertEqual(daemon.describe().payload["relay_quotas"][1]["active_chunks"], 0)
 
     def test_expired_plan_lease_reap_releases_reservation_and_quota(self) -> None:
@@ -1135,8 +1140,13 @@ class DaemonStateTest(unittest.TestCase):
         self.assertFalse(wrong_token.ok)
         self.assertIn("invalid lease token", wrong_token.error)
 
-        released = daemon.release_transfer(lease_token["lease_id"])
-        self.assertTrue(released.ok)
+        cleaned = daemon.cleanup(
+            target_kind="reservation",
+            target_id=lease_token["lease_id"],
+            reason="test_cleanup",
+            force=True,
+        )
+        self.assertTrue(cleaned.ok)
         inactive = daemon.validate_lease(
             lease_id=lease_token["lease_id"],
             token=lease_token["token"],
@@ -1520,8 +1530,13 @@ class DaemonStateTest(unittest.TestCase):
         self.assertFalse(overwrite.ok)
         self.assertIn("active lease", overwrite.error)
 
-        released = daemon.release_transfer(reservation_id)
-        self.assertTrue(released.ok)
+        cleaned = daemon.cleanup(
+            target_kind="reservation",
+            target_id=reservation_id,
+            reason="test_cleanup",
+            force=True,
+        )
+        self.assertTrue(cleaned.ok)
         replaced = daemon.register_buffer(
             buffer_id="cpu-buffer",
             job_id="job-1",
@@ -1898,7 +1913,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertFalse(validated.ok)
         self.assertIn("transfer is terminal", validated.error)
 
-    def test_plan_transfer_records_and_completes_transfer_status(self) -> None:
+    def test_plan_transfer_requires_completion_status_before_release_completes(self) -> None:
         daemon = TurboBusDaemon(
             relay_gpus=[1],
             max_sessions_per_relay=1,
@@ -1954,6 +1969,70 @@ class DaemonStateTest(unittest.TestCase):
         )
         self.assertTrue(status.ok)
         self.assertEqual(status.payload["status"]["state"], "submitted")
+
+        released = daemon.release_transfer(reservation_id)
+        self.assertFalse(released.ok)
+        self.assertIn("transfer is not complete", released.error)
+
+        still_submitted = daemon.transfer_status(transfer_id)
+        self.assertTrue(still_submitted.ok)
+        self.assertEqual(still_submitted.payload["status"]["state"], "submitted")
+        self.assertEqual(still_submitted.payload["status"]["bytes_completed"], 0)
+
+    def test_plan_transfer_records_and_completes_transfer_status(self) -> None:
+        daemon = TurboBusDaemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=1,
+            max_inflight_chunks_per_relay=8,
+        )
+        register = daemon.register_session(
+            target_gpu=0,
+            requested_relays=[1],
+            max_inflight_chunks=8,
+        )
+        session_id = register.payload["session"]["session_id"]
+        daemon.put_profile(
+            target_gpu=0,
+            relay_gpus=[1],
+            profile={
+                "target_device": 0,
+                "direct_h2d_bw_gbps": 7.5,
+                "direct_d2h_bw_gbps": 6.5,
+                "relays": [
+                    {
+                        "relay_device": 1,
+                        "target_device": 0,
+                        "h2d_bw_gbps": 7.5,
+                        "d2h_bw_gbps": 6.5,
+                        "p2p_bw_gbps": 40.0,
+                        "effective_bw_gbps": 7.5,
+                        "effective_d2h_bw_gbps": 6.5,
+                        "p2p_enabled": True,
+                    }
+                ],
+            },
+        )
+
+        planned = daemon.plan_transfer(
+            session_id=session_id,
+            total_bytes=64,
+            chunk_bytes=16,
+            mode="pool",
+            direction="h2d",
+            job_id="job-1",
+        )
+
+        transfer_id = planned.payload["transfer_id"]
+        reservation_id = planned.payload["reservations"][0]["reservation_id"]
+        self.assertEqual(planned.payload["transfer_status"]["state"], "submitted")
+        self.assertEqual(planned.payload["transfer_status"]["job_id"], "job-1")
+
+        reported = daemon.transfer_status(
+            transfer_id,
+            state="complete",
+            bytes_completed=64,
+        )
+        self.assertTrue(reported.ok)
 
         released = daemon.release_transfer(reservation_id)
         self.assertTrue(released.ok)
@@ -2197,11 +2276,16 @@ class DaemonStateTest(unittest.TestCase):
             error="worker failed",
         )
 
-        released = daemon.release_transfer(reservation_id)
+        cleaned = daemon.cleanup(
+            target_kind="reservation",
+            target_id=reservation_id,
+            reason="worker failed",
+            force=True,
+        )
         status = daemon.transfer_status(transfer_id)
 
         self.assertTrue(failed.ok)
-        self.assertTrue(released.ok)
+        self.assertTrue(cleaned.ok)
         self.assertTrue(status.ok)
         self.assertEqual(status.payload["status"]["state"], "failed")
         self.assertEqual(status.payload["status"]["bytes_completed"], 0)

@@ -740,8 +740,12 @@ class DaemonSocketTest(unittest.TestCase):
                 planned.payload["plan"],
             )
 
-            released = client.release_transfer(reservation_id)
-            self.assertTrue(released.ok)
+            reported = client.transfer_status(
+                transfer_id,
+                state="complete",
+                bytes_completed=64,
+            )
+            self.assertTrue(reported.ok)
 
             invalidated = client.validate_lease(
                 lease_id=lease_token["lease_id"],
@@ -750,6 +754,10 @@ class DaemonSocketTest(unittest.TestCase):
                 relay_gpu=1,
             )
             self.assertFalse(invalidated.ok)
+            self.assertIn("transfer is terminal", invalidated.error)
+
+            released = client.release_transfer(reservation_id)
+            self.assertTrue(released.ok)
 
             completed = client.transfer_status(transfer_id)
             self.assertTrue(completed.ok)

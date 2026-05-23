@@ -653,6 +653,15 @@ class Runtime:
             self._runtime.wait(handle.native)
             handle._status = "complete"
             handle._stats = self.stats(handle)
+            self._report_daemon_transfer_status_for_handle(handle, "complete")
+        except Exception as exc:
+            self._report_daemon_transfer_status_for_handle(
+                handle,
+                "failed",
+                error=str(exc),
+                strict=False,
+            )
+            raise
         finally:
             self._release_daemon_reservations(handle._daemon_reservations)
             handle._daemon_reservations = []
@@ -861,6 +870,18 @@ class Runtime:
             "daemon_plan_resolved_mode": resolved_mode.value,
             "daemon_reserved_direction": direction,
         }
+        transfer_id = payload.get("transfer_id")
+        transfer_status = payload.get("transfer_status")
+        if isinstance(transfer_status, dict):
+            transfer_id = transfer_id or transfer_status.get("transfer_id")
+        if transfer_id is not None:
+            info["daemon_transfer_id"] = str(transfer_id)
+            transfer_bytes = request_for_daemon.total_bytes
+            if isinstance(transfer_status, dict):
+                transfer_bytes = int(
+                    transfer_status.get("bytes_total", transfer_bytes)
+                )
+            info["daemon_transfer_bytes_total"] = transfer_bytes
         if reservations:
             info["daemon_reservation_ids"] = ",".join(reservations)
         if fallback_reason:
@@ -926,3 +947,33 @@ class Runtime:
             return
         for reservation_id in list(reservations):
             self._daemon_client.release_transfer(reservation_id)
+
+    def _report_daemon_transfer_status_for_handle(
+        self,
+        handle: "TransferHandle",
+        state: str,
+        *,
+        error: str | None = None,
+        strict: bool = True,
+    ) -> None:
+        if self._daemon_client is None:
+            return
+        reporter = getattr(self._daemon_client, "transfer_status", None)
+        if not callable(reporter):
+            return
+        info = getattr(handle, "daemon_reservation_info", {}) or {}
+        transfer_id = info.get("daemon_transfer_id")
+        if not transfer_id:
+            return
+        bytes_total = int(info.get("daemon_transfer_bytes_total", 0))
+        bytes_completed = bytes_total if str(state) == "complete" else 0
+        response = reporter(
+            str(transfer_id),
+            state=str(state),
+            bytes_completed=bytes_completed,
+            error=error,
+        )
+        if strict and not response.ok:
+            raise RuntimeError(
+                response.error or "daemon transfer status update failed"
+            )

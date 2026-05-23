@@ -280,6 +280,13 @@ Completed current code cut:
 - Reject lease validation after a daemon transfer has reached a terminal
   state. A failed, canceled, or completed transfer can no longer present its
   still-active lease as valid while reservation cleanup is pending.
+- Require daemon-planned transfers to report complete status before normal
+  reservation release. `release_transfer` is now the successful completion
+  release path; failed, canceled, or incomplete planned transfers must use
+  cleanup to reclaim the reservation.
+- Report daemon-plan completion from the runtime exact-plan baseline before
+  releasing its relay reservation, keeping daemon status ownership aligned
+  with worker/helper completion semantics.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -325,6 +332,8 @@ Completed current code cut:
    - Reject malformed CUDA IPC handles again at backend export/open time before
      native CUDA IPC calls.
    - Reject lease validation after the daemon-owned transfer status is terminal.
+   - Reject normal reservation release for daemon-planned transfers until the
+     daemon-owned transfer status is complete.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor

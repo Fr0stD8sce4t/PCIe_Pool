@@ -331,6 +331,14 @@ class TurboBusDaemon:
 
     def release_transfer(self, reservation_id: str) -> DaemonResponse:
         with self._lock:
+            reservation_key = str(reservation_id)
+            transfer_id = self._reservation_transfers.get(reservation_key)
+            if transfer_id is not None:
+                status = self._transfer_statuses.get(transfer_id)
+                if status is None:
+                    return DaemonResponse(ok=False, error="unknown transfer")
+                if status.state is not TransferStatusState.COMPLETE:
+                    return DaemonResponse(ok=False, error="transfer is not complete")
             reservation = self._release_reservation_locked(reservation_id)
             if reservation is None:
                 return DaemonResponse(ok=False, error="unknown reservation")
