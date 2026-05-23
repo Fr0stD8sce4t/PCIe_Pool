@@ -162,6 +162,9 @@ transfer request objects:
 - `handle_worker_service_message` now connects the worker message codec to
   `WorkerTransferService.handle_envelope`, returning encoded response messages
   for successful worker requests and parse failures without adding a transport.
+- `WorkerServiceEndpoint` now provides a transport-neutral worker service
+  endpoint with a single `handle_message` entry point for future socket or IPC
+  transports.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -261,12 +264,15 @@ phase:
 33. the in-process worker service message handler now decodes encoded requests,
     runs the existing worker service envelope path, and returns encoded
     responses while preserving completion envelopes.
+34. a transport-neutral worker service endpoint now wraps the encoded message
+    handler behind one `handle_message` entry point without adding sockets or
+    IPC.
 
-The next immediate goal is to add a transport-neutral worker service endpoint
-object that owns a `WorkerTransferService`, accepts encoded messages through
-the existing in-process message handler, and exposes a single `handle_message`
-entry point that a future socket or IPC transport can call. It should still
-avoid sockets, IPC, CUDA IPC, real data movement, and hardware discovery.
+The next immediate goal is to add worker endpoint request/response event
+records for observability around `handle_message`. The records should capture
+message size, response size, final state, ok/error status, and whether
+completion data was present while preserving the exact encoded response
+payload.
 
 ## Verification
 
@@ -342,7 +348,9 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
   any socket or IPC transport exists; done through
   `handle_worker_service_message`;
 - add a transport-neutral worker service endpoint object for future socket or
-  IPC transports;
+  IPC transports; done through `WorkerServiceEndpoint`;
+- add worker endpoint request/response event records for observability around
+  encoded message handling;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

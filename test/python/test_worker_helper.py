@@ -25,6 +25,7 @@ from turbobus.worker import (
     WorkerMessageCodecError,
     WorkerServiceRequestEnvelope,
     WorkerServiceResponseEnvelope,
+    WorkerServiceEndpoint,
     WorkerStatusReportError,
     WorkerStagingPool,
     WorkerStagingSlot,
@@ -1265,6 +1266,73 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(response["completion"]["daemon_status_update"]["state"], "failed")
         self.assertIsNone(response["completion"]["daemon_status_response"])
         self.assertFalse(response["completion"]["staging_release"]["active"])
+
+    def test_worker_service_endpoint_matches_message_handler_success(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        request_message = encode_worker_request_envelope(
+            WorkerServiceRequestEnvelope(payload=authorization_request_payload())
+        )
+        endpoint = WorkerServiceEndpoint(daemon_client=daemon_client)
+
+        response_message = endpoint.handle_message(request_message)
+        response = decode_worker_response_envelope(response_message).as_dict()
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["final_state"], "unsupported")
+        self.assertEqual(response["completion"]["worker_result"]["state"], "unsupported")
+        self.assertEqual(response["completion"]["staging_release"]["slot_id"], "staging-1")
+        self.assertFalse(response["completion"]["staging_release"]["active"])
+        self.assertEqual(daemon_client.status_updates[0]["state"], "failed")
+        self.assertEqual(daemon_client.cleanup_requests[0]["target_id"], "lease-1")
+
+    def test_worker_service_endpoint_matches_message_handler_parse_error(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        endpoint = WorkerServiceEndpoint(daemon_client=daemon_client)
+
+        response = decode_worker_response_envelope(
+            endpoint.handle_message("{not-json")
+        ).as_dict()
+
+        self.assertFalse(response["ok"])
+        self.assertEqual(response["final_state"], "parse_failed")
+        self.assertIn("Expecting property name", response["error"])
+        self.assertIsNone(response["lifecycle"])
+        self.assertIsNone(response["completion"])
+        self.assertEqual(daemon_client.requests, [])
+
+    def test_worker_service_endpoint_matches_message_handler_status_failure(self) -> None:
+        endpoint_daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload()),
+            status_response=DaemonResponse(ok=False, error="unknown transfer"),
+        )
+        handler_daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload()),
+            status_response=DaemonResponse(ok=False, error="unknown transfer"),
+        )
+        request_message = encode_worker_request_envelope(
+            WorkerServiceRequestEnvelope(payload=authorization_request_payload())
+        )
+        endpoint = WorkerServiceEndpoint(
+            service=WorkerTransferService(endpoint_daemon_client)
+        )
+        handler_service = WorkerTransferService(handler_daemon_client)
+
+        endpoint_response = endpoint.handle_message(request_message)
+        handler_response = handle_worker_service_message(handler_service, request_message)
+
+        self.assertEqual(endpoint_response, handler_response)
+        response = decode_worker_response_envelope(endpoint_response).as_dict()
+        self.assertEqual(response["final_state"], "status_failed")
+        self.assertEqual(response["completion"]["daemon_status_update"]["state"], "failed")
+        self.assertFalse(response["completion"]["staging_release"]["active"])
+
+    def test_worker_service_endpoint_requires_service_or_daemon_client(self) -> None:
+        with self.assertRaisesRegex(ValueError, "daemon_client"):
+            WorkerServiceEndpoint()
 
     def test_worker_service_returns_malformed_payload_envelope(self) -> None:
         daemon_client = FakeDaemonClient(

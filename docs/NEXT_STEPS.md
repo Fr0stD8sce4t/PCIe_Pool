@@ -159,17 +159,20 @@ Current status:
   existing `WorkerTransferService.handle_envelope` path, and returns encoded
   worker response messages without adding sockets, IPC, CUDA IPC, real data
   movement, or hardware discovery.
+- a transport-neutral worker service endpoint now owns a
+  `WorkerTransferService`, accepts encoded messages through the existing
+  in-process message handler, and exposes a single `handle_message` entry point
+  for future socket or IPC transports without adding those transports yet.
 
 Next code cut:
 
-- add a transport-neutral worker service endpoint object that owns a
-  `WorkerTransferService`, accepts encoded messages through the existing
-  in-process message handler, and exposes a single `handle_message` entry point
-  that a future socket or IPC transport can call;
+- add a worker endpoint request/response event record for observability around
+  `handle_message`, capturing message size, response size, final state, ok/error
+  status, and whether completion data was present;
 - keep it in process only, with no CUDA IPC, sockets, real data movement, or
   hardware discovery yet;
-- add focused tests that endpoint success, parse-error, and status-failure
-  responses match the lower-level message handler output.
+- add focused tests that success, parse-error, and status-failure endpoint
+  calls record events without changing the encoded response payload.
 
 ## Upcoming
 
