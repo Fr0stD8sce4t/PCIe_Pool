@@ -213,6 +213,114 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual([gpu["device_id"] for gpu in payload["gpus"]], [1, 2])
         self.assertEqual([gpu["role"] for gpu in payload["gpus"]], ["relay", "relay"])
 
+    def test_discover_relays_reports_cross_job_lease_bookkeeping(self) -> None:
+        daemon = TurboBusDaemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=2,
+            max_inflight_chunks_per_relay=8,
+        )
+        first = daemon.register_session(
+            target_gpu=0,
+            requested_relays=[1],
+            max_inflight_chunks=8,
+        )
+        second = daemon.register_session(
+            target_gpu=0,
+            requested_relays=[1],
+            max_inflight_chunks=8,
+        )
+        first_session_id = first.payload["session"]["session_id"]
+        second_session_id = second.payload["session"]["session_id"]
+        daemon.register_job(
+            job_id="job-1",
+            user_id="user-1",
+            session_id=first_session_id,
+        )
+        daemon.register_job(
+            job_id="job-2",
+            user_id="user-2",
+            session_id=second_session_id,
+        )
+        daemon.register_buffer(
+            buffer_id="cpu-buffer",
+            job_id="job-1",
+            kind="cpu_pinned",
+            size_bytes=64,
+            pinned=True,
+        )
+        daemon.register_buffer(
+            buffer_id="gpu-buffer",
+            job_id="job-1",
+            kind="gpu",
+            size_bytes=64,
+            device_index=0,
+        )
+        daemon.put_profile(
+            target_gpu=0,
+            relay_gpus=[1],
+            profile={
+                "target_device": 0,
+                "direct_h2d_bw_gbps": 7.5,
+                "direct_d2h_bw_gbps": 6.5,
+                "relays": [
+                    {
+                        "relay_device": 1,
+                        "target_device": 0,
+                        "h2d_bw_gbps": 7.5,
+                        "d2h_bw_gbps": 6.5,
+                        "p2p_bw_gbps": 40.0,
+                        "effective_bw_gbps": 7.5,
+                        "effective_d2h_bw_gbps": 6.5,
+                        "p2p_enabled": True,
+                    }
+                ],
+            },
+        )
+        planned = daemon.plan_transfer(
+            session_id=first_session_id,
+            total_bytes=64,
+            chunk_bytes=16,
+            mode="pool",
+            direction="h2d",
+            job_id="job-1",
+            buffer_ids=["cpu-buffer", "gpu-buffer"],
+        )
+        self.assertTrue(planned.ok)
+        lease_token = planned.payload["lease_tokens"][0]
+
+        discovered = daemon.discover_relays(target_gpu=0, requested_relays=[1])
+
+        self.assertTrue(discovered.ok)
+        payload = discovered.payload["relay_discovery"]
+        self.assertEqual(payload["summary"]["relay_count"], 1)
+        self.assertEqual(payload["summary"]["active_session_count"], 2)
+        self.assertEqual(payload["summary"]["active_reservation_count"], 1)
+        self.assertEqual(payload["summary"]["active_lease_count"], 1)
+        relay = payload["relays"][0]
+        self.assertEqual(relay["relay_gpu"], 1)
+        self.assertTrue(relay["configured"])
+        self.assertEqual(relay["eligibility"]["reason"], "eligible")
+        self.assertEqual(relay["quota"]["active_sessions"], 2)
+        self.assertEqual(relay["quota"]["available_sessions"], 0)
+        self.assertEqual(relay["quota"]["active_chunks"], 2)
+        self.assertEqual(relay["quota"]["available_chunks"], 6)
+        self.assertEqual(
+            sorted(session["job_ids"][0] for session in relay["sessions"]),
+            ["job-1", "job-2"],
+        )
+        self.assertEqual(relay["reservations"][0]["job_id"], "job-1")
+        self.assertEqual(
+            relay["reservations"][0]["reservation_id"],
+            lease_token["lease_id"],
+        )
+        self.assertEqual(relay["leases"][0]["lease_id"], lease_token["lease_id"])
+        self.assertEqual(relay["leases"][0]["job_id"], "job-1")
+        self.assertEqual(
+            relay["leases"][0]["buffer_ids"],
+            ("cpu-buffer", "gpu-buffer"),
+        )
+        self.assertNotIn("token", relay["leases"][0])
+
     def test_plan_transfer_uses_inventory_eligible_relays_for_profile_lookup(self) -> None:
         inventory = DaemonResourceInventory(
             gpus=(
@@ -275,7 +383,6 @@ class DaemonStateTest(unittest.TestCase):
                 ],
             },
         )
-
         planned = daemon.plan_transfer(
             session_id=session_id,
             total_bytes=64,
@@ -354,6 +461,15 @@ class DaemonStateTest(unittest.TestCase):
                     }
                 ],
             },
+        )
+        discovered = daemon.discover_relays(target_gpu=0, requested_relays=[1])
+        self.assertTrue(discovered.ok)
+        self.assertFalse(
+            discovered.payload["relay_discovery"]["relays"][0]["eligibility"]["eligible"]
+        )
+        self.assertEqual(
+            discovered.payload["relay_discovery"]["relays"][0]["eligibility"]["reason"],
+            "missing enabled fabric link",
         )
 
         planned = daemon.plan_transfer(

@@ -267,6 +267,23 @@ class TurboBusDaemonClient:
             )
         )
 
+    def discover_relays(
+        self,
+        target_gpu: int | None = None,
+        relay_gpus: list[int] | None = None,
+    ) -> DaemonResponse:
+        payload: dict[str, object] = {}
+        if target_gpu is not None:
+            payload["target_gpu"] = int(target_gpu)
+        if relay_gpus is not None:
+            payload["relay_gpus"] = [int(gpu) for gpu in relay_gpus]
+        return self.send(
+            DaemonRequest(
+                request_type=RequestType.DISCOVER_RELAYS,
+                payload=payload,
+            )
+        )
+
     def get_profile(self, target_gpu: int, relay_gpus: list[int]) -> DaemonResponse:
         return self.send(
             DaemonRequest(

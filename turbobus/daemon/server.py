@@ -77,6 +77,32 @@ class TurboBusDaemon:
         inventory = self._topology_provider.snapshot()
         return DaemonResponse(ok=True, payload={"inventory": inventory.as_dict()})
 
+    def discover_relays(
+        self,
+        target_gpu: int | None = None,
+        requested_relays: Iterable[int] | None = None,
+    ) -> DaemonResponse:
+        now = time.time()
+        target = None if target_gpu is None else int(target_gpu)
+        with self._lock:
+            self._reap_stale_sessions_locked(now)
+            inventory = self._topology_provider.snapshot()
+            candidates = (
+                tuple(sorted(self._relay_quotas))
+                if requested_relays is None
+                else tuple(self._normalize_relays(requested_relays))
+            )
+            return DaemonResponse(
+                ok=True,
+                payload={
+                    "relay_discovery": self._relay_discovery_snapshot_locked(
+                        inventory=inventory,
+                        target_gpu=target,
+                        requested_relays=candidates,
+                    )
+                },
+            )
+
     def register_session(
         self,
         target_gpu: int,
@@ -830,6 +856,13 @@ class TurboBusDaemon:
             )
         if request.request_type == RequestType.GET_INVENTORY:
             return self.get_inventory()
+        if request.request_type == RequestType.DISCOVER_RELAYS:
+            payload = request.payload
+            target_gpu = payload.get("target_gpu")
+            return self.discover_relays(
+                target_gpu=None if target_gpu is None else int(target_gpu),
+                requested_relays=payload.get("relay_gpus"),
+            )
         if request.request_type == RequestType.REGISTER_SESSION:
             payload = request.payload
             return self.register_session(
@@ -935,10 +968,22 @@ class TurboBusDaemon:
         return tuple(item["relay_gpu"] for item in relay_eligibility["eligible_relays"])
 
     def _relay_eligibility_for_session_locked(self, session: Session) -> dict[str, object]:
-        inventory = self._topology_provider.snapshot()
-        relay_eligibility = inventory.relay_eligibility(
-            target_device=session.target_gpu,
+        return self._relay_eligibility_for_target_locked(
+            target_gpu=session.target_gpu,
             requested_relays=session.relay_gpus,
+        )
+
+    def _relay_eligibility_for_target_locked(
+        self,
+        target_gpu: int,
+        requested_relays: Iterable[int],
+        inventory=None,
+    ) -> dict[str, object]:
+        if inventory is None:
+            inventory = self._topology_provider.snapshot()
+        relay_eligibility = inventory.relay_eligibility(
+            target_device=int(target_gpu),
+            requested_relays=requested_relays,
         )
         eligible_relays = []
         filtered_relays = list(relay_eligibility["filtered_relays"])
@@ -955,6 +1000,225 @@ class TurboBusDaemon:
             "eligible_relays": eligible_relays,
             "filtered_relays": filtered_relays,
         }
+
+    def _relay_discovery_snapshot_locked(
+        self,
+        *,
+        inventory,
+        target_gpu: int | None,
+        requested_relays: Iterable[int],
+    ) -> dict[str, object]:
+        candidates = tuple(self._normalize_relays(requested_relays))
+        if target_gpu is None:
+            relay_eligibility = {
+                "requested_relays": list(candidates),
+                "eligible_relays": [],
+                "filtered_relays": [],
+                "inventory_source": inventory.source,
+                "inventory_discovered_at": inventory.discovered_at,
+            }
+            eligibility_by_relay = {
+                relay_gpu: {
+                    "eligible": None,
+                    "reason": "target_gpu not provided",
+                }
+                for relay_gpu in candidates
+            }
+        else:
+            relay_eligibility = self._relay_eligibility_for_target_locked(
+                target_gpu=target_gpu,
+                requested_relays=candidates,
+                inventory=inventory,
+            )
+            eligibility_by_relay = {}
+            for item in relay_eligibility["eligible_relays"]:
+                eligibility_by_relay[int(item["relay_gpu"])] = {
+                    "eligible": True,
+                    "reason": str(item.get("reason", "eligible")),
+                }
+            for item in relay_eligibility["filtered_relays"]:
+                eligibility_by_relay[int(item["relay_gpu"])] = {
+                    "eligible": False,
+                    "reason": str(item.get("reason", "filtered")),
+                }
+
+        relay_records = [
+            self._relay_discovery_record_locked(
+                relay_gpu=relay_gpu,
+                inventory=inventory,
+                target_gpu=target_gpu,
+                eligibility=eligibility_by_relay.get(
+                    relay_gpu,
+                    {"eligible": False, "reason": "not requested"},
+                ),
+            )
+            for relay_gpu in candidates
+        ]
+        return {
+            "target_gpu": target_gpu,
+            "requested_relays": list(candidates),
+            "inventory_source": inventory.source,
+            "inventory_discovered_at": inventory.discovered_at,
+            "relay_eligibility": relay_eligibility,
+            "relays": relay_records,
+            "summary": {
+                "relay_count": len(relay_records),
+                "configured_relay_count": sum(
+                    1 for item in relay_records if item["configured"]
+                ),
+                "eligible_relay_count": sum(
+                    1
+                    for item in relay_records
+                    if item["eligibility"]["eligible"] is True
+                ),
+                "active_session_count": sum(
+                    int(item["quota"]["active_sessions"])
+                    for item in relay_records
+                    if item["quota"] is not None
+                ),
+                "active_reservation_count": sum(
+                    len(item["reservations"]) for item in relay_records
+                ),
+                "active_lease_count": sum(len(item["leases"]) for item in relay_records),
+            },
+        }
+
+    def _relay_discovery_record_locked(
+        self,
+        *,
+        relay_gpu: int,
+        inventory,
+        target_gpu: int | None,
+        eligibility: dict[str, object],
+    ) -> dict[str, object]:
+        quota = self._relay_quotas.get(relay_gpu)
+        return {
+            "relay_gpu": relay_gpu,
+            "configured": quota is not None,
+            "eligibility": {
+                "target_gpu": target_gpu,
+                "eligible": eligibility["eligible"],
+                "reason": eligibility["reason"],
+            },
+            "inventory": self._relay_inventory_record(inventory, relay_gpu, target_gpu),
+            "quota": (
+                None
+                if quota is None
+                else {
+                    "relay_gpu": quota.relay_gpu,
+                    "max_sessions": quota.max_sessions,
+                    "active_sessions": len(quota.sessions),
+                    "available_sessions": max(
+                        0,
+                        quota.max_sessions - len(quota.sessions),
+                    ),
+                    "max_inflight_chunks": quota.max_inflight_chunks,
+                    "active_chunks": quota.active_chunks,
+                    "available_chunks": max(
+                        0,
+                        quota.max_inflight_chunks - quota.active_chunks,
+                    ),
+                }
+            ),
+            "sessions": self._relay_session_records_locked(relay_gpu),
+            "reservations": self._relay_reservation_records_locked(relay_gpu),
+            "leases": self._relay_lease_records_locked(relay_gpu),
+        }
+
+    def _relay_inventory_record(
+        self,
+        inventory,
+        relay_gpu: int,
+        target_gpu: int | None,
+    ) -> dict[str, object]:
+        relay = int(relay_gpu)
+        target = None if target_gpu is None else int(target_gpu)
+        fabric_links = []
+        for link in inventory.fabric_links:
+            touches_relay = link.src_device_id == relay or link.dst_device_id == relay
+            touches_target = (
+                target is None
+                or (link.src_device_id == relay and link.dst_device_id == target)
+                or (
+                    link.bidirectional
+                    and link.src_device_id == target
+                    and link.dst_device_id == relay
+                )
+            )
+            if touches_relay and touches_target:
+                fabric_links.append(asdict(link))
+        return {
+            "gpus": [
+                asdict(gpu) for gpu in inventory.gpus if gpu.device_id == relay
+            ],
+            "pcie_paths": [
+                asdict(path)
+                for path in inventory.pcie_paths
+                if path.device_id == relay
+            ],
+            "fabric_links": fabric_links,
+        }
+
+    def _relay_session_records_locked(self, relay_gpu: int) -> list[dict[str, object]]:
+        quota = self._relay_quotas.get(relay_gpu)
+        if quota is None:
+            return []
+        records = []
+        for session_id in sorted(quota.sessions):
+            session = self._sessions.get(session_id)
+            if session is None:
+                continue
+            records.append(
+                {
+                    "session_id": session.session_id,
+                    "target_gpu": session.target_gpu,
+                    "active": session.active,
+                    "active_chunks": session.active_chunks,
+                    "max_inflight_chunks": session.max_inflight_chunks,
+                    "job_ids": sorted(
+                        job.job_id
+                        for job in self._jobs.values()
+                        if job.session_id == session.session_id
+                    ),
+                }
+            )
+        return records
+
+    def _relay_reservation_records_locked(
+        self,
+        relay_gpu: int,
+    ) -> list[dict[str, object]]:
+        records = []
+        for reservation_id, reservation in sorted(self._reservations.items()):
+            if reservation.relay_gpu != relay_gpu:
+                continue
+            lease = self._lease_tokens.get(reservation_id)
+            record = asdict(reservation)
+            record["transfer_id"] = self._reservation_transfers.get(reservation_id)
+            record["job_id"] = None if lease is None else lease.job_id
+            records.append(record)
+        return records
+
+    def _relay_lease_records_locked(self, relay_gpu: int) -> list[dict[str, object]]:
+        records = []
+        for lease_id, lease in sorted(self._lease_tokens.items()):
+            if lease.relay_gpu != relay_gpu:
+                continue
+            if lease_id not in self._reservations:
+                continue
+            records.append(
+                {
+                    "lease_id": lease.lease_id,
+                    "session_id": lease.session_id,
+                    "relay_gpu": lease.relay_gpu,
+                    "job_id": lease.job_id,
+                    "buffer_ids": lease.buffer_ids,
+                    "issued_at": lease.issued_at,
+                    "expires_at": lease.expires_at,
+                    "transfer_id": self._reservation_transfers.get(lease_id),
+                }
+            )
+        return records
 
     def handle_wire_message(self, data: bytes | str) -> DaemonResponse:
         try:

@@ -87,6 +87,22 @@ class DaemonSocketTest(unittest.TestCase):
             },
         )
 
+    def test_client_discover_relays_uses_discover_request(self) -> None:
+        client = RecordingDaemonClient()
+
+        response = client.discover_relays(target_gpu=0, relay_gpus=[1, 2])
+
+        self.assertTrue(response.ok)
+        self.assertEqual(len(client.requests), 1)
+        self.assertEqual(client.requests[0].request_type, RequestType.DISCOVER_RELAYS)
+        self.assertEqual(
+            client.requests[0].payload,
+            {
+                "target_gpu": 0,
+                "relay_gpus": [1, 2],
+            },
+        )
+
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
     def test_socket_session_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

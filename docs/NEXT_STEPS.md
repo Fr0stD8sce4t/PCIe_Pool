@@ -201,15 +201,18 @@ Current status:
 - worker endpoint observability request/response event tracking now records
   observability message sizes separately from the normal worker event stream
   while keeping the returned snapshot payload stable.
+- daemon relay discovery now reports backend-neutral relay eligibility,
+  quota availability, cross-job session ownership, active reservations, and
+  redacted active lease records without exposing lease tokens.
 
 Next code cut:
 
-- start the daemon control-plane slice that owns cross-job relay discovery and
-  relay lease bookkeeping, still in process and without sockets or IPC;
-- add focused tests that daemon-owned relay discovery and lease bookkeeping
-  stay backend-neutral and do not change direct fallback behavior;
-- keep the worker observability slice as a completed subtask while the next
-  phase moves to daemon control-plane state.
+- add daemon-side expired relay lease cleanup so stale reservations release
+  relay quota without relying on a client release or session close;
+- keep it in process only, with no CUDA IPC, sockets, real data movement, or
+  hardware discovery yet;
+- add focused tests that expired lease cleanup removes reservations, clears
+  redacted relay discovery records, and preserves direct fallback behavior.
 
 ## Upcoming
 

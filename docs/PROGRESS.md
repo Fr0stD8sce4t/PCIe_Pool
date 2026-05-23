@@ -38,6 +38,9 @@ transfer request objects:
 - worker endpoint observability requests now record a separate event stream
   with request and response byte counts while keeping the returned snapshot
   payload stable.
+- daemon control plane now exposes backend-neutral relay discovery snapshots
+  with per-relay eligibility, quota, active sessions, active reservations, and
+  redacted lease bookkeeping across jobs.
 
 ## What Was Updated
 
@@ -195,6 +198,12 @@ transfer request objects:
   and observability histories.
 - worker endpoint observability snapshots now have JSON-safe encode/decode
   helpers for future transport observability clients.
+- `TurboBusDaemon.discover_relays()` now reports cross-job relay occupancy,
+  target-specific inventory eligibility, quota availability, active
+  reservations, and redacted active lease records without exposing lease
+  tokens.
+- `TurboBusDaemonClient.discover_relays()` now wraps the same daemon request
+  shape for future control-plane callers.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -332,10 +341,13 @@ phase:
 48. worker endpoint observability request/response event tracking now records
     observability message sizes separately from the normal worker event stream
     while keeping the returned snapshot payload stable.
+49. daemon relay discovery now reports backend-neutral relay eligibility,
+    quota availability, cross-job session ownership, active reservations, and
+    redacted lease records without changing direct fallback behavior.
 
-The next immediate goal is to start the daemon control-plane slice that owns
-cross-job relay discovery and relay lease bookkeeping, still in process and
-without sockets or IPC.
+The next immediate goal is to add daemon-side expired relay lease cleanup so
+stale reservations can release relay quota without relying on a client release
+or session close.
 
 ## Verification
 
@@ -446,8 +458,8 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
   socket or IPC transports can trigger the new endpoint handler explicitly;
   done through `WorkerServiceObservabilityRequestEnvelope` and the worker
   observability codec helpers;
-- start the daemon control-plane slice that owns cross-job relay discovery and
-  relay lease bookkeeping, still in process and without sockets or IPC;
+- add daemon-side expired relay lease cleanup so stale reservations release
+  relay quota without relying on a client release or session close;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper
