@@ -6,13 +6,19 @@ import unittest
 
 from turbobus.schema import (
     AutoTransferDecision,
+    BufferRegistration,
+    CleanupRequest,
     DaemonRequest,
     DaemonResponse,
+    JobIdentity,
+    LeaseToken,
     RelayQuota,
     RequestType,
     Session,
     TransferMode,
     TransferReservation,
+    TransferStatus,
+    TransferStatusState,
 )
 
 
@@ -101,6 +107,93 @@ class SchemaTest(unittest.TestCase):
         self.assertFalse(quota.can_attach())
         self.assertTrue(quota.can_reserve(2))
         self.assertFalse(quota.can_reserve(3))
+
+    def test_daemon_baseline_message_shapes_are_serializable(self) -> None:
+        job = JobIdentity(
+            job_id="job-1",
+            user_id="user-1",
+            session_id="session-1",
+            container_id="container-1",
+            process_id=42,
+        )
+        buffer_registration = BufferRegistration(
+            buffer_id="buffer-1",
+            job_id="job-1",
+            kind="cpu_pinned",
+            size_bytes=4096,
+            device_index=0,
+            address=1024,
+            pinned=True,
+        )
+        lease = LeaseToken(
+            lease_id="lease-1",
+            session_id="session-1",
+            relay_gpu=1,
+            job_id="job-1",
+            issued_at=1.5,
+            expires_at=2.5,
+        )
+        status = TransferStatus(
+            transfer_id="transfer-1",
+            job_id="job-1",
+            state=TransferStatusState.RUNNING,
+            bytes_total=4096,
+            bytes_completed=1024,
+            session_id="session-1",
+        )
+        cleanup = CleanupRequest(
+            target_kind="session",
+            target_id="session-1",
+            reason="timeout",
+            force=True,
+        )
+
+        payload = json.loads(
+            json.dumps(
+                {
+                    "job": asdict(job),
+                    "buffer_registration": asdict(buffer_registration),
+                    "lease": asdict(lease),
+                    "status": asdict(status),
+                    "cleanup": asdict(cleanup),
+                }
+            )
+        )
+
+        self.assertEqual(payload["job"]["process_id"], 42)
+        self.assertEqual(payload["buffer_registration"]["kind"], "cpu_pinned")
+        self.assertEqual(payload["lease"]["relay_gpu"], 1)
+        self.assertEqual(payload["status"]["state"], "running")
+        self.assertTrue(payload["cleanup"]["force"])
+
+    def test_daemon_baseline_message_validation_rejects_invalid_values(self) -> None:
+        with self.assertRaises(ValueError):
+            JobIdentity(job_id="", process_id=1)
+        with self.assertRaises(ValueError):
+            BufferRegistration(
+                buffer_id="buffer-1",
+                job_id="job-1",
+                kind="",
+                size_bytes=1,
+            )
+        with self.assertRaises(ValueError):
+            LeaseToken(
+                lease_id="lease-1",
+                session_id="session-1",
+                relay_gpu=1,
+                issued_at=5.0,
+                expires_at=4.0,
+            )
+        with self.assertRaises(ValueError):
+            TransferStatus(
+                transfer_id="transfer-1",
+                job_id="job-1",
+                state=TransferStatusState.SUBMITTED,
+                bytes_total=1,
+                bytes_completed=2,
+            )
+        with self.assertRaises(ValueError):
+            CleanupRequest(target_kind="", target_id="session-1", reason="timeout")
 
 
 if __name__ == "__main__":

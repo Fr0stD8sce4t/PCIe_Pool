@@ -27,6 +27,9 @@ Completed in the refactor layer:
 - framework adapter logic now lives under `turbobus.adapters`; old flat modules
   such as `turbobus.vllm_kv_connector` are compatibility aliases to the adapter
   modules.
+- daemon protocol baseline message shapes for job identity, buffer
+  registration, lease tokens, transfer status, and cleanup now exist, with
+  validation coverage.
 
 Current status:
 
@@ -48,11 +51,14 @@ Current status:
 - `turbobus.adapters` now owns framework-facing logic for inference slot
   adapters, vLLM helpers/connectors, model loading, and training offload while
   preserving old root-level import paths as module aliases.
+- daemon protocol baseline message shapes now exist in `turbobus.schema` and
+  are re-exported through `turbobus.daemon.protocol`.
 
 Next code cut:
 
 - define the next daemon protocol messages for job registration, buffer
-  registration, transfer status, lease tokens, and cleanup;
+  registration, transfer status, lease tokens, and cleanup if more fields or
+  wire handlers are needed;
 - keep the daemon as the owner of planning/control decisions;
 - do not add worker execution yet, but shape the protocol so worker/helper
   execution can consume the same `TransferRequest` and lease records later.

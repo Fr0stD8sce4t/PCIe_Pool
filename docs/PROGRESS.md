@@ -28,6 +28,9 @@ transfer request objects:
 - `turbobus.transfer` defines `TransferRequest`, `TransferRange`, and
   `TransferDirection` as the shared request shape for runtime, daemon, adapter,
   and future worker code;
+- `turbobus.schema` now also defines the daemon protocol baseline message
+  shapes for job identity, buffer registration, lease tokens, transfer status,
+  and cleanup requests;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -52,6 +55,8 @@ transfer request objects:
   validation and daemon payload serialization.
 - `turbobus/daemon/client.py` exposes `plan_transfer_request`; the older
   `plan_transfer` helper now builds the same request object.
+- Added daemon protocol baseline message types and validation tests for job,
+  buffer, lease, transfer status, and cleanup records.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -77,6 +82,8 @@ phase:
 4. root-level framework modules remain compatible through aliases;
 5. explicit transfer request objects are available for runtime, daemon, adapter,
    and future worker paths.
+6. daemon protocol baseline message shapes now exist for job identity, buffer
+   registration, lease tokens, transfer status, and cleanup.
 
 The next immediate goal is the daemon protocol baseline: job registration,
 buffer registration, transfer status, lease-token records, and cleanup
