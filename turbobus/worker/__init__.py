@@ -20,6 +20,7 @@ from .helper import (
     WorkerTransferUnsupportedExecutor,
     parse_worker_authorization_request_payload,
 )
+from .cuda_executor import CudaWorkerExecutor
 from .resources import (
     WorkerDataPlaneResourceBinder,
     WorkerDataPlaneResourceBinding,
@@ -65,6 +66,7 @@ __all__ = [
     "WorkerDataPlaneResourceError",
     "WorkerDataPlaneResources",
     "WorkerDataPlaneRequest",
+    "CudaWorkerExecutor",
     "WorkerTransferAuthorizer",
     "WorkerTransferClient",
     "WorkerTransferCleanupCoordinator",

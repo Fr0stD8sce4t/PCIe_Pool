@@ -11,6 +11,7 @@ from threading import Event
 from unittest.mock import Mock, patch
 
 from turbobus.worker import (
+    CudaWorkerExecutor,
     WorkerServiceEndpoint,
     WorkerServiceUnixSocketTransport,
     decode_worker_response_envelope,
@@ -35,6 +36,13 @@ class WorkerProcessTest(unittest.TestCase):
         self.assertEqual(
             transport.endpoint.service.transfer_client.authorizer.daemon_client.socket_path,
             "/tmp/turbobusd.sock",
+        )
+        self.assertIsInstance(
+            transport.endpoint.service.transfer_client.executor,
+            CudaWorkerExecutor,
+        )
+        self.assertIsNotNone(
+            transport.endpoint.service.transfer_client.resource_binder,
         )
 
     def test_run_worker_helper_process_uses_the_transport(self) -> None:

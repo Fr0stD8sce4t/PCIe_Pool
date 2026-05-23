@@ -21,6 +21,14 @@ class TransferBackend(Protocol):
     def create_runtime(self, options: Any) -> Any:
         ...
 
+    def initialize_runtime(
+        self,
+        runtime: Any,
+        target_device: int,
+        relay_gpus: Iterable[int],
+    ) -> None:
+        ...
+
     def make_ranges(
         self,
         ranges: Iterable,
@@ -52,6 +60,12 @@ class TransferBackend(Protocol):
         host_bytes: int,
         plan: Any,
     ) -> Any:
+        ...
+
+    def wait(self, runtime: Any, handle: Any) -> None:
+        ...
+
+    def stats(self, runtime: Any, handle: Any) -> Any:
         ...
 
 

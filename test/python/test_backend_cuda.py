@@ -70,8 +70,14 @@ class FakeRuntimeEngine:
 
 class FakeExactPlanRuntime:
     def __init__(self) -> None:
+        self.init_calls = []
         self.fetch_plan_calls = []
         self.offload_plan_calls = []
+        self.wait_calls = []
+        self.stats_calls = []
+
+    def init(self, target_device, relay_gpus):
+        self.init_calls.append((target_device, list(relay_gpus)))
 
     def fetch_plan_to_gpu(
         self,
@@ -98,6 +104,13 @@ class FakeExactPlanRuntime:
             (target_ptr, target_bytes, host_ptr, host_bytes, plan)
         )
         return "offload-handle"
+
+    def wait(self, handle):
+        self.wait_calls.append(handle)
+
+    def stats(self, handle):
+        self.stats_calls.append(handle)
+        return "stats"
 
 
 class FakeOptions:
@@ -194,6 +207,15 @@ class CudaNativeBackendTest(unittest.TestCase):
             runtime.offload_plan_calls,
             [(200, 32, 100, 16, "native-plan")],
         )
+
+        backend.initialize_runtime(runtime, target_device=0, relay_gpus=[1])
+        backend.wait(runtime, fetch_handle)
+        stats = backend.stats(runtime, fetch_handle)
+
+        self.assertEqual(runtime.init_calls, [(0, [1])])
+        self.assertEqual(runtime.wait_calls, ["fetch-handle"])
+        self.assertEqual(runtime.stats_calls, ["fetch-handle"])
+        self.assertEqual(stats, "stats")
 
     def test_backend_rejects_missing_exact_plan_submitter(self) -> None:
         backend = CudaNativeBackend(FakeRuntimeEngine())

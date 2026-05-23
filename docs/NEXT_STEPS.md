@@ -87,28 +87,27 @@ Completed current code cut:
   code can export a target device pointer as daemon registration metadata, and
   worker resources can open and close that target device pointer before
   invoking a bound executor.
+- Add the first CUDA worker executor for the daemon-approved H2D relay path.
+  The worker/helper default process now binds shared CPU and CUDA IPC target
+  handles, creates a worker-local native CUDA runtime, allocates relay staging
+  inside that worker runtime, executes the authorized relay chunks, waits for
+  completion, and reports daemon-owned completion metadata.
 
-1. Define the first registered buffer handles.
-   - Pass bound source and target resources into the future CUDA worker
-     executor.
-
-2. Implement a CUDA worker executor.
-   - Replace the default unsupported executor for one narrow path.
-   - Allocate relay staging buffers in the worker/helper process.
-   - Use CUDA IPC or the first accepted equivalent for target GPU access.
-   - Run H2D relay transfer from shared CPU memory through relay staging to the
-     target GPU.
-
-3. Connect client, daemon, and worker into one functional call.
+1. Connect client, daemon, and worker into one functional call.
    - Client submits a transfer request to the daemon.
    - Daemon authorizes relay use and returns the plan/lease.
    - Worker executes and reports status.
    - Client waits on daemon-owned completion.
 
-4. Add cleanup and isolation only where the real path needs it.
+2. Add cleanup and isolation only where the real path needs it.
    - Validate lease tokens before touching relay resources.
    - Clear or protect reused relay staging buffers.
    - Release reservations on failure or completion.
+
+3. Extend the worker executor only after the functional call works.
+   - Add D2H through the same resource binding path.
+   - Add pooled direct-plus-relay execution through daemon-issued chunks.
+   - Keep the executor limited to daemon-authorized plans and handles.
 
 ## Defer For Now
 

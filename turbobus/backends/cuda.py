@@ -29,6 +29,17 @@ class CudaNativeBackend:
         self.require_available()
         return self._runtime_engine._turbobus.Runtime(options.to_native())
 
+    def initialize_runtime(
+        self,
+        runtime: Any,
+        target_device: int,
+        relay_gpus: Iterable[int],
+    ) -> None:
+        initializer = getattr(runtime, "init", None)
+        if not callable(initializer):
+            raise RuntimeError("native runtime does not support initialization")
+        initializer(int(target_device), [int(gpu) for gpu in relay_gpus])
+
     def make_ranges(
         self,
         ranges: Iterable,
@@ -137,6 +148,18 @@ class CudaNativeBackend:
         if not callable(submitter):
             raise RuntimeError("native runtime does not support exact transfer plans")
         return submitter(target_ptr, target_bytes, host_ptr, host_bytes, plan)
+
+    def wait(self, runtime: Any, handle: Any) -> None:
+        waiter = getattr(runtime, "wait", None)
+        if not callable(waiter):
+            raise RuntimeError("native runtime does not support transfer waiting")
+        waiter(handle)
+
+    def stats(self, runtime: Any, handle: Any) -> Any:
+        statter = getattr(runtime, "stats", None)
+        if not callable(statter):
+            raise RuntimeError("native runtime does not support transfer stats")
+        return statter(handle)
 
 
 default_cuda_backend = CudaNativeBackend()

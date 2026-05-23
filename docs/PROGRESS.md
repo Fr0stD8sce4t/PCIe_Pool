@@ -48,6 +48,12 @@ transfer request objects:
 - client-side CUDA IPC target buffers can now export a target device pointer
   into daemon-ready `cuda_ipc_device` metadata, and worker resources can open
   and close that CUDA IPC target pointer before bound executor invocation;
+- `turbobus.worker.cuda_executor.CudaWorkerExecutor` now runs the first narrow
+  daemon-authorized CUDA worker path: shared CPU source to worker-owned relay
+  staging to CUDA IPC target GPU for H2D relay chunks;
+- the worker helper process now uses the CUDA worker executor and resource
+  binder by default, so the helper-process boundary no longer defaults to the
+  unsupported executor when serving real requests;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -239,6 +245,10 @@ transfer request objects:
 - Added backend, client, and worker coverage for exporting CUDA IPC target
   handles, registering them with the daemon, opening them in the worker, and
   closing the opened device pointer after executor invocation.
+- Added worker CUDA executor coverage for converting authorized H2D relay
+  chunks into an exact native relay plan, initializing a worker-local CUDA
+  runtime, waiting for transfer completion, and returning daemon status
+  metadata.
 
 ## Immediate Goal
 
@@ -359,14 +369,20 @@ phase:
 43. target GPU buffers now have a CUDA IPC producer/consumer path: client code
     exports a device pointer into `cuda_ipc_device` metadata, and worker/helper
     resources open and close that target pointer around bound executor calls.
+44. the worker/helper path now has a first CUDA executor for H2D relay
+    transfers. It uses bound shared CPU and CUDA IPC target resources, creates
+    the native runtime inside the worker process, initializes the daemon-
+    authorized relay GPU, submits the relay-only exact chunk plan, waits for
+    completion, and returns daemon-owned completion metadata.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
 daemon-managed data movement slice. The worker control-plane smoke helper,
 worker endpoint observability/event-history plumbing, loopback transport
 wrapper, and full worker response lifecycle serialization have been removed.
-The next code should use the bound shared CPU source plus target IPC handle in
-the first narrow CUDA worker executor.
+The next code should connect client, daemon, and worker into one functional
+call that creates the transfer, invokes the helper executor, reports status,
+and lets the client wait on daemon-owned completion.
 
 ## Verification
 
@@ -402,9 +418,10 @@ $env:PYTHONPATH='.'; python test/python/test_client_shared_buffer.py
   authorization, staging ownership, completion, cleanup, and direct fallback;
 - rebuild the native extension on a CUDA server and verify that daemon-issued
   direct, relay, and pooled plans execute through the exact-plan entry point;
-- implement a CUDA worker executor for one narrow H2D relay path;
-- allocate relay staging buffers in the worker/helper process, not in the
-  client;
+- verify the first CUDA worker executor on a CUDA server with one H2D relay
+  path;
+- rebuild the native extension on a CUDA server and run the new worker
+  executor against real shared CPU, relay GPU, and CUDA IPC target buffers;
 - wire client, daemon, worker, and backend into one transfer call that moves
   real bytes and reports daemon-owned completion;
 - keep direct fallback available when relay lease or worker execution fails;
