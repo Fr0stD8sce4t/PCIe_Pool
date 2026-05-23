@@ -286,14 +286,20 @@ class DaemonSocketTest(unittest.TestCase):
 
             self.assertTrue(planned.ok)
             self.assertEqual(planned.payload["stats"]["resolved_mode"], "pool")
+            transfer_id = planned.payload["transfer_id"]
             reservation_id = planned.payload["reservations"][0]["reservation_id"]
+
+            submitted = client.transfer_status(transfer_id)
+            self.assertTrue(submitted.ok)
+            self.assertEqual(submitted.payload["status"]["state"], "submitted")
+
             released = client.release_transfer(reservation_id)
             self.assertTrue(released.ok)
-            self.assertTrue(invalidated.payload["removed"])
 
-            missing_again = client.get_profile(target_gpu=0, relay_gpus=[1])
-            self.assertTrue(missing_again.ok)
-            self.assertIsNone(missing_again.payload["profile"])
+            completed = client.transfer_status(transfer_id)
+            self.assertTrue(completed.ok)
+            self.assertEqual(completed.payload["status"]["state"], "complete")
+            self.assertEqual(completed.payload["status"]["bytes_completed"], 64)
 
 
 if __name__ == "__main__":

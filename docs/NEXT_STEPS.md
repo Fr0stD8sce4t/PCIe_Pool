@@ -60,6 +60,9 @@ Current status:
 - daemon-issued plans now include a transfer id and status record; status can
   be queried or updated through `TRANSFER_STATUS`, and relay-backed transfers
   complete when reservations are released.
+- socket clients can query daemon transfer status, and the socket round-trip
+  coverage now verifies a planned relay-backed transfer through release and
+  completion.
 
 Next code cut:
 

@@ -121,6 +121,27 @@ class TurboBusDaemonClient:
             )
         )
 
+    def transfer_status(
+        self,
+        transfer_id: str,
+        state: str | None = None,
+        bytes_completed: int | None = None,
+        error: str | None = None,
+    ) -> DaemonResponse:
+        payload: dict[str, object] = {"transfer_id": str(transfer_id)}
+        if state is not None:
+            payload["state"] = str(state)
+        if bytes_completed is not None:
+            payload["bytes_completed"] = int(bytes_completed)
+        if error is not None:
+            payload["error"] = str(error)
+        return self.send(
+            DaemonRequest(
+                request_type=RequestType.TRANSFER_STATUS,
+                payload=payload,
+            )
+        )
+
     def get_profile(self, target_gpu: int, relay_gpus: list[int]) -> DaemonResponse:
         return self.send(
             DaemonRequest(

@@ -62,6 +62,9 @@ transfer request objects:
 - `TurboBusDaemon` now creates transfer status records for daemon-issued plans,
   exposes `TRANSFER_STATUS` queries and updates, and marks relay-backed
   transfers complete when their reservations are released.
+- `TurboBusDaemonClient` now exposes the same transfer-status request path over
+  the daemon socket, and the socket round-trip test checks submitted-to-complete
+  status transitions after releasing a relay reservation.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
