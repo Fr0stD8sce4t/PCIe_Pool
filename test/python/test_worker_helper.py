@@ -1336,6 +1336,18 @@ class WorkerHelperTest(unittest.TestCase):
                 "last_ok": None,
             },
         )
+        self.assertEqual(
+            snapshot["metrics"],
+            {
+                "retained_event_count": 0,
+                "request_bytes_total": 0,
+                "response_bytes_total": 0,
+                "average_request_bytes": None,
+                "average_response_bytes": None,
+                "last_request_bytes": None,
+                "last_response_bytes": None,
+            },
+        )
         self.assertEqual(snapshot["final_state_counts"], {})
         self.assertEqual(snapshot["error_count"], 0)
         self.assertEqual(snapshot["completion_count"], 0)
@@ -1474,6 +1486,41 @@ class WorkerHelperTest(unittest.TestCase):
         )
         self.assertEqual(snapshot["health"]["last_final_state"], "status_failed")
         self.assertTrue(snapshot["health"]["last_ok"])
+        expected_request_bytes = (
+            len(request_message.encode("utf-8"))
+            + len("{not-json".encode("utf-8"))
+            + len(request_message.encode("utf-8"))
+        )
+        expected_response_bytes = (
+            len(success_response.encode("utf-8"))
+            + len(parse_error_response.encode("utf-8"))
+            + len(status_response.encode("utf-8"))
+        )
+        self.assertEqual(snapshot["metrics"]["retained_event_count"], 3)
+        self.assertEqual(
+            snapshot["metrics"]["request_bytes_total"],
+            expected_request_bytes,
+        )
+        self.assertEqual(
+            snapshot["metrics"]["response_bytes_total"],
+            expected_response_bytes,
+        )
+        self.assertEqual(
+            snapshot["metrics"]["average_request_bytes"],
+            expected_request_bytes / 3,
+        )
+        self.assertEqual(
+            snapshot["metrics"]["average_response_bytes"],
+            expected_response_bytes / 3,
+        )
+        self.assertEqual(
+            snapshot["metrics"]["last_request_bytes"],
+            len(request_message.encode("utf-8")),
+        )
+        self.assertEqual(
+            snapshot["metrics"]["last_response_bytes"],
+            len(status_response.encode("utf-8")),
+        )
         self.assertEqual(
             decode_worker_response_envelope(success_response).as_dict()["final_state"],
             "unsupported",
@@ -1619,6 +1666,90 @@ class WorkerHelperTest(unittest.TestCase):
         )
         self.assertEqual(health["last_final_state"], "status_failed")
         self.assertTrue(health["last_ok"])
+
+    def test_worker_service_endpoint_metrics_snapshot_counts_success_bytes(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        endpoint = WorkerServiceEndpoint(daemon_client=daemon_client)
+        request_message = encode_worker_request_envelope(
+            WorkerServiceRequestEnvelope(payload=authorization_request_payload())
+        )
+
+        response_message = endpoint.handle_message(request_message)
+        response = decode_worker_response_envelope(response_message).as_dict()
+        metrics = endpoint.metrics_snapshot()
+
+        self.assertEqual(response["final_state"], "unsupported")
+        self.assertEqual(metrics["retained_event_count"], 1)
+        self.assertEqual(
+            metrics["request_bytes_total"],
+            len(request_message.encode("utf-8")),
+        )
+        self.assertEqual(
+            metrics["response_bytes_total"],
+            len(response_message.encode("utf-8")),
+        )
+        self.assertEqual(
+            metrics["average_request_bytes"],
+            len(request_message.encode("utf-8")),
+        )
+        self.assertEqual(
+            metrics["average_response_bytes"],
+            len(response_message.encode("utf-8")),
+        )
+        self.assertEqual(
+            metrics["last_request_bytes"],
+            len(request_message.encode("utf-8")),
+        )
+        self.assertEqual(
+            metrics["last_response_bytes"],
+            len(response_message.encode("utf-8")),
+        )
+
+    def test_worker_service_endpoint_metrics_snapshot_counts_bounded_bytes(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        endpoint = WorkerServiceEndpoint(
+            daemon_client=daemon_client,
+            max_events=2,
+        )
+        request_message = encode_worker_request_envelope(
+            WorkerServiceRequestEnvelope(payload=authorization_request_payload())
+        )
+
+        first_response = endpoint.handle_message(request_message)
+        parse_error_response = endpoint.handle_message("{not-json")
+        daemon_client.status_response = DaemonResponse(
+            ok=False,
+            error="unknown transfer",
+        )
+        status_response = endpoint.handle_message(request_message)
+        metrics = endpoint.metrics_snapshot()
+
+        self.assertEqual(
+            decode_worker_response_envelope(first_response).as_dict()["final_state"],
+            "unsupported",
+        )
+        self.assertEqual(metrics["retained_event_count"], 2)
+        self.assertEqual(
+            metrics["request_bytes_total"],
+            len("{not-json".encode("utf-8")) + len(request_message.encode("utf-8")),
+        )
+        self.assertEqual(
+            metrics["response_bytes_total"],
+            len(parse_error_response.encode("utf-8"))
+            + len(status_response.encode("utf-8")),
+        )
+        self.assertEqual(
+            metrics["last_request_bytes"],
+            len(request_message.encode("utf-8")),
+        )
+        self.assertEqual(
+            metrics["last_response_bytes"],
+            len(status_response.encode("utf-8")),
+        )
 
     def test_worker_service_endpoint_clear_events_resets_snapshot(self) -> None:
         daemon_client = FakeDaemonClient(

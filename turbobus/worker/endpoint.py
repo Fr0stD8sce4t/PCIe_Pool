@@ -90,6 +90,7 @@ class WorkerServiceEndpoint:
             ),
             "events": self.event_snapshot(),
             "health": self.health_snapshot(),
+            "metrics": self.metrics_snapshot(),
             "final_state_counts": final_state_counts,
             "error_count": error_count,
             "completion_count": completion_count,
@@ -123,6 +124,30 @@ class WorkerServiceEndpoint:
                 self.last_event.final_state if self.last_event is not None else None
             ),
             "last_ok": self.last_event.ok if self.last_event is not None else None,
+        }
+
+    def metrics_snapshot(self) -> dict[str, object]:
+        retained_event_count = len(self.events)
+        request_bytes_total = sum(event.request_bytes for event in self.events)
+        response_bytes_total = sum(event.response_bytes for event in self.events)
+        if retained_event_count == 0:
+            average_request_bytes = None
+            average_response_bytes = None
+        else:
+            average_request_bytes = request_bytes_total / retained_event_count
+            average_response_bytes = response_bytes_total / retained_event_count
+        return {
+            "retained_event_count": retained_event_count,
+            "request_bytes_total": request_bytes_total,
+            "response_bytes_total": response_bytes_total,
+            "average_request_bytes": average_request_bytes,
+            "average_response_bytes": average_response_bytes,
+            "last_request_bytes": (
+                self.last_event.request_bytes if self.last_event is not None else None
+            ),
+            "last_response_bytes": (
+                self.last_event.response_bytes if self.last_event is not None else None
+            ),
         }
 
     def _trim_events(self) -> None:

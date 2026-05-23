@@ -185,16 +185,19 @@ Current status:
   under the stable `events` field for future transport observability clients.
 - worker endpoint health snapshots now summarize in-process readiness from
   retained events and are included in `describe()` under `health`.
+- worker endpoint metrics snapshots now summarize retained request/response
+  byte counts and are included in `describe()` under `metrics`.
 
 Next code cut:
 
-- add an in-process worker endpoint metrics snapshot that summarizes retained
-  request/response byte counts for future socket or IPC observability clients;
+- add an in-process worker endpoint observability snapshot that combines
+  `describe()`, retained events, health, and metrics under one stable payload
+  for future socket or IPC observability clients;
 - keep it in process only, with no CUDA IPC, sockets, real data movement, or
   hardware discovery yet;
-- add focused tests for empty endpoints, success-only endpoints, parse/status
-  error endpoints, and bounded event histories while keeping encoded response
-  payloads unchanged.
+- add focused tests that the combined snapshot matches the existing describe,
+  events, health, and metrics outputs for empty and populated endpoints while
+  keeping encoded response payloads unchanged.
 
 ## Upcoming
 
