@@ -151,6 +151,10 @@ transfer request objects:
   failures after helper execution. If the client cannot read daemon-owned
   transfer status, it best-effort cleans the relay reservation with
   `daemon_status_query_failed` before surfacing the status error;
+- worker CUDA executor completion metadata now falls back to the daemon-issued
+  exact plan for direct and relay byte counts when native stats do not expose
+  per-path byte fields, so pooled helper-socket verification can validate the
+  daemon-approved direct-plus-relay split accurately;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -614,6 +618,10 @@ phase:
     with `daemon_status_query_failed` before raising the status query error,
     keeping the relay lease from being left active when the final daemon-owned
     completion read fails.
+68. worker CUDA executor pool completion metadata now derives missing
+    direct/relay byte counts from the daemon-issued exact plan. This keeps
+    `turbobus.verification --mode pool` from treating a native stats object
+    without per-path byte fields as an all-relay transfer.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
@@ -651,6 +659,7 @@ $env:PYTHONPATH='.'; python test/python/test_vllm_connector.py
 $env:PYTHONPATH='.'; python test/python/test_vllm_integration.py
 $env:PYTHONPATH='.'; python test/python/test_vllm_kv_connector.py
 $env:PYTHONPATH='.'; python test/python/test_vllm_kv_connector_sweep.py
+$env:PYTHONPATH='.'; python test/python/test_worker_cuda_executor.py
 $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
 $env:PYTHONPATH='.'; python test/python/test_client_shared_buffer.py
 $env:PYTHONPATH='.'; python test/python/test_client_worker_transfer.py

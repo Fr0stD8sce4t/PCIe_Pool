@@ -97,6 +97,8 @@ class CudaWorkerExecutor:
             return _failed_result(request, staging_slot, str(exc))
 
         bytes_completed = _stats_int(stats, "bytes", int(plan_payload["total_bytes"]))
+        planned_direct_bytes = _assignment_byte_count(plan_payload, "direct")
+        planned_relay_bytes = _assignment_byte_count(plan_payload, "relay")
         direct_chunks = _stats_int(
             stats,
             "direct_chunks",
@@ -123,9 +125,17 @@ class CudaWorkerExecutor:
                 "src_buffer_id": request.data_plane.src_handle.buffer_id,
                 "dst_buffer_id": request.data_plane.dst_handle.buffer_id,
                 "staging_slot_id": staging_slot.slot_id,
-                "direct_bytes": _stats_int(stats, "direct_bytes", 0),
+                "direct_bytes": _stats_int(
+                    stats,
+                    "direct_bytes",
+                    planned_direct_bytes,
+                ),
                 "direct_chunks": direct_chunks,
-                "relay_bytes": _stats_int(stats, "relay_bytes", bytes_completed),
+                "relay_bytes": _stats_int(
+                    stats,
+                    "relay_bytes",
+                    planned_relay_bytes,
+                ),
                 "relay_chunks": relay_chunks,
             },
         )
@@ -239,6 +249,20 @@ def _assignment_chunk_count(plan_payload: dict[str, object], path_kind: str) -> 
         if str(path.get("kind", "")).lower() != path_kind:
             continue
         total += len(assignment.get("chunks", ()) or ())
+    return total
+
+
+def _assignment_byte_count(plan_payload: dict[str, object], path_kind: str) -> int:
+    total = 0
+    for assignment in plan_payload.get("assignments", ()) or ():
+        path = assignment.get("path") if isinstance(assignment, dict) else None
+        if not isinstance(path, dict):
+            continue
+        if str(path.get("kind", "")).lower() != path_kind:
+            continue
+        for chunk in assignment.get("chunks", ()) or ():
+            if isinstance(chunk, dict):
+                total += int(chunk.get("bytes", 0))
     return total
 
 

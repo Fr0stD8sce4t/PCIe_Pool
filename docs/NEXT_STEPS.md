@@ -188,6 +188,10 @@ Completed current code cut:
   final transfer status after worker/helper execution. The client now
   best-effort cleans the relay reservation with `daemon_status_query_failed`
   before surfacing the status error.
+- Derive worker completion direct/relay byte metadata from the daemon-issued
+  exact plan when the native stats object does not expose per-path byte
+  fields. Pool verification now keeps the direct-plus-relay split tied to the
+  daemon plan instead of defaulting all completed bytes to the relay path.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
