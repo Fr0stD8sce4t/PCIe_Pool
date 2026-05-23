@@ -147,11 +147,9 @@ transfer request objects:
 - `WorkerServiceRequestEnvelope` and `WorkerServiceResponseEnvelope` now wrap
   successful lifecycle payloads, malformed payload errors, status failures, and
   cleanup failures in one stable in-process response shape.
-- `run_worker_service_control_plane_smoke` now wires daemon-owned planning,
-  worker service envelope handling, daemon status reporting, and daemon
-  reservation cleanup together in process, proving the service boundary can
-  fail unsupported execution and reclaim the relay lease without sockets, IPC,
-  or real data movement.
+- Removed the smoke-only `run_worker_service_control_plane_smoke` helper and
+  its tests so the worker package no longer preserves an unsupported
+  control-plane round trip as a product path.
 - `WorkerBufferHandle`, `WorkerStagingBufferRequirement`,
   `WorkerDataPlaneRequest`, and `WorkerDataPlaneCompletion` now define the
   first worker data-plane request and completion shapes for daemon-approved
@@ -376,10 +374,17 @@ phase:
     transports can reuse the in-process helper contract without changing
     authorization, lifecycle, or observability handling.
 
-The next immediate goal is to connect daemon-issued planned transfer metadata
-to the worker helper process over the worker socket transport while keeping
-execution on the explicit unsupported path until CUDA IPC or another real data
-movement path exists.
+The next immediate goal has changed: stop extending the unsupported
+control-plane path and prepare the codebase for the first real
+daemon-managed data movement slice. Before adding the CUDA worker data path,
+remove smoke-only helpers, endpoint observability/event-history plumbing,
+extra socket wrappers, and unsupported-lifecycle serialization that do not
+serve real transfer execution.
+
+After that cleanup, the next code should execute daemon-issued transfer plans
+exactly, define the first registered buffer handles, and replace the
+unsupported worker executor for a narrow CUDA H2D relay path that moves real
+bytes through `CPU -> relay GPU -> target GPU`.
 
 ## Verification
 
@@ -409,92 +414,28 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
 
 ## Remaining Work
 
-- define daemon protocol records for job identity, buffer registration,
-  lease tokens, and worker-facing cleanup;
-- add a daemon-owned resource and topology inventory skeleton that later
-  scheduling can consume; done as the first inventory cut;
-- connect daemon scheduling inputs to the inventory skeleton without changing
-  direct fallback behavior; done as the first scheduling-input cut;
-- surface inventory-derived planning metadata in daemon responses; done as the
-  first observability cut;
-- add daemon cleanup observability for stale sessions and canceled
-  reservations; done through `system_cleanup_events`;
-- add a daemon client helper for profile/describe reporting; done through
-  `TurboBusDaemonClient.describe()`;
-- add a daemon client helper for `CLEANUP` requests; done through
-  `TurboBusDaemonClient.cleanup()`;
-- add worker-side cleanup coordination for failed or unsupported helper
-  transfers; done through `WorkerTransferCleanupCoordinator`;
-- add worker request lifecycle records for future helper processes; done
-  through `WorkerTransferLifecycleRecord`;
-- add an in-process worker helper service skeleton that returns lifecycle
-  records; done through `WorkerTransferService`;
-- add worker service payload parsing helpers for future worker process
-  boundaries; done through `parse_worker_authorization_request_payload`;
-- add worker service request/response envelope records; done through
-  `WorkerServiceRequestEnvelope` and `WorkerServiceResponseEnvelope`;
-- add worker service control-plane smoke coverage for daemon-owned planned
-  transfers; done through `run_worker_service_control_plane_smoke`;
-- define the first worker data-plane request shape for daemon-approved relay
-  execution; done through `WorkerDataPlaneRequest` and related worker schema
-  records;
-- add an in-memory worker staging-pool skeleton for relay staging slots; done
-  through `WorkerStagingPool`;
-- wire the in-memory staging pool into the worker service lifecycle; done by
-  allocating and releasing staging slots inside `WorkerTransferClient`;
-- define the worker data-plane executor interface that receives both the worker
-  request and allocated staging slot; done in `WorkerTransferUnsupportedExecutor`
-  and the worker lifecycle call path;
-- add a worker data-plane completion envelope for future helper process
-  boundaries; done through `WorkerDataPlaneCompletionEnvelope`;
-- thread the worker data-plane completion envelope through worker service
-  responses; done through `WorkerServiceResponseEnvelope.completion`;
-- add a minimal worker process message codec for request and response
-  envelopes; done through `turbobus.worker.codec`;
-- add an in-process worker service message handler that uses the codec before
-  any socket or IPC transport exists; done through
-  `handle_worker_service_message`;
-- add a transport-neutral worker service endpoint object for future socket or
-  IPC transports; done through `WorkerServiceEndpoint`;
-- add worker endpoint request/response event records for observability around
-  encoded message handling; done through `WorkerEndpointEvent`;
-- add a worker endpoint describe snapshot for recorded message events; done
-  through `WorkerServiceEndpoint.describe()`;
-- add a worker endpoint event reset helper; done through
-  `WorkerServiceEndpoint.clear_events()`;
-- add an optional worker endpoint event history limit; done through
-  `WorkerServiceEndpoint(max_events=...)`;
-- add endpoint configuration fields to worker endpoint describe snapshots; done
-  through `WorkerServiceEndpoint.describe()`;
-- add an in-process endpoint event snapshot helper that exposes retained events
-  without giving callers direct access to the mutable event list; done through
-  `WorkerServiceEndpoint.event_snapshot()`;
-- include retained endpoint event snapshots in `WorkerServiceEndpoint.describe()`
-  under a stable field for future transport observability clients; done through
-  the `events` field;
-- add an in-process worker endpoint health snapshot for future transport
-  observability clients; done through `WorkerServiceEndpoint.health_snapshot()`;
-- add an in-process worker endpoint metrics snapshot for retained request and
-  response byte counts; done through `WorkerServiceEndpoint.metrics_snapshot()`;
-- add a combined worker endpoint observability snapshot for future transport
-  observability clients; done through
-  `WorkerServiceEndpoint.observability_snapshot()`;
-- add a JSON-safe worker endpoint observability payload codec for future
-  transport observability clients; done through
-  `encode_worker_observability_snapshot` and
-  `decode_worker_observability_snapshot`;
-- add an in-process worker endpoint observability message handler for future
-  transport observability clients; done through
-  `WorkerServiceEndpoint.handle_observability_message()`;
-- add a tiny worker observability request envelope and codec helper so future
-  socket or IPC transports can trigger the new endpoint handler explicitly;
-  done through `WorkerServiceObservabilityRequestEnvelope` and the worker
-  observability codec helpers;
-- expose expired relay lease reaping through the daemon client/socket control
-  path so external callers can trigger the same cleanup without relying on
-  client release or session close;
-- keep the daemon plan path as the control-plane entry point for future worker
-  execution;
-- split the current native CUDA execution path further only when worker/helper
-  execution needs it;
+- continue removing non-functional scaffold before the worker data path:
+  endpoint observability, event-history metrics, unused socket wrappers, and
+  unsupported-lifecycle response fields that are not needed by real execution;
+- keep the minimum daemon/client/worker spine for job and buffer registration,
+  transfer requests, exact plans, leases, lease validation, worker
+  authorization, staging ownership, completion, cleanup, and direct fallback;
+- add a backend/runtime path that executes a daemon `PlannerTransferPlan`
+  exactly instead of locally selecting relays again;
+- define the first real registered-buffer handle format for client CPU source
+  memory and target GPU destination memory;
+- choose and implement the first cross-process CPU pinned buffer strategy;
+- add CUDA IPC or an equivalent target device-buffer handle path for worker
+  access;
+- implement a CUDA worker executor for one narrow H2D relay path;
+- allocate relay staging buffers in the worker/helper process, not in the
+  client;
+- wire client, daemon, worker, and backend into one transfer call that moves
+  real bytes and reports daemon-owned completion;
+- keep direct fallback available when relay lease or worker execution fails;
+- add cleanup and staging-buffer protection required by the real data path;
+- defer more protocol, socket, observability, and smoke-test work unless it
+  directly unblocks the functional data path;
+- reconnect vLLM, model loading, and training offload only after the
+  daemon/helper transfer path works end to end;
 - avoid reintroducing local relay selection in runtime or framework adapters.

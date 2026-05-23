@@ -20,7 +20,6 @@ from .helper import (
     WorkerTransferStatusReporter,
     WorkerTransferUnsupportedExecutor,
     parse_worker_authorization_request_payload,
-    run_worker_service_control_plane_smoke,
 )
 from .codec import (
     WorkerMessageCodecError,
@@ -96,5 +95,4 @@ __all__ = [
     "handle_worker_observability_message",
     "handle_worker_service_message",
     "parse_worker_authorization_request_payload",
-    "run_worker_service_control_plane_smoke",
 ]

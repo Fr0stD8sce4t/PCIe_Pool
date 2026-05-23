@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Iterable, Mapping
+from typing import Mapping
 
 from ..schema import (
     BufferRegistration,
@@ -858,74 +858,6 @@ class WorkerTransferService:
         return self.handle_envelope(envelope).as_dict()
 
 
-def run_worker_service_control_plane_smoke(
-    daemon_client,
-    *,
-    session_id: str,
-    job_id: str,
-    src_buffer_id: str,
-    dst_buffer_id: str,
-    total_bytes: int,
-    chunk_bytes: int,
-    direction: str = "h2d",
-    mode: str = "pool",
-    relay_gpu: int | None = None,
-    ranges: Iterable[Mapping[str, int]] | None = None,
-    cleanup_target_kind: str = "reservation",
-    service: WorkerTransferService | None = None,
-) -> dict[str, object]:
-    planned = daemon_client.plan_transfer(
-        session_id=str(session_id),
-        total_bytes=int(total_bytes),
-        chunk_bytes=int(chunk_bytes),
-        mode=str(mode),
-        direction=str(direction),
-        job_id=str(job_id),
-        buffer_ids=[str(src_buffer_id), str(dst_buffer_id)],
-    )
-    if not planned.ok:
-        raise RuntimeError(planned.error or "daemon transfer planning failed")
-    lease_token = _select_smoke_lease_token(
-        planned.payload.get("lease_tokens", ()),
-        relay_gpu=relay_gpu,
-    )
-    reservation = _select_smoke_reservation(
-        planned.payload.get("reservations", ()),
-        lease_id=str(lease_token["lease_id"]),
-    )
-    transfer_id = str(planned.payload["transfer_id"])
-    request_payload = {
-        "transfer_id": transfer_id,
-        "lease_id": str(lease_token["lease_id"]),
-        "token": str(lease_token["token"]),
-        "session_id": str(session_id),
-        "job_id": str(job_id),
-        "src_buffer_id": str(src_buffer_id),
-        "dst_buffer_id": str(dst_buffer_id),
-        "direction": str(direction),
-        "relay_gpu": int(lease_token["relay_gpu"]),
-        "ranges": _smoke_ranges(ranges, reservation),
-    }
-    envelope = WorkerServiceRequestEnvelope(
-        payload=request_payload,
-        cleanup_target_kind=cleanup_target_kind,
-    )
-    worker_service = service or WorkerTransferService(daemon_client)
-    service_response = worker_service.handle_envelope_payload(envelope)
-    status_response = daemon_client.transfer_status(transfer_id)
-    describe_response = daemon_client.describe()
-    return {
-        "planned": asdict(planned),
-        "transfer_id": transfer_id,
-        "lease_id": str(lease_token["lease_id"]),
-        "reservation": dict(reservation),
-        "request_envelope": envelope.as_dict(),
-        "service_response": service_response,
-        "daemon_status": asdict(status_response),
-        "daemon_describe": asdict(describe_response),
-    }
-
-
 def parse_worker_authorization_request_payload(
     payload: Mapping[str, object],
 ) -> WorkerTransferAuthorizationRequest:
@@ -1012,51 +944,6 @@ def _lifecycle_lease_id(lifecycle: WorkerTransferLifecycleRecord) -> str:
     return lifecycle.authorization_request.lease_id
 
 
-def _select_smoke_lease_token(
-    lease_tokens: object,
-    relay_gpu: int | None,
-) -> Mapping[str, object]:
-    if not isinstance(lease_tokens, Iterable):
-        raise RuntimeError("planned transfer did not return lease tokens")
-    for item in lease_tokens:
-        if not isinstance(item, Mapping):
-            continue
-        if relay_gpu is None or int(item["relay_gpu"]) == int(relay_gpu):
-            return item
-    raise RuntimeError("planned transfer did not allocate a relay lease")
-
-
-def _select_smoke_reservation(
-    reservations: object,
-    lease_id: str,
-) -> Mapping[str, object]:
-    if not isinstance(reservations, Iterable):
-        raise RuntimeError("planned transfer did not return reservations")
-    for item in reservations:
-        if isinstance(item, Mapping) and str(item.get("reservation_id")) == str(lease_id):
-            return item
-    raise RuntimeError("planned transfer did not return the relay reservation")
-
-
-def _smoke_ranges(
-    ranges: Iterable[Mapping[str, int]] | None,
-    reservation: Mapping[str, object],
-) -> list[dict[str, int]]:
-    if ranges is not None:
-        return [
-            {
-                "src_offset": int(item["src_offset"]),
-                "dst_offset": int(item["dst_offset"]),
-                "bytes": int(item["bytes"]),
-            }
-            for item in ranges
-        ]
-    bytes_count = int(reservation["bytes"])
-    if bytes_count <= 0:
-        raise RuntimeError("relay reservation has no bytes to smoke-test")
-    return [{"src_offset": 0, "dst_offset": 0, "bytes": bytes_count}]
-
-
 __all__ = [
     "UnsupportedWorkerExecution",
     "WorkerAuthorizationError",
@@ -1079,5 +966,4 @@ __all__ = [
     "WorkerTransferStatusReporter",
     "WorkerTransferUnsupportedExecutor",
     "parse_worker_authorization_request_payload",
-    "run_worker_service_control_plane_smoke",
 ]

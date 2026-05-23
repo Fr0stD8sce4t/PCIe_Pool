@@ -52,7 +52,6 @@ from turbobus.worker import (
     handle_worker_observability_message,
     handle_worker_service_message,
     parse_worker_authorization_request_payload,
-    run_worker_service_control_plane_smoke,
 )
 
 
@@ -630,68 +629,6 @@ class WorkerHelperTest(unittest.TestCase):
         status = daemon.transfer_status(transfer_id)
         self.assertTrue(status.ok)
         self.assertEqual(status.payload["status"]["state"], "failed")
-
-    def test_worker_service_smoke_reclaims_daemon_reservation(self) -> None:
-        daemon, session_id = daemon_with_relay_transfer_path()
-
-        smoke = run_worker_service_control_plane_smoke(
-            daemon,
-            session_id=session_id,
-            job_id="job-1",
-            src_buffer_id="cpu-buffer",
-            dst_buffer_id="gpu-buffer",
-            total_bytes=64,
-            chunk_bytes=16,
-            direction="h2d",
-            mode="pool",
-            relay_gpu=1,
-        )
-
-        service_response = smoke["service_response"]
-        self.assertTrue(service_response["ok"])
-        self.assertEqual(service_response["final_state"], "unsupported")
-        self.assertEqual(
-            service_response["lifecycle"]["cleanup_target"]["target_id"],
-            smoke["lease_id"],
-        )
-        describe = smoke["daemon_describe"]["payload"]
-        self.assertEqual(describe["reservations"], {})
-        self.assertIn(
-            {
-                "target_kind": "reservation",
-                "target_id": smoke["lease_id"],
-                "reason": "worker_unsupported",
-                "force": True,
-            },
-            describe["cleanup_events"],
-        )
-
-    def test_worker_service_smoke_reports_unsupported_execution_failed(self) -> None:
-        daemon, session_id = daemon_with_relay_transfer_path()
-
-        smoke = run_worker_service_control_plane_smoke(
-            daemon,
-            session_id=session_id,
-            job_id="job-1",
-            src_buffer_id="cpu-buffer",
-            dst_buffer_id="gpu-buffer",
-            total_bytes=64,
-            chunk_bytes=16,
-            direction="h2d",
-            mode="pool",
-            relay_gpu=1,
-            ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
-        )
-
-        lifecycle = smoke["service_response"]["lifecycle"]
-        self.assertEqual(lifecycle["result"]["state"], "unsupported")
-        self.assertEqual(lifecycle["status_update"]["state"], "failed")
-        self.assertIn("not implemented", lifecycle["status_update"]["error"])
-        self.assertEqual(smoke["daemon_status"]["payload"]["status"]["state"], "failed")
-        self.assertEqual(
-            smoke["daemon_status"]["payload"]["status"]["bytes_completed"],
-            0,
-        )
 
     def test_lifecycle_record_serializes_control_plane_state(self) -> None:
         request = authorization_request()

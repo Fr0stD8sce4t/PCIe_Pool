@@ -14,7 +14,7 @@ This roadmap follows a rewrite-first approach.
 - Define daemon/client/worker messages.
 - Define backend-neutral transfer objects.
 - Define job, buffer, lease, path, chunk, and stats types.
-- Add validation and serialization tests.
+- Stop once the first real data path has the metadata it needs.
 
 ## Phase 2: Planner And Backend Baseline
 
@@ -31,30 +31,48 @@ This roadmap follows a rewrite-first approach.
 - Issue relay leases.
 - Reclaim stale resources.
 
-## Phase 4: Worker Execution And Isolation
+## Phase 4: Remove Non-Functional Scaffold
+
+- Remove smoke-only helpers and tests that do not exercise real data movement.
+- Remove endpoint observability/event-history code that is not needed for the
+  first working transfer path.
+- Remove extra socket/transport wrappers that only preserve unsupported
+  lifecycle behavior.
+- Keep the smallest daemon/client/worker surface needed for plans, leases,
+  worker authorization, execution, completion, cleanup, and direct fallback.
+
+## Phase 5: Whole-System CUDA Data Path
+
+- Execute exact daemon-issued chunk plans.
+- Register real client buffers with daemon-approved handles.
+- Implement the first shared pinned CPU buffer strategy.
+- Move bytes through direct, relay, and pooled CUDA paths from a daemon plan.
+- Keep the first cut narrow if needed: one relay, H2D, static topology.
+
+## Phase 6: Worker Execution And Isolation
 
 - Add worker or helper processes for safe relay execution.
 - Use IPC or equivalent handles for cross-process buffer access.
 - Enforce job boundaries and lease checks.
 - Prevent relay reuse across unauthorized jobs.
 
-## Phase 5: Framework Adapters
+## Phase 7: Framework Adapters
 
 - vLLM KV prefix save/restore.
 - model-loading bucket transfer.
 - training offload bucket transfer.
 
-## Phase 6: ROCm Support
+## Phase 8: ROCm Support
 
 - Add a ROCm backend.
 - Discover AMD peer and fabric capabilities.
 - Reuse the same planner and daemon protocol.
 
-## Phase 7: Evaluation
+## Phase 9: Evaluation
 
 - single-job benchmarks;
 - multi-job contention benchmarks;
-- fairness and isolation tests;
+- fairness and isolation checks;
 - framework latency and throughput evaluation;
 - direct vs relay vs pool comparisons.
 
@@ -63,6 +81,7 @@ This roadmap follows a rewrite-first approach.
 TurboBus is considered on track only when the new system can:
 
 - accept daemon-approved transfer requests;
+- move real bytes through a daemon-issued direct, relay, or pooled plan;
 - schedule relay use across jobs;
 - keep clients out of unauthorized relay control;
 - support at least one real LLM framework path end to end;

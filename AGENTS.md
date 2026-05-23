@@ -29,6 +29,36 @@ process owns both target and relay GPUs.
 
 Do not preserve old module boundaries just because they already exist.
 
+## Current Implementation Priority
+
+The next phase must prioritize whole-system functionality over additional
+control-plane polish. Do not spend the next code cuts on standalone protocol
+expansion, socket wrappers, observability, smoke tests, or test-only
+infrastructure unless they directly unblock real data movement.
+
+The immediate target is an end-to-end daemon-managed transfer:
+
+1. the client registers a job and real buffers;
+2. the daemon issues an exact chunk-level transfer plan and relay lease;
+3. a worker/helper validates the lease and owns relay staging buffers;
+4. the worker/helper performs real direct, relay, or pooled CUDA movement;
+5. the daemon records completion and releases relay resources.
+
+The first functional slice may be narrow: one node, one target GPU, one relay
+GPU, H2D only, CUDA only, static topology, and a simple shared pinned CPU buffer
+scheme. It must still move real bytes through the daemon-approved path.
+
+Before starting that slice, do one cleanup pass that removes code whose only
+purpose is to keep building the old unsupported control-plane scaffold:
+standalone smoke helpers, endpoint observability plumbing, excess socket
+wrappers, and protocol fields that are not needed by daemon-issued real
+transfer execution. Keep only the minimum daemon/client/worker interfaces
+needed to authorize, execute, complete, and clean up a real transfer.
+
+Do not delete core pieces that the functional path needs: job and buffer
+registration, transfer requests, daemon-issued plans, lease validation, worker
+authorization, staging ownership, cleanup on failure, and direct fallback.
+
 ## New Architecture
 
 Build TurboBus around these layers:
@@ -123,13 +153,20 @@ M3: Rebuild single-process CUDA execution on the new interfaces.
 M4: Add daemon-issued plans with client-side execution.
 
 - The daemon chooses relay paths and returns a plan.
-- The client executes only daemon-approved paths.
+- The backend executes the exact daemon-issued chunk plan; local replanning is
+  only allowed for explicit direct fallback.
+- The client executes only daemon-approved paths during this temporary
+  milestone.
 - This is an intermediate milestone, not the final isolation model.
 
 M5: Add daemon/helper execution with CUDA IPC.
 
 - Client should not need direct visibility of relay GPUs.
 - Worker/helper should own relay staging buffers.
+- Define and implement the first cross-process CPU pinned buffer strategy.
+- Add CUDA IPC or equivalent device-buffer handle exchange for the target GPU.
+- Move real bytes through the worker/helper path before expanding observability
+  or transports.
 - Add ownership checks and lease-token validation.
 
 M6: Add isolation and policy.
@@ -175,5 +212,6 @@ M10: Complete multi-tenant evaluation.
   final design.
 - Keep direct transfer fallback available whenever relay scheduling or lease
   acquisition fails.
-- Add focused tests with each protocol, scheduler, backend, or adapter change.
+- Add focused tests after functional code paths exist; do not let test or
+  observability work displace the real daemon/helper data path.
 - For documentation-only changes, `git diff --check` is sufficient.
