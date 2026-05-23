@@ -10,8 +10,11 @@ from dataclasses import asdict
 from typing import Iterable
 
 from .protocol import (
+    BufferRegistration,
+    CleanupRequest,
     DaemonRequest,
     DaemonResponse,
+    JobIdentity,
     RelayQuota,
     RequestType,
     Session,
@@ -37,8 +40,11 @@ class TurboBusDaemon:
         profile_max_age_seconds: float = 0.0,
     ) -> None:
         self._lock = threading.Lock()
+        self._jobs: dict[str, JobIdentity] = {}
+        self._buffers: dict[str, BufferRegistration] = {}
         self._sessions: dict[str, Session] = {}
         self._reservations: dict[str, TransferReservation] = {}
+        self._cleanup_events: list[CleanupRequest] = []
         self._profile_cache: dict[str, dict] = {}
         self._scheduler = DaemonScheduler()
         self._session_timeout_seconds = max(0.0, float(session_timeout_seconds))
@@ -89,6 +95,97 @@ class TurboBusDaemon:
             for gpu in relays:
                 self._relay_quotas[gpu].sessions.add(session_id)
             return DaemonResponse(ok=True, payload={"session": asdict(session)})
+
+    def register_job(
+        self,
+        job_id: str,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        container_id: str | None = None,
+        process_id: int | None = None,
+    ) -> DaemonResponse:
+        job = JobIdentity(
+            job_id=job_id,
+            user_id=user_id,
+            session_id=session_id,
+            container_id=container_id,
+            process_id=process_id,
+        )
+        with self._lock:
+            self._jobs[job.job_id] = job
+            return DaemonResponse(ok=True, payload={"job": asdict(job)})
+
+    def register_buffer(
+        self,
+        buffer_id: str,
+        job_id: str,
+        kind: str,
+        size_bytes: int,
+        device_index: int | None = None,
+        address: int | None = None,
+        pinned: bool = False,
+    ) -> DaemonResponse:
+        buffer = BufferRegistration(
+            buffer_id=buffer_id,
+            job_id=job_id,
+            kind=kind,
+            size_bytes=size_bytes,
+            device_index=device_index,
+            address=address,
+            pinned=pinned,
+        )
+        with self._lock:
+            if buffer.job_id not in self._jobs:
+                return DaemonResponse(ok=False, error="unknown job")
+            self._buffers[buffer.buffer_id] = buffer
+            return DaemonResponse(ok=True, payload={"buffer": asdict(buffer)})
+
+    def cleanup(
+        self,
+        target_kind: str,
+        target_id: str,
+        reason: str,
+        force: bool = False,
+    ) -> DaemonResponse:
+        cleanup = CleanupRequest(
+            target_kind=target_kind,
+            target_id=target_id,
+            reason=reason,
+            force=force,
+        )
+        with self._lock:
+            removed: dict[str, object] = {"jobs": 0, "buffers": 0, "sessions": 0, "reservations": 0}
+            if cleanup.target_kind == "job":
+                if cleanup.target_id not in self._jobs:
+                    return DaemonResponse(ok=False, error="unknown job")
+                self._jobs.pop(cleanup.target_id, None)
+                removed["jobs"] = 1
+                for buffer_id, buffer in list(self._buffers.items()):
+                    if buffer.job_id == cleanup.target_id:
+                        self._buffers.pop(buffer_id, None)
+                        removed["buffers"] = int(removed["buffers"]) + 1
+            elif cleanup.target_kind == "buffer":
+                buffer = self._buffers.pop(cleanup.target_id, None)
+                if buffer is None:
+                    return DaemonResponse(ok=False, error="unknown buffer")
+                removed["buffers"] = 1
+            elif cleanup.target_kind == "session":
+                session = self._close_session_locked(cleanup.target_id)
+                if session is None:
+                    return DaemonResponse(ok=False, error="unknown session")
+                removed["sessions"] = 1
+            elif cleanup.target_kind == "reservation":
+                reservation = self._release_reservation_locked(cleanup.target_id)
+                if reservation is None:
+                    return DaemonResponse(ok=False, error="unknown reservation")
+                removed["reservations"] = 1
+            else:
+                return DaemonResponse(ok=False, error="unsupported cleanup target")
+            self._cleanup_events.append(cleanup)
+            return DaemonResponse(
+                ok=True,
+                payload={"cleanup": asdict(cleanup), "removed": removed},
+            )
 
     def close_session(self, session_id: str) -> DaemonResponse:
         with self._lock:
@@ -325,10 +422,13 @@ class TurboBusDaemon:
             return DaemonResponse(
                 ok=True,
                 payload={
+                    "jobs": {key: asdict(value) for key, value in self._jobs.items()},
+                    "buffers": {key: asdict(value) for key, value in self._buffers.items()},
                     "sessions": {key: asdict(value) for key, value in self._sessions.items()},
                     "reservations": {
                         key: asdict(value) for key, value in self._reservations.items()
                     },
+                    "cleanup_events": [asdict(item) for item in self._cleanup_events],
                     "relay_quotas": {
                         key: {
                             "relay_gpu": quota.relay_gpu,
@@ -352,6 +452,26 @@ class TurboBusDaemon:
             return DaemonResponse(ok=False, error=f"invalid request: {exc}")
 
     def _handle_request(self, request: DaemonRequest) -> DaemonResponse:
+        if request.request_type == RequestType.REGISTER_JOB:
+            payload = request.payload
+            return self.register_job(
+                job_id=str(payload["job_id"]),
+                user_id=payload.get("user_id"),
+                session_id=payload.get("session_id"),
+                container_id=payload.get("container_id"),
+                process_id=payload.get("process_id"),
+            )
+        if request.request_type == RequestType.REGISTER_BUFFER:
+            payload = request.payload
+            return self.register_buffer(
+                buffer_id=str(payload["buffer_id"]),
+                job_id=str(payload["job_id"]),
+                kind=str(payload.get("kind", "cpu_pinned")),
+                size_bytes=int(payload.get("size_bytes", 0)),
+                device_index=payload.get("device_index"),
+                address=payload.get("address"),
+                pinned=bool(payload.get("pinned", False)),
+            )
         if request.request_type == RequestType.REGISTER_SESSION:
             payload = request.payload
             return self.register_session(
@@ -393,6 +513,14 @@ class TurboBusDaemon:
             if reservation_id is None:
                 return DaemonResponse(ok=False, error="reservation_id is required")
             return self.release_transfer(str(reservation_id))
+        if request.request_type == RequestType.CLEANUP:
+            payload = request.payload
+            return self.cleanup(
+                target_kind=str(payload["target_kind"]),
+                target_id=str(payload["target_id"]),
+                reason=str(payload.get("reason", "manual")),
+                force=bool(payload.get("force", False)),
+            )
         if request.request_type == RequestType.INVALIDATE_PROFILE:
             payload = request.payload
             return self.invalidate_profile(

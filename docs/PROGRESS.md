@@ -57,6 +57,8 @@ transfer request objects:
   `plan_transfer` helper now builds the same request object.
 - Added daemon protocol baseline message types and validation tests for job,
   buffer, lease, transfer status, and cleanup records.
+- `TurboBusDaemon` now tracks registered jobs and buffers and can clean up job,
+  buffer, session, and reservation state through the new cleanup request shape.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -84,6 +86,8 @@ phase:
    and future worker paths.
 6. daemon protocol baseline message shapes now exist for job identity, buffer
    registration, lease tokens, transfer status, and cleanup.
+7. daemon state now tracks jobs and buffers and can clean them up through the
+   new protocol path.
 
 The next immediate goal is the daemon protocol baseline: job registration,
 buffer registration, transfer status, lease-token records, and cleanup

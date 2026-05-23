@@ -47,6 +47,58 @@ class DaemonStateTest(unittest.TestCase):
         self.assertFalse(response.ok)
         self.assertIn("max_inflight_chunks", response.error)
 
+    def test_job_and_buffer_registration_are_tracked_and_cleaned_up(self) -> None:
+        daemon = TurboBusDaemon(relay_gpus=[1])
+
+        job = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.REGISTER_JOB,
+                payload={
+                    "job_id": "job-1",
+                    "user_id": "user-1",
+                    "session_id": "session-1",
+                },
+            )
+        )
+        self.assertTrue(job.ok)
+        self.assertEqual(job.payload["job"]["job_id"], "job-1")
+
+        buffer_registration = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.REGISTER_BUFFER,
+                payload={
+                    "buffer_id": "buffer-1",
+                    "job_id": "job-1",
+                    "kind": "cpu_pinned",
+                    "size_bytes": 4096,
+                    "device_index": 0,
+                    "pinned": True,
+                },
+            )
+        )
+        self.assertTrue(buffer_registration.ok)
+        self.assertEqual(buffer_registration.payload["buffer"]["buffer_id"], "buffer-1")
+
+        snapshot = daemon.describe().payload
+        self.assertEqual(snapshot["jobs"]["job-1"]["user_id"], "user-1")
+        self.assertEqual(snapshot["buffers"]["buffer-1"]["kind"], "cpu_pinned")
+
+        cleanup = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.CLEANUP,
+                payload={
+                    "target_kind": "job",
+                    "target_id": "job-1",
+                    "reason": "manual",
+                },
+            )
+        )
+        self.assertTrue(cleanup.ok)
+        self.assertEqual(cleanup.payload["removed"]["jobs"], 1)
+        self.assertEqual(cleanup.payload["removed"]["buffers"], 1)
+        self.assertNotIn("job-1", daemon.describe().payload["jobs"])
+        self.assertNotIn("buffer-1", daemon.describe().payload["buffers"])
+
     def test_handle_request_profile(self) -> None:
         daemon = TurboBusDaemon(relay_gpus=[1, 2], max_sessions_per_relay=2)
         register = daemon.handle_request(

@@ -30,6 +30,8 @@ Completed in the refactor layer:
 - daemon protocol baseline message shapes for job identity, buffer
   registration, lease tokens, transfer status, and cleanup now exist, with
   validation coverage.
+- daemon state now handles `REGISTER_JOB`, `REGISTER_BUFFER`, and `CLEANUP`
+  requests for jobs, buffers, sessions, and reservations.
 
 Current status:
 
@@ -53,12 +55,13 @@ Current status:
   preserving old root-level import paths as module aliases.
 - daemon protocol baseline message shapes now exist in `turbobus.schema` and
   are re-exported through `turbobus.daemon.protocol`.
+- `TurboBusDaemon` now tracks registered jobs and buffers and exposes cleanup
+  for job, buffer, session, and reservation records.
 
 Next code cut:
 
-- define the next daemon protocol messages for job registration, buffer
-  registration, transfer status, lease tokens, and cleanup if more fields or
-  wire handlers are needed;
+- add transfer status tracking for daemon-issued transfer plans and reservation
+  cleanup;
 - keep the daemon as the owner of planning/control decisions;
 - do not add worker execution yet, but shape the protocol so worker/helper
   execution can consume the same `TransferRequest` and lease records later.
