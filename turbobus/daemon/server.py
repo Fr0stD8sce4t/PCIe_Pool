@@ -901,6 +901,16 @@ class TurboBusDaemon:
                 target_gpu=None if target_gpu is None else int(target_gpu),
                 requested_relays=payload.get("relay_gpus"),
             )
+        if request.request_type == RequestType.REAP_EXPIRED_LEASES:
+            payload = request.payload
+            expired = self.reap_expired_leases(now=payload.get("now"))
+            return DaemonResponse(
+                ok=True,
+                payload={
+                    "expired_lease_ids": expired,
+                    "expired_count": len(expired),
+                },
+            )
         if request.request_type == RequestType.REGISTER_SESSION:
             payload = request.payload
             return self.register_session(

@@ -906,9 +906,16 @@ class DaemonStateTest(unittest.TestCase):
         transfer_id = planned.payload["transfer_id"]
         lease_token = planned.payload["lease_tokens"][0]
 
-        expired = daemon.reap_expired_leases(now=lease_token["expires_at"] + 1.0)
+        expired = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.REAP_EXPIRED_LEASES,
+                payload={"now": lease_token["expires_at"] + 1.0},
+            )
+        )
 
-        self.assertEqual(expired, [lease_token["lease_id"]])
+        self.assertTrue(expired.ok)
+        self.assertEqual(expired.payload["expired_lease_ids"], [lease_token["lease_id"]])
+        self.assertEqual(expired.payload["expired_count"], 1)
         profile = daemon.describe().payload
         self.assertEqual(profile["relay_quotas"][1]["active_chunks"], 0)
         self.assertEqual(profile["reservations"], {})

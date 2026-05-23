@@ -103,6 +103,16 @@ class DaemonSocketTest(unittest.TestCase):
             },
         )
 
+    def test_client_reap_expired_leases_uses_reap_request(self) -> None:
+        client = RecordingDaemonClient()
+
+        response = client.reap_expired_leases(now=12.5)
+
+        self.assertTrue(response.ok)
+        self.assertEqual(len(client.requests), 1)
+        self.assertEqual(client.requests[0].request_type, RequestType.REAP_EXPIRED_LEASES)
+        self.assertEqual(client.requests[0].payload, {"now": 12.5})
+
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
     def test_socket_session_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -331,6 +341,121 @@ class DaemonSocketTest(unittest.TestCase):
                 inventory.payload["inventory"]["gpus"][0]["device_id"],
                 1,
             )
+
+    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
+    def test_client_reap_expired_leases_round_trip_clears_relay_discovery_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            socket_path = os.path.join(tmpdir, "turbobusd.sock")
+            daemon = TurboBusDaemon(
+                relay_gpus=[1],
+                max_sessions_per_relay=1,
+                max_inflight_chunks_per_relay=2,
+            )
+            thread = threading.Thread(
+                target=daemon.serve_forever,
+                args=(socket_path,),
+                daemon=True,
+            )
+            thread.start()
+
+            for _ in range(100):
+                if os.path.exists(socket_path):
+                    break
+                time.sleep(0.01)
+            self.assertTrue(os.path.exists(socket_path))
+
+            client = TurboBusDaemonClient(socket_path)
+            registered = client.register_session(
+                target_gpu=0,
+                relay_gpus=[1],
+                max_inflight_chunks=8,
+            )
+            self.assertTrue(registered.ok)
+            session_id = registered.payload["session"]["session_id"]
+            client.register_job(job_id="job-1", session_id=session_id)
+            client.register_buffer(
+                buffer_id="cpu-buffer",
+                job_id="job-1",
+                kind="cpu_pinned",
+                size_bytes=64,
+                pinned=True,
+            )
+            client.register_buffer(
+                buffer_id="gpu-buffer",
+                job_id="job-1",
+                kind="gpu",
+                size_bytes=64,
+                device_index=0,
+            )
+            client.put_profile(
+                target_gpu=0,
+                relay_gpus=[1],
+                profile={
+                    "target_device": 0,
+                    "direct_h2d_bw_gbps": 7.5,
+                    "direct_d2h_bw_gbps": 6.5,
+                    "relays": [
+                        {
+                            "relay_device": 1,
+                            "target_device": 0,
+                            "h2d_bw_gbps": 7.5,
+                            "d2h_bw_gbps": 6.5,
+                            "p2p_bw_gbps": 40.0,
+                            "effective_bw_gbps": 7.5,
+                            "effective_d2h_bw_gbps": 6.5,
+                            "p2p_enabled": True,
+                        }
+                    ],
+                },
+            )
+
+            planned = client.plan_transfer_request(
+                session_id=session_id,
+                request=TransferRequest(
+                    total_bytes=64,
+                    chunk_bytes=16,
+                    mode="pool",
+                    direction="h2d",
+                    job_id="job-1",
+                    metadata={"buffer_ids": ["cpu-buffer", "gpu-buffer"]},
+                ),
+            )
+            self.assertTrue(planned.ok)
+            lease_token = planned.payload["lease_tokens"][0]
+
+            reaped = client.reap_expired_leases(now=lease_token["expires_at"] + 1.0)
+            self.assertTrue(reaped.ok)
+            self.assertEqual(reaped.payload["expired_lease_ids"], [lease_token["lease_id"]])
+            self.assertEqual(reaped.payload["expired_count"], 1)
+
+            discovered = client.discover_relays(target_gpu=0, relay_gpus=[1])
+            self.assertTrue(discovered.ok)
+            relay = discovered.payload["relay_discovery"]
+            self.assertEqual(relay["summary"]["active_reservation_count"], 0)
+            self.assertEqual(relay["summary"]["active_lease_count"], 0)
+            self.assertEqual(relay["relays"][0]["reservations"], [])
+            self.assertEqual(relay["relays"][0]["leases"], [])
+            self.assertEqual(relay["relays"][0]["quota"]["available_chunks"], 2)
+
+            fallback_session = client.register_session(
+                target_gpu=2,
+                relay_gpus=[1],
+                max_inflight_chunks=8,
+            )
+            self.assertTrue(fallback_session.ok)
+            fallback_planned = client.plan_transfer_request(
+                session_id=fallback_session.payload["session"]["session_id"],
+                request=TransferRequest(
+                    total_bytes=64,
+                    chunk_bytes=16,
+                    mode="pool",
+                    direction="h2d",
+                    job_id="job-2",
+                ),
+            )
+            self.assertTrue(fallback_planned.ok)
+            self.assertEqual(fallback_planned.payload["stats"]["resolved_mode"], "direct")
+            self.assertEqual(fallback_planned.payload["reservations"], [])
 
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
     def test_client_cleanup_reports_control_plane_events(self) -> None:

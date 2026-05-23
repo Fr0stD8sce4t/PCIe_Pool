@@ -284,6 +284,17 @@ class TurboBusDaemonClient:
             )
         )
 
+    def reap_expired_leases(self, now: float | None = None) -> DaemonResponse:
+        payload: dict[str, object] = {}
+        if now is not None:
+            payload["now"] = float(now)
+        return self.send(
+            DaemonRequest(
+                request_type=RequestType.REAP_EXPIRED_LEASES,
+                payload=payload,
+            )
+        )
+
     def get_profile(self, target_gpu: int, relay_gpus: list[int]) -> DaemonResponse:
         return self.send(
             DaemonRequest(

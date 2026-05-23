@@ -43,6 +43,8 @@ transfer request objects:
   redacted lease bookkeeping across jobs.
 - daemon-side expired relay leases now reap active reservations and relay quota
   before relay discovery, planning, validation, and description readouts.
+- explicit expired-lease reaping now reaches the daemon through
+  `TurboBusDaemonClient.reap_expired_leases()` and the socket control path.
 
 ## What Was Updated
 
@@ -349,13 +351,14 @@ phase:
 49. daemon relay discovery now reports backend-neutral relay eligibility,
     quota availability, cross-job session ownership, active reservations, and
     redacted lease records without changing direct fallback behavior.
-50. daemon-side expired relay lease cleanup now reaps expired reservations,
-    cancels the matching transfer status, and frees relay quota before
-    daemon-side state reads.
+50. make the worker service boundary transport-neutral so future socket or IPC
+    transports can reuse the in-process helper contract without changing
+    authorization, lifecycle, or observability handling.
 
-The next immediate goal is to expose expired relay lease reaping through the
-daemon client/socket control path so external callers can trigger the same
-cleanup without relying on client release or session close.
+The next immediate goal is to make the worker service boundary transport-neutral
+so the in-process helper can later move behind a socket or IPC transport
+without changing request parsing, authorization, lifecycle, or observability
+handling.
 
 ## Verification
 

@@ -2,9 +2,10 @@
 
 ## Current
 
-Start the next phase after the current refactor layer: build out the daemon
-control plane that will later own cross-job relay discovery, leases, and worker
-execution.
+Start the next phase after the current refactor layer: make the worker service
+boundary transport-neutral so future socket or IPC helpers can reuse the
+existing in-process worker service without changing authorization, lifecycle,
+or observability handling.
 
 Completed in the refactor layer:
 
@@ -207,16 +208,18 @@ Current status:
 - daemon-side expired relay lease cleanup now reaps expired reservations,
   cancels the matching transfer status, and frees relay quota before state
   reads.
+- explicit expired-lease reaping now reaches the daemon through
+  `TurboBusDaemonClient.reap_expired_leases()` and the socket control path.
 
 Next code cut:
 
-- expose expired relay lease reaping through the daemon client/socket control
-  path so external callers can trigger the same cleanup without relying on
-  client release or session close;
-- keep it in process only, with no CUDA IPC, sockets, real data movement, or
-  hardware discovery yet;
-- add focused tests that the explicit reaping request clears reservations,
-  redacted relay discovery records, and preserves direct fallback behavior.
+- make the worker service boundary transport-neutral so the in-process helper
+  can later move behind a socket or IPC transport without changing
+  authorization, lifecycle, or observability handling;
+- keep the worker helper in process for now, with no sockets, IPC, CUDA IPC, or
+  real data movement yet;
+- add focused tests that the new boundary forwards worker request and
+  observability messages without changing endpoint behavior.
 
 ## Upcoming
 
