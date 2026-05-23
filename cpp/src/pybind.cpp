@@ -56,6 +56,16 @@ PYBIND11_MODULE(_turbobus, m) {
       .value("DirectOnly", turbobus::TransferMode::DirectOnly)
       .value("RelayOnly", turbobus::TransferMode::RelayOnly);
 
+  py::enum_<turbobus::PathKind>(m, "PathKind")
+      .value("DirectH2D", turbobus::PathKind::DirectH2D)
+      .value("RelayH2DThenP2P", turbobus::PathKind::RelayH2DThenP2P)
+      .value("DirectD2H", turbobus::PathKind::DirectD2H)
+      .value("RelayP2PThenD2H", turbobus::PathKind::RelayP2PThenD2H);
+
+  py::enum_<turbobus::TransferDirection>(m, "TransferDirection")
+      .value("H2D", turbobus::TransferDirection::H2D)
+      .value("D2H", turbobus::TransferDirection::D2H);
+
   py::class_<turbobus::RuntimeOptions>(m, "RuntimeOptions")
       .def(py::init<>())
       .def_readwrite("chunk_bytes", &turbobus::RuntimeOptions::chunk_bytes)
@@ -100,26 +110,30 @@ PYBIND11_MODULE(_turbobus, m) {
       .def_readwrite("relays", &turbobus::ProfileResult::relays);
 
   py::class_<turbobus::Path>(m, "Path")
+      .def(py::init<>())
       .def_property_readonly("kind",
                              [](const turbobus::Path& path) {
                                return PathKindToString(path.kind);
                              })
+      .def_readwrite("kind_value", &turbobus::Path::kind)
       .def_property_readonly("direction",
                              [](const turbobus::Path& path) {
                                return DirectionToString(path.direction);
                              })
-      .def_readonly("target_device", &turbobus::Path::target_device)
-      .def_readonly("relay_device", &turbobus::Path::relay_device)
-      .def_readonly("h2d_bw_gbps", &turbobus::Path::h2d_bw_gbps)
-      .def_readonly("d2h_bw_gbps", &turbobus::Path::d2h_bw_gbps)
-      .def_readonly("p2p_bw_gbps", &turbobus::Path::p2p_bw_gbps)
-      .def_readonly("effective_bw_gbps", &turbobus::Path::effective_bw_gbps)
-      .def_readonly("enabled", &turbobus::Path::enabled);
+      .def_readwrite("direction_value", &turbobus::Path::direction)
+      .def_readwrite("target_device", &turbobus::Path::target_device)
+      .def_readwrite("relay_device", &turbobus::Path::relay_device)
+      .def_readwrite("h2d_bw_gbps", &turbobus::Path::h2d_bw_gbps)
+      .def_readwrite("d2h_bw_gbps", &turbobus::Path::d2h_bw_gbps)
+      .def_readwrite("p2p_bw_gbps", &turbobus::Path::p2p_bw_gbps)
+      .def_readwrite("effective_bw_gbps", &turbobus::Path::effective_bw_gbps)
+      .def_readwrite("enabled", &turbobus::Path::enabled);
 
   py::class_<turbobus::Chunk>(m, "Chunk")
-      .def_readonly("src_offset", &turbobus::Chunk::src_offset)
-      .def_readonly("dst_offset", &turbobus::Chunk::dst_offset)
-      .def_readonly("bytes", &turbobus::Chunk::bytes);
+      .def(py::init<>())
+      .def_readwrite("src_offset", &turbobus::Chunk::src_offset)
+      .def_readwrite("dst_offset", &turbobus::Chunk::dst_offset)
+      .def_readwrite("bytes", &turbobus::Chunk::bytes);
 
   py::class_<turbobus::TransferRange>(m, "TransferRange")
       .def(py::init<>())
@@ -128,13 +142,15 @@ PYBIND11_MODULE(_turbobus, m) {
       .def_readwrite("bytes", &turbobus::TransferRange::bytes);
 
   py::class_<turbobus::PathAssignment>(m, "PathAssignment")
-      .def_readonly("path", &turbobus::PathAssignment::path)
-      .def_readonly("chunks", &turbobus::PathAssignment::chunks);
+      .def(py::init<>())
+      .def_readwrite("path", &turbobus::PathAssignment::path)
+      .def_readwrite("chunks", &turbobus::PathAssignment::chunks);
 
   py::class_<turbobus::TransferPlan>(m, "TransferPlan")
-      .def_readonly("total_bytes", &turbobus::TransferPlan::total_bytes)
-      .def_readonly("chunk_bytes", &turbobus::TransferPlan::chunk_bytes)
-      .def_readonly("assignments", &turbobus::TransferPlan::assignments);
+      .def(py::init<>())
+      .def_readwrite("total_bytes", &turbobus::TransferPlan::total_bytes)
+      .def_readwrite("chunk_bytes", &turbobus::TransferPlan::chunk_bytes)
+      .def_readwrite("assignments", &turbobus::TransferPlan::assignments);
 
   py::class_<turbobus::PathStats>(m, "PathStats")
       .def_property_readonly("kind",
@@ -216,6 +232,26 @@ PYBIND11_MODULE(_turbobus, m) {
                                          reinterpret_cast<void*>(host_ptr), bytes);
            },
            py::arg("target_ptr"), py::arg("host_ptr"), py::arg("bytes"))
+      .def("fetch_plan_to_gpu",
+           [](turbobus::TurboBusRuntime& runtime, std::uintptr_t host_ptr,
+              std::size_t host_bytes, std::uintptr_t target_ptr,
+              std::size_t target_bytes, const turbobus::TransferPlan& plan) {
+             return runtime.FetchPlanToGpu(
+                 reinterpret_cast<void*>(host_ptr), host_bytes,
+                 reinterpret_cast<void*>(target_ptr), target_bytes, plan);
+           },
+           py::arg("host_ptr"), py::arg("host_bytes"), py::arg("target_ptr"),
+           py::arg("target_bytes"), py::arg("plan"))
+      .def("offload_plan_to_cpu",
+           [](turbobus::TurboBusRuntime& runtime, std::uintptr_t target_ptr,
+              std::size_t target_bytes, std::uintptr_t host_ptr,
+              std::size_t host_bytes, const turbobus::TransferPlan& plan) {
+             return runtime.OffloadPlanToCpu(
+                 reinterpret_cast<void*>(target_ptr), target_bytes,
+                 reinterpret_cast<void*>(host_ptr), host_bytes, plan);
+           },
+           py::arg("target_ptr"), py::arg("target_bytes"), py::arg("host_ptr"),
+           py::arg("host_bytes"), py::arg("plan"))
       .def("fetch_ranges_to_gpu",
            [](turbobus::TurboBusRuntime& runtime, std::uintptr_t host_ptr,
               std::size_t host_bytes, std::uintptr_t target_ptr,

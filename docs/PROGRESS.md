@@ -25,6 +25,9 @@ transfer request objects:
   older reserve-only daemon path for compatibility;
 - `turbobus.backends.cuda.CudaNativeBackend` owns current CUDA native runtime
   creation, transfer-mode translation, and native range construction;
+- `turbobus.backends.cuda.CudaNativeBackend` can now convert daemon-issued
+  planner payloads into native `TransferPlan` objects and submit them through
+  exact-plan runtime methods;
 - `turbobus.transfer` defines `TransferRequest`, `TransferRange`, and
   `TransferDirection` as the shared request shape for runtime, daemon, adapter,
   and future worker code;
@@ -209,6 +212,8 @@ transfer request objects:
   request tests.
 - Extended daemon state and runtime handle tests for daemon-issued plans, direct
   fallback, backend facade construction, and request-shaped daemon planning.
+- Added exact-plan runtime/backend coverage showing that daemon plans are
+  submitted directly instead of falling back to native runtime replanning.
 
 ## Immediate Goal
 
@@ -313,13 +318,18 @@ phase:
 38. worker service response envelopes and legacy service dict output no longer
     expose full lifecycle payloads; completion, status, cleanup, and staging
     release data now flow through the completion envelope only.
+39. backend/runtime now has an exact daemon-plan execution entry point:
+    runtime stores the daemon plan payload, the CUDA backend converts it to a
+    native `TransferPlan`, and native runtime submits that exact plan directly
+    to the existing CUDA executor.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
 daemon-managed data movement slice. The worker control-plane smoke helper,
 worker endpoint observability/event-history plumbing, loopback transport
 wrapper, and full worker response lifecycle serialization have been removed.
-The next code should execute daemon-issued transfer plans exactly.
+The next code should define the first registered buffer handles and shared
+pinned CPU buffer strategy for worker/helper execution.
 
 ## Verification
 
@@ -352,8 +362,8 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
 - keep the minimum daemon/client/worker spine for job and buffer registration,
   transfer requests, exact plans, leases, lease validation, worker
   authorization, staging ownership, completion, cleanup, and direct fallback;
-- add a backend/runtime path that executes a daemon `PlannerTransferPlan`
-  exactly instead of locally selecting relays again;
+- rebuild the native extension on a CUDA server and verify that daemon-issued
+  direct, relay, and pooled plans execute through the exact-plan entry point;
 - define the first real registered-buffer handle format for client CPU source
   memory and target GPU destination memory;
 - choose and implement the first cross-process CPU pinned buffer strategy;

@@ -65,6 +65,16 @@ def _validate_range_tensors(
     return _runtime_engine._validate_range_tensors(cpu_tensor, gpu_tensor, target_gpu, direction)
 
 
+def _validate_transfer_tensors(cpu_tensor, gpu_tensor, target_gpu: int, direction: str) -> int:
+    _sync_runtime_engine()
+    return _runtime_engine._validate_transfer_tensors(
+        cpu_tensor,
+        gpu_tensor,
+        target_gpu,
+        direction,
+    )
+
+
 def _range_fields(item) -> tuple[int, int, int]:
     return _runtime_engine._range_fields(item)
 
@@ -141,6 +151,7 @@ class Runtime:
         self._daemon_session_id: str | None = None
         self._daemon_profile = None
         self._last_daemon_reservation: dict[str, object] = {}
+        self._pending_daemon_plan = None
         self._last_daemon_profile: dict[str, object] = {}
         self._last_resolved_transfer_mode = TransferMode.POOL
         self._last_auto_decision: AutoTransferDecision | None = None
@@ -489,13 +500,24 @@ class Runtime:
             bytes_to_copy,
             direction="h2d",
         )
+        exact_plan = self._consume_daemon_plan()
 
         try:
-            handle = self._runtime.fetch_to_gpu(
-                int(cpu_tensor.data_ptr()),
-                int(gpu_tensor.data_ptr()),
-                int(bytes_to_copy),
-            )
+            if exact_plan is not None:
+                handle = self._backend.fetch_plan_to_gpu(
+                    self._runtime,
+                    int(cpu_tensor.data_ptr()),
+                    int(bytes_to_copy),
+                    int(gpu_tensor.data_ptr()),
+                    int(gpu_tensor.numel() * gpu_tensor.element_size()),
+                    exact_plan,
+                )
+            else:
+                handle = self._runtime.fetch_to_gpu(
+                    int(cpu_tensor.data_ptr()),
+                    int(gpu_tensor.data_ptr()),
+                    int(bytes_to_copy),
+                )
         except Exception:
             self._release_daemon_reservations(reservations)
             raise
@@ -513,13 +535,24 @@ class Runtime:
             bytes_to_copy,
             direction="d2h",
         )
+        exact_plan = self._consume_daemon_plan()
 
         try:
-            handle = self._runtime.offload_to_cpu(
-                int(gpu_tensor.data_ptr()),
-                int(cpu_tensor.data_ptr()),
-                int(bytes_to_copy),
-            )
+            if exact_plan is not None:
+                handle = self._backend.offload_plan_to_cpu(
+                    self._runtime,
+                    int(gpu_tensor.data_ptr()),
+                    int(gpu_tensor.numel() * gpu_tensor.element_size()),
+                    int(cpu_tensor.data_ptr()),
+                    int(bytes_to_copy),
+                    exact_plan,
+                )
+            else:
+                handle = self._runtime.offload_to_cpu(
+                    int(gpu_tensor.data_ptr()),
+                    int(cpu_tensor.data_ptr()),
+                    int(bytes_to_copy),
+                )
         except Exception:
             self._release_daemon_reservations(reservations)
             raise
@@ -546,14 +579,25 @@ class Runtime:
             mode=self.options.transfer_mode,
         )
         reservations = self._resolve_transfer_request_with_daemon(transfer_request)
+        exact_plan = self._consume_daemon_plan()
         try:
-            handle = self._runtime.fetch_ranges_to_gpu(
-                int(cpu_tensor.data_ptr()),
-                int(source_bytes),
-                int(gpu_tensor.data_ptr()),
-                int(destination_bytes),
-                native_ranges,
-            )
+            if exact_plan is not None:
+                handle = self._backend.fetch_plan_to_gpu(
+                    self._runtime,
+                    int(cpu_tensor.data_ptr()),
+                    int(source_bytes),
+                    int(gpu_tensor.data_ptr()),
+                    int(destination_bytes),
+                    exact_plan,
+                )
+            else:
+                handle = self._runtime.fetch_ranges_to_gpu(
+                    int(cpu_tensor.data_ptr()),
+                    int(source_bytes),
+                    int(gpu_tensor.data_ptr()),
+                    int(destination_bytes),
+                    native_ranges,
+                )
         except Exception:
             self._release_daemon_reservations(reservations)
             raise
@@ -580,14 +624,25 @@ class Runtime:
             mode=self.options.transfer_mode,
         )
         reservations = self._resolve_transfer_request_with_daemon(transfer_request)
+        exact_plan = self._consume_daemon_plan()
         try:
-            handle = self._runtime.offload_ranges_to_cpu(
-                int(gpu_tensor.data_ptr()),
-                int(source_bytes),
-                int(cpu_tensor.data_ptr()),
-                int(destination_bytes),
-                native_ranges,
-            )
+            if exact_plan is not None:
+                handle = self._backend.offload_plan_to_cpu(
+                    self._runtime,
+                    int(gpu_tensor.data_ptr()),
+                    int(source_bytes),
+                    int(cpu_tensor.data_ptr()),
+                    int(destination_bytes),
+                    exact_plan,
+                )
+            else:
+                handle = self._runtime.offload_ranges_to_cpu(
+                    int(gpu_tensor.data_ptr()),
+                    int(source_bytes),
+                    int(cpu_tensor.data_ptr()),
+                    int(destination_bytes),
+                    native_ranges,
+                )
         except Exception:
             self._release_daemon_reservations(reservations)
             raise
@@ -655,6 +710,7 @@ class Runtime:
         request: TransferRequest | str,
     ) -> list[str]:
         transfer_request = self._coerce_transfer_request(decision, request)
+        self._pending_daemon_plan = None
         direction = transfer_request.direction.value
         if (
             self._daemon_client is None
@@ -771,6 +827,7 @@ class Runtime:
             return []
 
         payload = response.payload or {}
+        plan_payload = payload.get("plan")
         stats = payload.get("stats", {})
         fallback_reason = (
             stats.get("fallback_reason") if isinstance(stats, dict) else None
@@ -810,8 +867,19 @@ class Runtime:
             info["daemon_reservation_error"] = str(fallback_reason)
         if leases:
             info.update(_daemon_lease_summary(leases))
+        if plan_payload is not None:
+            try:
+                self._pending_daemon_plan = self._backend.make_transfer_plan(plan_payload)
+            except Exception:
+                self._release_daemon_reservations(reservations)
+                raise
         self._last_daemon_reservation = info
         return reservations
+
+    def _consume_daemon_plan(self):
+        plan = getattr(self, "_pending_daemon_plan", None)
+        self._pending_daemon_plan = None
+        return plan
 
     def _coerce_transfer_request(
         self,

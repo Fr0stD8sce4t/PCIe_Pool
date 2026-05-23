@@ -29,5 +29,30 @@ class TransferBackend(Protocol):
     ) -> list:
         ...
 
+    def make_transfer_plan(self, plan: Any) -> Any:
+        ...
+
+    def fetch_plan_to_gpu(
+        self,
+        runtime: Any,
+        host_ptr: int,
+        host_bytes: int,
+        target_ptr: int,
+        target_bytes: int,
+        plan: Any,
+    ) -> Any:
+        ...
+
+    def offload_plan_to_cpu(
+        self,
+        runtime: Any,
+        target_ptr: int,
+        target_bytes: int,
+        host_ptr: int,
+        host_bytes: int,
+        plan: Any,
+    ) -> Any:
+        ...
+
 
 __all__ = ["TransferBackend"]

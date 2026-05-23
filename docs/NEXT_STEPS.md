@@ -65,31 +65,34 @@ keep it and tighten it around that use.
 
 ## Next Code Cuts
 
-1. Execute daemon-issued plans exactly.
-   - Add a backend/runtime entry point that accepts a daemon `PlannerTransferPlan`.
-   - Convert the daemon plan into native CUDA path assignments.
-   - Remove local relay choice from this path; only direct fallback may replan.
+Completed current code cut:
 
-2. Define the first registered buffer handles.
+- Execute daemon-issued plans exactly in the runtime/backend/native entry
+  point. Daemon plan payloads are converted into native `TransferPlan` objects
+  and submitted through exact-plan methods instead of local relay replanning.
+- Remaining server verification: rebuild the native extension on a CUDA
+  machine and run a direct/relay/pool transfer against a daemon-issued plan.
+
+1. Define the first registered buffer handles.
    - Decide how a client-owned CPU source buffer becomes visible to the worker.
    - Prefer a TurboBus-owned shared pinned allocator or shared-memory buffer
      registered for CUDA access.
    - Add target GPU device-buffer handle metadata needed by the worker.
 
-3. Implement a CUDA worker executor.
+2. Implement a CUDA worker executor.
    - Replace the default unsupported executor for one narrow path.
    - Allocate relay staging buffers in the worker/helper process.
    - Use CUDA IPC or the first accepted equivalent for target GPU access.
    - Run H2D relay transfer from shared CPU memory through relay staging to the
      target GPU.
 
-4. Connect client, daemon, and worker into one functional call.
+3. Connect client, daemon, and worker into one functional call.
    - Client submits a transfer request to the daemon.
    - Daemon authorizes relay use and returns the plan/lease.
    - Worker executes and reports status.
    - Client waits on daemon-owned completion.
 
-5. Add cleanup and isolation only where the real path needs it.
+4. Add cleanup and isolation only where the real path needs it.
    - Validate lease tokens before touching relay resources.
    - Clear or protect reused relay staging buffers.
    - Release reservations on failure or completion.

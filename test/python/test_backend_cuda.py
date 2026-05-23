@@ -22,6 +22,7 @@ class FakeRuntimeEngine:
         self.require_extension_calls = 0
         self.require_torch_calls = 0
         self.range_calls = []
+        self.plan_calls = []
 
     def _require_extension(self) -> None:
         self.require_extension_calls += 1
@@ -35,6 +36,42 @@ class FakeRuntimeEngine:
     def _native_ranges(self, ranges, source_bytes, destination_bytes):
         self.range_calls.append((list(ranges), source_bytes, destination_bytes))
         return ["native-range"]
+
+    def _native_transfer_plan(self, plan):
+        self.plan_calls.append(plan)
+        return "native-plan"
+
+
+class FakeExactPlanRuntime:
+    def __init__(self) -> None:
+        self.fetch_plan_calls = []
+        self.offload_plan_calls = []
+
+    def fetch_plan_to_gpu(
+        self,
+        host_ptr,
+        host_bytes,
+        target_ptr,
+        target_bytes,
+        plan,
+    ):
+        self.fetch_plan_calls.append(
+            (host_ptr, host_bytes, target_ptr, target_bytes, plan)
+        )
+        return "fetch-handle"
+
+    def offload_plan_to_cpu(
+        self,
+        target_ptr,
+        target_bytes,
+        host_ptr,
+        host_bytes,
+        plan,
+    ):
+        self.offload_plan_calls.append(
+            (target_ptr, target_bytes, host_ptr, host_bytes, plan)
+        )
+        return "offload-handle"
 
 
 class FakeOptions:
@@ -83,6 +120,67 @@ class CudaNativeBackendTest(unittest.TestCase):
         self.assertEqual(runtime.options, "native-options")
         self.assertEqual(options.to_native_calls, 1)
         self.assertEqual(engine.require_extension_calls, 1)
+
+    def test_backend_converts_and_submits_exact_transfer_plans(self) -> None:
+        engine = FakeRuntimeEngine()
+        backend = CudaNativeBackend(engine)
+        runtime = FakeExactPlanRuntime()
+
+        plan_payload = {
+            "total_bytes": 16,
+            "chunk_bytes": 16,
+            "assignments": [
+                {
+                    "path": {
+                        "kind": "direct",
+                        "direction": "h2d",
+                        "target_device": 0,
+                        "relay_device": -1,
+                    },
+                    "chunks": [{"src_offset": 0, "dst_offset": 0, "bytes": 16}],
+                }
+            ],
+        }
+        plan = backend.make_transfer_plan(plan_payload)
+        fetch_handle = backend.fetch_plan_to_gpu(
+            runtime,
+            host_ptr=100,
+            host_bytes=16,
+            target_ptr=200,
+            target_bytes=32,
+            plan=plan,
+        )
+        offload_handle = backend.offload_plan_to_cpu(
+            runtime,
+            target_ptr=200,
+            target_bytes=32,
+            host_ptr=100,
+            host_bytes=16,
+            plan=plan,
+        )
+
+        self.assertEqual(plan, "native-plan")
+        self.assertEqual(engine.plan_calls, [plan_payload])
+        self.assertEqual(fetch_handle, "fetch-handle")
+        self.assertEqual(runtime.fetch_plan_calls, [(100, 16, 200, 32, "native-plan")])
+        self.assertEqual(offload_handle, "offload-handle")
+        self.assertEqual(
+            runtime.offload_plan_calls,
+            [(200, 32, 100, 16, "native-plan")],
+        )
+
+    def test_backend_rejects_missing_exact_plan_submitter(self) -> None:
+        backend = CudaNativeBackend(FakeRuntimeEngine())
+
+        with self.assertRaisesRegex(RuntimeError, "exact transfer plans"):
+            backend.fetch_plan_to_gpu(
+                runtime=object(),
+                host_ptr=100,
+                host_bytes=16,
+                target_ptr=200,
+                target_bytes=32,
+                plan="native-plan",
+            )
 
 
 if __name__ == "__main__":

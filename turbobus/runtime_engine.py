@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
+from .plan_trace import transfer_plan_to_dict
 from .schema import AutoTransferDecision, TransferMode
 
 try:
@@ -334,6 +335,113 @@ def _native_ranges(
     return native
 
 
+def _native_transfer_plan(plan):
+    _require_extension()
+    payload = dict(plan) if isinstance(plan, Mapping) else transfer_plan_to_dict(plan)
+    native_plan = _turbobus.TransferPlan()
+    native_plan.total_bytes = int(payload.get("total_bytes", 0))
+    native_plan.chunk_bytes = int(payload.get("chunk_bytes", _default_chunk_bytes()))
+    if native_plan.total_bytes < 0:
+        raise ValueError("transfer plan total_bytes must be non-negative")
+    if native_plan.chunk_bytes <= 0:
+        raise ValueError("transfer plan chunk_bytes must be positive")
+
+    assignments = []
+    for assignment_payload in payload.get("assignments", []) or []:
+        if not isinstance(assignment_payload, Mapping):
+            raise ValueError("transfer plan assignment must be an object")
+        path_payload = assignment_payload.get("path")
+        if not isinstance(path_payload, Mapping):
+            raise ValueError("transfer plan assignment path must be an object")
+        if not bool(path_payload.get("enabled", True)):
+            raise ValueError("transfer plan contains a disabled path")
+
+        native_assignment = _turbobus.PathAssignment()
+        native_path = _turbobus.Path()
+        direction = str(path_payload.get("direction", "h2d")).lower()
+        kind = str(path_payload.get("kind", "")).lower()
+        _set_native_field(native_path, "kind", _native_path_kind(kind, direction))
+        _set_native_field(
+            native_path,
+            "direction",
+            _native_transfer_direction(direction),
+        )
+        native_path.target_device = int(path_payload.get("target_device", 0))
+        native_path.relay_device = int(path_payload.get("relay_device", -1))
+        native_path.h2d_bw_gbps = float(path_payload.get("h2d_bw_gbps", 0.0) or 0.0)
+        native_path.d2h_bw_gbps = float(path_payload.get("d2h_bw_gbps", 0.0) or 0.0)
+        native_path.p2p_bw_gbps = float(path_payload.get("p2p_bw_gbps", 0.0) or 0.0)
+        native_path.effective_bw_gbps = float(
+            path_payload.get("effective_bw_gbps", 0.0) or 0.0
+        )
+        native_path.enabled = True
+
+        chunks = []
+        for chunk_payload in assignment_payload.get("chunks", []) or []:
+            if not isinstance(chunk_payload, Mapping):
+                raise ValueError("transfer plan chunk must be an object")
+            src_offset = int(chunk_payload.get("src_offset", 0))
+            dst_offset = int(chunk_payload.get("dst_offset", 0))
+            bytes_ = int(chunk_payload.get("bytes", 0))
+            if src_offset < 0 or dst_offset < 0 or bytes_ <= 0:
+                raise ValueError(
+                    "transfer plan chunk offsets must be non-negative and bytes positive"
+                )
+            native_chunk = _turbobus.Chunk()
+            native_chunk.src_offset = src_offset
+            native_chunk.dst_offset = dst_offset
+            native_chunk.bytes = bytes_
+            chunks.append(native_chunk)
+        if not chunks:
+            continue
+        native_assignment.path = native_path
+        native_assignment.chunks = chunks
+        assignments.append(native_assignment)
+
+    if native_plan.total_bytes > 0 and not assignments:
+        raise ValueError("transfer plan has no chunk assignments")
+    native_plan.assignments = assignments
+    return native_plan
+
+
+def _default_chunk_bytes() -> int:
+    return 16 * 1024 * 1024
+
+
+def _native_path_kind(kind: str, direction: str):
+    path_kind = getattr(_turbobus, "PathKind", None)
+    if path_kind is None:
+        raise RuntimeError("native extension does not expose PathKind")
+    if kind == "direct" and direction == "h2d":
+        return path_kind.DirectH2D
+    if kind == "relay" and direction == "h2d":
+        return path_kind.RelayH2DThenP2P
+    if kind == "direct" and direction == "d2h":
+        return path_kind.DirectD2H
+    if kind == "relay" and direction == "d2h":
+        return path_kind.RelayP2PThenD2H
+    raise ValueError(f"unsupported transfer plan path: {kind}/{direction}")
+
+
+def _native_transfer_direction(direction: str):
+    transfer_direction = getattr(_turbobus, "TransferDirection", None)
+    if transfer_direction is None:
+        raise RuntimeError("native extension does not expose TransferDirection")
+    if direction == "h2d":
+        return transfer_direction.H2D
+    if direction == "d2h":
+        return transfer_direction.D2H
+    raise ValueError(f"unsupported transfer plan direction: {direction}")
+
+
+def _set_native_field(obj, field_name: str, value) -> None:
+    value_field = f"{field_name}_value"
+    if hasattr(obj, value_field):
+        setattr(obj, value_field, value)
+        return
+    setattr(obj, field_name, value)
+
+
 def _range_fields(item) -> tuple[int, int, int]:
     if isinstance(item, Mapping):
         return int(item["src_offset"]), int(item["dst_offset"]), int(item["bytes"])
@@ -425,6 +533,7 @@ __all__ = [
     "_range_fields",
     "_runtime_transfer_mode_value",
     "_native_ranges",
+    "_native_transfer_plan",
     "_validate_range_tensors",
     "_validate_tensor_pair",
     "_validate_transfer_tensors",

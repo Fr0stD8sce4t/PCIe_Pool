@@ -36,6 +36,43 @@ class NativeStats:
     gib_per_second = 7.5
 
 
+class FakeDevice:
+    def __init__(self, type_: str, index: int | None = None) -> None:
+        self.type = type_
+        self.index = index
+
+
+class FakeTensor:
+    def __init__(
+        self,
+        ptr: int,
+        bytes_: int,
+        *,
+        device_type: str,
+        device_index: int | None = None,
+        pinned: bool = False,
+    ) -> None:
+        self._ptr = ptr
+        self._bytes = bytes_
+        self.device = FakeDevice(device_type, device_index)
+        self._pinned = pinned
+
+    def data_ptr(self) -> int:
+        return self._ptr
+
+    def numel(self) -> int:
+        return self._bytes
+
+    def element_size(self) -> int:
+        return 1
+
+    def is_pinned(self) -> bool:
+        return self._pinned
+
+    def is_contiguous(self) -> bool:
+        return True
+
+
 class SuccessfulRuntime:
     def __init__(self) -> None:
         self.wait_calls = 0
@@ -599,6 +636,8 @@ class RuntimeDaemonReservationTest(unittest.TestCase):
         def __init__(self) -> None:
             self.mode = None
             self.wait_calls = 0
+            self.fetch_calls = []
+            self.offload_calls = []
 
         def profile(self, bytes: int, force: bool = False):
             return RuntimeDaemonReservationTest.RelayProfile()
@@ -611,6 +650,14 @@ class RuntimeDaemonReservationTest(unittest.TestCase):
 
         def set_transfer_mode(self, mode):
             self.mode = mode
+
+        def fetch_to_gpu(self, host_ptr, target_ptr, bytes_):
+            self.fetch_calls.append((host_ptr, target_ptr, bytes_))
+            return NativeHandle(11)
+
+        def offload_to_cpu(self, target_ptr, host_ptr, bytes_):
+            self.offload_calls.append((target_ptr, host_ptr, bytes_))
+            return NativeHandle(12)
 
         def wait(self, handle):
             self.wait_calls += 1
@@ -726,6 +773,8 @@ class RuntimeDaemonReservationTest(unittest.TestCase):
         runtime._last_auto_decision = None
         runtime._forced_transfer_mode = None
         runtime._last_daemon_reservation = {}
+        runtime._backend = runtime_module.default_cuda_backend
+        runtime._pending_daemon_plan = None
         return runtime
 
     def test_daemon_reservation_granted_for_pool_transfer(self) -> None:
@@ -815,6 +864,103 @@ class RuntimeDaemonReservationTest(unittest.TestCase):
         self.assertEqual(client.plan_calls[0]["request_chunks"], 8)
         self.assertEqual(client.plan_calls[0]["job_id"], "job-1")
         self.assertEqual(client.plan_calls[0]["api"], "request")
+
+    def test_fetch_uses_daemon_exact_plan_without_native_replanning(self) -> None:
+        self.RelayProfile.relays = [self.Relay()]
+
+        class FakeBackend:
+            def __init__(self) -> None:
+                self.plan_payloads = []
+                self.fetch_plan_calls = []
+
+            def make_transfer_plan(self, plan):
+                self.plan_payloads.append(plan)
+                return {"native_plan": plan}
+
+            def fetch_plan_to_gpu(
+                self,
+                runtime,
+                host_ptr,
+                host_bytes,
+                target_ptr,
+                target_bytes,
+                plan,
+            ):
+                self.fetch_plan_calls.append(
+                    {
+                        "runtime": runtime,
+                        "host_ptr": host_ptr,
+                        "host_bytes": host_bytes,
+                        "target_ptr": target_ptr,
+                        "target_bytes": target_bytes,
+                        "plan": plan,
+                    }
+                )
+                return NativeHandle(22)
+
+        plan_payload = {
+            "total_bytes": 32,
+            "chunk_bytes": 16,
+            "assignments": [
+                {
+                    "path": {
+                        "kind": "relay",
+                        "direction": "h2d",
+                        "target_device": 0,
+                        "relay_device": 1,
+                        "enabled": True,
+                    },
+                    "chunks": [
+                        {"src_offset": 0, "dst_offset": 0, "bytes": 16},
+                        {"src_offset": 16, "dst_offset": 16, "bytes": 16},
+                    ],
+                }
+            ],
+        }
+        client = self.PlanningDaemonClient(
+            DaemonResponse(
+                ok=True,
+                payload={
+                    "plan": plan_payload,
+                    "stats": {"resolved_mode": "pool", "fallback_reason": None},
+                    "leases": [
+                        {
+                            "lease_id": "lease-1",
+                            "relay_device": 1,
+                            "chunk_limit": 2,
+                            "bytes_limit": 32,
+                        }
+                    ],
+                    "reservations": [{"reservation_id": "lease-1"}],
+                },
+            )
+        )
+        runtime = self.make_runtime(client)
+        runtime.options.transfer_mode = TransferMode.POOL
+        backend = FakeBackend()
+        runtime._backend = backend
+        old_torch = runtime_module.torch
+        runtime_module.torch = type("Torch", (), {"Tensor": FakeTensor})
+        try:
+            handle = runtime.fetch_to_gpu(
+                FakeTensor(100, 32, device_type="cpu", pinned=True),
+                FakeTensor(200, 64, device_type="cuda", device_index=0),
+            )
+        finally:
+            runtime_module.torch = old_torch
+
+        self.assertEqual(handle.native.id, 22)
+        self.assertEqual(runtime._runtime.fetch_calls, [])
+        self.assertEqual(backend.plan_payloads, [plan_payload])
+        self.assertEqual(backend.fetch_plan_calls[0]["runtime"], runtime._runtime)
+        self.assertEqual(backend.fetch_plan_calls[0]["host_ptr"], 100)
+        self.assertEqual(backend.fetch_plan_calls[0]["host_bytes"], 32)
+        self.assertEqual(backend.fetch_plan_calls[0]["target_ptr"], 200)
+        self.assertEqual(backend.fetch_plan_calls[0]["target_bytes"], 64)
+        self.assertEqual(
+            backend.fetch_plan_calls[0]["plan"],
+            {"native_plan": plan_payload},
+        )
 
     def test_daemon_plan_direct_fallback_updates_auto_decision(self) -> None:
         self.RelayProfile.relays = [self.Relay()]
@@ -1217,6 +1363,97 @@ class RangeValidationTest(unittest.TestCase):
                 )
         finally:
             runtime_module._turbobus = old_extension
+
+    def test_native_transfer_plan_preserves_daemon_assignments(self) -> None:
+        class NativePlan:
+            def __init__(self) -> None:
+                self.total_bytes = 0
+                self.chunk_bytes = 0
+                self.assignments = []
+
+        class NativeAssignment:
+            def __init__(self) -> None:
+                self.path = None
+                self.chunks = []
+
+        class NativePath:
+            def __init__(self) -> None:
+                self.kind_value = None
+                self.direction_value = None
+                self.target_device = -1
+                self.relay_device = -1
+                self.h2d_bw_gbps = 0.0
+                self.d2h_bw_gbps = 0.0
+                self.p2p_bw_gbps = 0.0
+                self.effective_bw_gbps = 0.0
+                self.enabled = False
+
+        class NativeChunk:
+            def __init__(self) -> None:
+                self.src_offset = 0
+                self.dst_offset = 0
+                self.bytes = 0
+
+        class PathKind:
+            RelayH2DThenP2P = "relay-h2d"
+            RelayP2PThenD2H = "relay-d2h"
+            DirectH2D = "direct-h2d"
+            DirectD2H = "direct-d2h"
+
+        class TransferDirection:
+            H2D = "h2d"
+            D2H = "d2h"
+
+        old_extension = runtime_module._runtime_engine._turbobus
+        runtime_module._runtime_engine._turbobus = type(
+            "Ext",
+            (),
+            {
+                "TransferPlan": NativePlan,
+                "PathAssignment": NativeAssignment,
+                "Path": NativePath,
+                "Chunk": NativeChunk,
+                "PathKind": PathKind,
+                "TransferDirection": TransferDirection,
+            },
+        )
+        try:
+            plan = runtime_module._runtime_engine._native_transfer_plan(
+                {
+                    "total_bytes": 32,
+                    "chunk_bytes": 16,
+                    "assignments": [
+                        {
+                            "path": {
+                                "kind": "relay",
+                                "direction": "h2d",
+                                "target_device": 0,
+                                "relay_device": 1,
+                                "h2d_bw_gbps": 12.0,
+                                "p2p_bw_gbps": 50.0,
+                                "effective_bw_gbps": 10.0,
+                                "enabled": True,
+                            },
+                            "chunks": [
+                                {"src_offset": 0, "dst_offset": 8, "bytes": 16},
+                            ],
+                        }
+                    ],
+                }
+            )
+        finally:
+            runtime_module._runtime_engine._turbobus = old_extension
+
+        self.assertEqual(plan.total_bytes, 32)
+        self.assertEqual(plan.chunk_bytes, 16)
+        self.assertEqual(len(plan.assignments), 1)
+        assignment = plan.assignments[0]
+        self.assertEqual(assignment.path.kind_value, "relay-h2d")
+        self.assertEqual(assignment.path.direction_value, "h2d")
+        self.assertEqual(assignment.path.relay_device, 1)
+        self.assertEqual(assignment.chunks[0].src_offset, 0)
+        self.assertEqual(assignment.chunks[0].dst_offset, 8)
+        self.assertEqual(assignment.chunks[0].bytes, 16)
 
     def test_range_tensor_validation_does_not_require_equal_sizes_for_d2h(self) -> None:
         class TensorType:

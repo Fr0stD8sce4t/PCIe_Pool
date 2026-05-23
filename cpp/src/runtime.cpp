@@ -65,6 +65,53 @@ TransferHandle TurboBusRuntime::OffloadToCpu(void* target_gpu_ptr, void* host_pt
   return SubmitTransfer(target_gpu_ptr, host_ptr, bytes, TransferDirection::D2H);
 }
 
+TransferHandle TurboBusRuntime::FetchPlanToGpu(void* host_ptr, std::size_t host_bytes,
+                                               void* target_gpu_ptr,
+                                               std::size_t target_bytes,
+                                               const TransferPlan& plan) {
+  if (!initialized_) {
+    throw std::runtime_error("runtime is not initialized");
+  }
+  BufferView source;
+  source.ptr = host_ptr;
+  source.bytes = host_bytes;
+  source.device = kHostDevice;
+  source.kind = MemoryKind::HostPinned;
+
+  BufferView destination;
+  destination.ptr = target_gpu_ptr;
+  destination.bytes = target_bytes;
+  destination.device = target_device_;
+  destination.kind = MemoryKind::Device;
+
+  last_plan_ = plan;
+  return executor_.Submit(source, destination, last_plan_);
+}
+
+TransferHandle TurboBusRuntime::OffloadPlanToCpu(void* target_gpu_ptr,
+                                                 std::size_t target_bytes,
+                                                 void* host_ptr,
+                                                 std::size_t host_bytes,
+                                                 const TransferPlan& plan) {
+  if (!initialized_) {
+    throw std::runtime_error("runtime is not initialized");
+  }
+  BufferView source;
+  source.ptr = target_gpu_ptr;
+  source.bytes = target_bytes;
+  source.device = target_device_;
+  source.kind = MemoryKind::Device;
+
+  BufferView destination;
+  destination.ptr = host_ptr;
+  destination.bytes = host_bytes;
+  destination.device = kHostDevice;
+  destination.kind = MemoryKind::HostPinned;
+
+  last_plan_ = plan;
+  return executor_.SubmitD2H(source, destination, last_plan_);
+}
+
 TransferHandle TurboBusRuntime::FetchRangesToGpu(
     void* host_ptr, std::size_t host_bytes, void* target_gpu_ptr,
     std::size_t target_bytes, const std::vector<TransferRange>& ranges) {

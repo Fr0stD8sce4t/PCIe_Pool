@@ -37,6 +37,37 @@ class CudaNativeBackend:
     ) -> list:
         return self._runtime_engine._native_ranges(ranges, source_bytes, destination_bytes)
 
+    def make_transfer_plan(self, plan: Any) -> Any:
+        return self._runtime_engine._native_transfer_plan(plan)
+
+    def fetch_plan_to_gpu(
+        self,
+        runtime: Any,
+        host_ptr: int,
+        host_bytes: int,
+        target_ptr: int,
+        target_bytes: int,
+        plan: Any,
+    ) -> Any:
+        submitter = getattr(runtime, "fetch_plan_to_gpu", None)
+        if not callable(submitter):
+            raise RuntimeError("native runtime does not support exact transfer plans")
+        return submitter(host_ptr, host_bytes, target_ptr, target_bytes, plan)
+
+    def offload_plan_to_cpu(
+        self,
+        runtime: Any,
+        target_ptr: int,
+        target_bytes: int,
+        host_ptr: int,
+        host_bytes: int,
+        plan: Any,
+    ) -> Any:
+        submitter = getattr(runtime, "offload_plan_to_cpu", None)
+        if not callable(submitter):
+            raise RuntimeError("native runtime does not support exact transfer plans")
+        return submitter(target_ptr, target_bytes, host_ptr, host_bytes, plan)
+
 
 default_cuda_backend = CudaNativeBackend()
 

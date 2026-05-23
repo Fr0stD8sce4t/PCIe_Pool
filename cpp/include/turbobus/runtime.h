@@ -23,6 +23,12 @@ class TurboBusRuntime {
   void SetTransferMode(TransferMode mode);
   TransferHandle FetchToGpu(void* host_ptr, void* target_gpu_ptr, std::size_t bytes);
   TransferHandle OffloadToCpu(void* target_gpu_ptr, void* host_ptr, std::size_t bytes);
+  TransferHandle FetchPlanToGpu(void* host_ptr, std::size_t host_bytes,
+                                void* target_gpu_ptr, std::size_t target_bytes,
+                                const TransferPlan& plan);
+  TransferHandle OffloadPlanToCpu(void* target_gpu_ptr, std::size_t target_bytes,
+                                  void* host_ptr, std::size_t host_bytes,
+                                  const TransferPlan& plan);
   TransferHandle FetchRangesToGpu(void* host_ptr, std::size_t host_bytes,
                                   void* target_gpu_ptr, std::size_t target_bytes,
                                   const std::vector<TransferRange>& ranges);
