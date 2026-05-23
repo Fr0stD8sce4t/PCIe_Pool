@@ -175,6 +175,8 @@ transfer request objects:
   snapshot, clears recorded endpoint events, and resets `last_event`.
 - `WorkerServiceEndpoint` now accepts an optional `max_events` history limit so
   long-running helper processes can bound retained endpoint event records.
+- `WorkerServiceEndpoint.describe()` now reports endpoint configuration fields
+  for `max_events`, retained event count, and whether event history is bounded.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -286,11 +288,13 @@ phase:
     current snapshot.
 38. worker endpoint event history limits now keep only the newest retained
     events while preserving `last_event` and encoded responses.
+39. worker endpoint describe snapshots now report `max_events`,
+    `retained_event_count`, and `history_bounded` without changing encoded
+    worker response payloads.
 
-The next immediate goal is to extend worker endpoint `describe()` with endpoint
-configuration fields. The snapshot should report `max_events`, retained event
-count, and whether event history is bounded while keeping encoded responses
-unchanged.
+The next immediate goal is to add an in-process worker endpoint event snapshot
+helper. It should return retained `WorkerEndpointEvent` records as dictionaries
+for future socket or IPC transports while keeping encoded responses unchanged.
 
 ## Verification
 
@@ -375,7 +379,10 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
   `WorkerServiceEndpoint.clear_events()`;
 - add an optional worker endpoint event history limit; done through
   `WorkerServiceEndpoint(max_events=...)`;
-- add endpoint configuration fields to worker endpoint describe snapshots;
+- add endpoint configuration fields to worker endpoint describe snapshots; done
+  through `WorkerServiceEndpoint.describe()`;
+- add an in-process endpoint event snapshot helper that exposes retained events
+  without giving callers direct access to the mutable event list;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

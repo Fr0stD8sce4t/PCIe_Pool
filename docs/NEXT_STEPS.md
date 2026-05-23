@@ -175,15 +175,20 @@ Current status:
 - worker endpoints now accept an optional `max_events` history limit that drops
   the oldest retained event records while preserving the newest event,
   `last_event`, and encoded response payloads.
+- worker endpoint `describe()` snapshots now include endpoint configuration
+  fields: `max_events`, `retained_event_count`, and `history_bounded`, while
+  preserving encoded response payloads.
 
 Next code cut:
 
-- extend worker endpoint `describe()` with endpoint configuration fields,
-  including `max_events`, retained event count, and whether history is bounded;
+- add an in-process worker endpoint event snapshot helper that returns retained
+  `WorkerEndpointEvent` records as dictionaries for future socket or IPC
+  transports;
 - keep it in process only, with no CUDA IPC, sockets, real data movement, or
   hardware discovery yet;
-- add focused tests that bounded and unbounded endpoints report the expected
-  configuration without changing encoded response payloads.
+- add focused tests that bounded endpoints expose only retained events,
+  unbounded endpoints expose all retained events, and encoded response payloads
+  stay unchanged.
 
 ## Upcoming
 

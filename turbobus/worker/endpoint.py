@@ -69,8 +69,12 @@ class WorkerServiceEndpoint:
                 error_count += 1
             if event.has_completion:
                 completion_count += 1
+        retained_event_count = len(self.events)
         return {
-            "total_requests": len(self.events),
+            "total_requests": retained_event_count,
+            "retained_event_count": retained_event_count,
+            "max_events": self.max_events,
+            "history_bounded": self.max_events is not None,
             "last_event": (
                 self.last_event.as_dict() if self.last_event is not None else None
             ),
