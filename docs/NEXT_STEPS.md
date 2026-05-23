@@ -217,6 +217,10 @@ Completed current code cut:
   and worker/helper execution. The factory now passes the selected CUDA
   backend and runtime options into the default worker executor and resource
   binder instead of using separate default instances for relay/pool paths.
+- Keep direct fallback verification independent from the worker helper socket.
+  `python -m turbobus.verification --mode direct` now starts only the daemon
+  and the direct data path; relay and pool modes still start the worker helper
+  because they need daemon-authorized relay execution.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.

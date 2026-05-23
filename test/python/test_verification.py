@@ -10,6 +10,7 @@ from turbobus.verification import (
     WorkerManagedH2DRelayVerificationResult,
     _build_verification_daemon,
     _resolve_verification_buffer_sizes,
+    _worker_helper_required,
     main,
 )
 
@@ -264,6 +265,11 @@ class WorkerManagedH2DRelayVerificationTest(unittest.TestCase):
                 source_buffer_bytes=None,
                 destination_buffer_bytes=39,
             )
+
+    def test_worker_helper_is_not_required_for_direct_verification(self) -> None:
+        self.assertFalse(_worker_helper_required("direct"))
+        self.assertTrue(_worker_helper_required("relay"))
+        self.assertTrue(_worker_helper_required("pool"))
 
     def test_cli_forwards_range_offsets_to_h2d_verifier(self) -> None:
         result = WorkerManagedH2DRelayVerificationResult(

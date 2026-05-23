@@ -206,25 +206,32 @@ def _verify_worker_managed_relay(
             ),
             daemon=True,
         )
-        worker_process = process_context.Process(
-            target=run_worker_helper_process,
-            args=(daemon_socket, worker_socket),
-            daemon=True,
+        worker_process = (
+            None
+            if not _worker_helper_required(mode)
+            else process_context.Process(
+                target=run_worker_helper_process,
+                args=(daemon_socket, worker_socket),
+                daemon=True,
+            )
         )
         transfer_client = None
         cpu_buffer = None
         try:
             daemon_process.start()
             _wait_for_socket(daemon_socket, daemon_process, startup_timeout_seconds)
-            worker_process.start()
-            _wait_for_socket(worker_socket, worker_process, startup_timeout_seconds)
+            worker_client = _UnusedWorkerClient()
+            if worker_process is not None:
+                worker_process.start()
+                _wait_for_socket(worker_socket, worker_process, startup_timeout_seconds)
+                worker_client = WorkerServiceSocketClient(worker_socket)
 
             daemon_client = TurboBusDaemonClient(daemon_socket)
             transfer_client = make_worker_managed_transfer_client(
                 daemon_client,
                 target_gpu=target,
                 relay_gpus=[relay],
-                worker_client=WorkerServiceSocketClient(worker_socket),
+                worker_client=worker_client,
                 max_inflight_chunks=int(max_inflight_chunks),
             )
 
@@ -401,7 +408,8 @@ def _verify_worker_managed_relay(
                     pass
             if cpu_buffer is not None:
                 cpu_buffer.release()
-            _terminate_process(worker_process)
+            if worker_process is not None:
+                _terminate_process(worker_process)
             _terminate_process(daemon_process)
 
 
@@ -597,6 +605,22 @@ def _resolve_verification_buffer_sizes(
             "destination_buffer_bytes must cover dst_offset + bytes_to_copy"
         )
     return source_size, destination_size
+
+
+def _worker_helper_required(mode: str) -> bool:
+    return str(mode).lower() != "direct"
+
+
+class _UnusedWorkerClient:
+    def submit_envelope(self, envelope):
+        raise RuntimeError("direct verification should not use a worker helper")
+
+    def submit_report_cleanup_lifecycle(
+        self,
+        request,
+        cleanup_target_kind="reservation",
+    ):
+        raise RuntimeError("direct verification should not use a worker helper")
 
 
 def _expected_payload(
