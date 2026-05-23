@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
-from .codec import decode_worker_response_envelope, handle_worker_service_message
+from .codec import (
+    decode_worker_response_envelope,
+    encode_worker_observability_snapshot,
+    handle_worker_service_message,
+)
 from .helper import WorkerTransferService
 
 
@@ -67,6 +71,9 @@ class WorkerServiceEndpoint:
         self.events.append(event)
         self._trim_events()
         return response_message
+
+    def handle_observability_message(self) -> str:
+        return encode_worker_observability_snapshot(self.observability_snapshot())
 
     def describe(self) -> dict[str, object]:
         final_state_counts: dict[str, int] = {}

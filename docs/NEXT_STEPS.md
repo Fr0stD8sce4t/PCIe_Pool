@@ -192,15 +192,18 @@ Current status:
   transports.
 - worker endpoint observability snapshots now have JSON-safe encoder/decoder
   helpers for future transports.
+- an in-process worker endpoint observability message handler now returns an
+  encoded observability snapshot for future socket or IPC observability
+  requests without changing worker response payloads.
 
 Next code cut:
 
-- add an in-process worker endpoint observability message handler that returns
-  an encoded observability snapshot for future socket or IPC observability
-  requests;
+- add a tiny in-process worker observability request envelope and codec helper
+  so future socket or IPC transports can trigger the new endpoint handler
+  explicitly;
 - keep it in process only, with no CUDA IPC, sockets, real data movement, or
   hardware discovery yet;
-- add focused tests that the handler returns encoded empty and populated
+- add focused tests that the request path returns encoded empty and populated
   snapshots while encoded worker response payloads stay unchanged.
 
 ## Upcoming

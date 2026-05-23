@@ -317,11 +317,14 @@ phase:
     events, health, and metrics under one stable in-process payload.
 45. worker endpoint observability snapshots now round-trip through JSON-safe
     encode/decode helpers without changing encoded worker response payloads.
+46. an in-process worker endpoint observability message handler now returns an
+    encoded observability snapshot for future socket or IPC observability
+    requests without changing worker response payloads.
 
-The next immediate goal is to add an in-process worker endpoint observability
-message handler that returns an encoded observability snapshot for future socket
-or IPC observability requests while keeping encoded worker response payloads
-unchanged.
+The next immediate goal is to add a tiny in-process worker observability
+request envelope and codec helper so future socket or IPC transports can
+trigger the new endpoint handler explicitly while keeping encoded worker
+response payloads unchanged.
 
 ## Verification
 
@@ -426,7 +429,10 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
   `encode_worker_observability_snapshot` and
   `decode_worker_observability_snapshot`;
 - add an in-process worker endpoint observability message handler for future
-  transport observability clients;
+  transport observability clients; done through
+  `WorkerServiceEndpoint.handle_observability_message()`;
+- add a tiny worker observability request envelope and codec helper so future
+  socket or IPC transports can trigger the new endpoint handler explicitly;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper
