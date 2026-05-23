@@ -17,6 +17,7 @@ reproduction system for PCIe bandwidth pooling via relay GPUs.
   `python -m unittest discover -s test\\python -p "test_vllm_kv_connector.py" -v`,
   `python -m compileall turbobus\\runtime.py test\\python\\test_runtime_handle.py -q`,
   `git diff --check`.
+- Commit: `cdc58e3`.
 - Remaining risk: the latest target-server `--mode all` run still showed
   vLLM auto restore a little behind pool, so the cache needs another server
   rerun to confirm the gap has closed.
