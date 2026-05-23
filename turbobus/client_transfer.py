@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Iterable, Mapping
 
+from .backends.cuda import default_cuda_backend
 from .client import CudaIpcDeviceBuffer, SharedPinnedCpuBuffer
+from .runtime_engine import RuntimeOptions
 from .schema import BufferRegistration, DaemonResponse, WorkerTransferAuthorizationRequest
 from .transfer import TransferRange, TransferRequest
 from .worker import (
@@ -24,8 +26,8 @@ class WorkerManagedTransferResult:
     source_buffer_id: str
     target_buffer_id: str
     plan: Mapping[str, object]
-    lease_token: Mapping[str, object]
-    authorization_request: WorkerTransferAuthorizationRequest
+    lease_token: Mapping[str, object] | None
+    authorization_request: WorkerTransferAuthorizationRequest | None
     worker_lifecycle: WorkerTransferLifecycleRecord | None
     final_status: Mapping[str, object]
     worker_completion: WorkerDataPlaneCompletionEnvelope | None = None
@@ -47,6 +49,8 @@ class WorkerManagedTransferClient:
     target_gpu: int
     relay_gpus: Iterable[int]
     max_inflight_chunks: int = 8
+    backend: object = default_cuda_backend
+    runtime_options: RuntimeOptions = field(default_factory=RuntimeOptions)
     _session_id: str | None = field(default=None, init=False, repr=False)
 
     def open_session(self) -> str:
@@ -171,6 +175,18 @@ class WorkerManagedTransferClient:
             mode=mode,
         )
         _require_ok(planned, "daemon transfer planning failed")
+        if _is_direct_only_worker_plan(planned.payload):
+            return _execute_direct_fallback_transfer(
+                daemon_client=self.daemon_client,
+                backend=self.backend,
+                runtime_options=self.runtime_options,
+                transfer_request=transfer_request,
+                planned_payload=planned.payload,
+                session_id=session_id,
+                job_id=job,
+                source=source,
+                target=target,
+            )
         lease_token = _single_lease_token(self.daemon_client, planned)
         try:
             _require_single_relay_worker_plan(
@@ -308,6 +324,171 @@ def _plan_transfer_request(
         buffer_ids=list(request.metadata["buffer_ids"]),
         ranges=[item.as_dict() for item in request.ranges] if request.ranges else None,
     )
+
+
+def _is_direct_only_worker_plan(plan_payload: Mapping[str, object]) -> bool:
+    if plan_payload.get("lease_tokens") or plan_payload.get("reservations"):
+        return False
+    plan = plan_payload.get("plan")
+    if not isinstance(plan, Mapping):
+        return False
+    assignments = plan.get("assignments", ()) or ()
+    if not assignments:
+        return False
+    for assignment in assignments:
+        if not isinstance(assignment, Mapping):
+            return False
+        path = assignment.get("path")
+        if not isinstance(path, Mapping):
+            return False
+        if str(path.get("kind", "")).lower() != "direct":
+            return False
+    return True
+
+
+def _execute_direct_fallback_transfer(
+    *,
+    daemon_client,
+    backend,
+    runtime_options: RuntimeOptions,
+    transfer_request: TransferRequest,
+    planned_payload: Mapping[str, object],
+    session_id: str,
+    job_id: str,
+    source: SharedPinnedCpuBuffer | CudaIpcDeviceBuffer,
+    target: SharedPinnedCpuBuffer | CudaIpcDeviceBuffer,
+) -> WorkerManagedTransferResult:
+    transfer_id = str(planned_payload["transfer_id"])
+    try:
+        _execute_direct_plan(
+            backend=backend,
+            runtime_options=runtime_options,
+            direction=transfer_request.direction.value,
+            plan_payload=dict(planned_payload["plan"]),
+            source=source,
+            target=target,
+        )
+    except Exception as exc:
+        daemon_client.transfer_status(
+            transfer_id,
+            state="failed",
+            bytes_completed=0,
+            error=str(exc) or exc.__class__.__name__,
+        )
+        raise
+    completed = daemon_client.transfer_status(
+        transfer_id,
+        state="complete",
+        bytes_completed=transfer_request.total_bytes,
+    )
+    _require_ok(completed, "daemon direct transfer completion update failed")
+    status = daemon_client.transfer_status(transfer_id)
+    _require_ok(status, "daemon transfer status query failed")
+    final_status = dict(status.payload["status"])
+    _require_daemon_transfer_complete(
+        final_status,
+        expected_bytes=transfer_request.total_bytes,
+    )
+    return WorkerManagedTransferResult(
+        transfer_id=transfer_id,
+        session_id=session_id,
+        job_id=job_id,
+        source_buffer_id=source.buffer_id,
+        target_buffer_id=target.buffer_id,
+        plan=planned_payload,
+        lease_token=None,
+        authorization_request=None,
+        worker_lifecycle=None,
+        worker_completion=None,
+        final_status=final_status,
+    )
+
+
+def _execute_direct_plan(
+    *,
+    backend,
+    runtime_options: RuntimeOptions,
+    direction: str,
+    plan_payload: Mapping[str, object],
+    source: SharedPinnedCpuBuffer | CudaIpcDeviceBuffer,
+    target: SharedPinnedCpuBuffer | CudaIpcDeviceBuffer,
+) -> None:
+    if direction == "h2d":
+        if not isinstance(source, SharedPinnedCpuBuffer):
+            raise TypeError("direct h2d source must be a SharedPinnedCpuBuffer")
+        if not isinstance(target, CudaIpcDeviceBuffer):
+            raise TypeError("direct h2d target must be a CudaIpcDeviceBuffer")
+        _require_device_pointer(target)
+        _run_direct_plan(
+            backend=backend,
+            runtime_options=runtime_options,
+            target_device=target.device_index,
+            plan_payload=plan_payload,
+            host_buffer=source,
+            device_ptr=int(target.device_ptr),
+            device_bytes=target.size_bytes,
+            direction=direction,
+        )
+        return
+    if not isinstance(source, CudaIpcDeviceBuffer):
+        raise TypeError("direct d2h source must be a CudaIpcDeviceBuffer")
+    if not isinstance(target, SharedPinnedCpuBuffer):
+        raise TypeError("direct d2h target must be a SharedPinnedCpuBuffer")
+    _require_device_pointer(source)
+    _run_direct_plan(
+        backend=backend,
+        runtime_options=runtime_options,
+        target_device=source.device_index,
+        plan_payload=plan_payload,
+        host_buffer=target,
+        device_ptr=int(source.device_ptr),
+        device_bytes=source.size_bytes,
+        direction=direction,
+    )
+
+
+def _run_direct_plan(
+    *,
+    backend,
+    runtime_options: RuntimeOptions,
+    target_device: int,
+    plan_payload: Mapping[str, object],
+    host_buffer: SharedPinnedCpuBuffer,
+    device_ptr: int,
+    device_bytes: int,
+    direction: str,
+) -> None:
+    native_plan = backend.make_transfer_plan(plan_payload)
+    runtime = backend.create_runtime(runtime_options)
+    backend.initialize_runtime(runtime, int(target_device), [])
+    host_buffer.register_for_cuda(backend)
+    try:
+        if direction == "h2d":
+            handle = backend.fetch_plan_to_gpu(
+                runtime,
+                host_buffer.address,
+                host_buffer.size_bytes,
+                device_ptr,
+                int(device_bytes),
+                native_plan,
+            )
+        else:
+            handle = backend.offload_plan_to_cpu(
+                runtime,
+                device_ptr,
+                int(device_bytes),
+                host_buffer.address,
+                host_buffer.size_bytes,
+                native_plan,
+            )
+        backend.wait(runtime, handle)
+    finally:
+        host_buffer.unregister_from_cuda()
+
+
+def _require_device_pointer(buffer: CudaIpcDeviceBuffer) -> None:
+    if buffer.device_ptr is None or int(buffer.device_ptr) <= 0:
+        raise ValueError("direct fallback requires a local CUDA device pointer")
 
 
 def _single_lease_token(daemon_client, response: DaemonResponse) -> Mapping[str, object]:
@@ -469,6 +650,8 @@ def make_worker_managed_transfer_client(
     relay_gpus: Iterable[int],
     worker_client: object | None = None,
     max_inflight_chunks: int = 8,
+    backend=default_cuda_backend,
+    runtime_options: RuntimeOptions | None = None,
 ) -> WorkerManagedTransferClient:
     return WorkerManagedTransferClient(
         daemon_client=daemon_client,
@@ -480,6 +663,8 @@ def make_worker_managed_transfer_client(
         target_gpu=int(target_gpu),
         relay_gpus=tuple(int(gpu) for gpu in relay_gpus),
         max_inflight_chunks=int(max_inflight_chunks),
+        backend=backend,
+        runtime_options=runtime_options or RuntimeOptions(),
     )
 
 

@@ -171,6 +171,12 @@ transfer request objects:
   sizes larger real source/destination buffers around those ranges, sends the
   offset range through the daemon-approved worker-managed path, and verifies
   that destination bytes land at the requested offset;
+- `WorkerManagedTransferClient` now executes daemon-issued direct fallback
+  plans instead of failing when no relay lease is returned. A direct-only plan
+  runs through the CUDA backend with the daemon's exact chunks, updates daemon
+  transfer status to complete, and leaves worker relay execution unused. The
+  CUDA-server verifier accepts `--mode direct` and can accept pool requests
+  that resolve to daemon direct fallback;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -653,6 +659,12 @@ phase:
     `--destination-buffer-bytes`, uses larger real buffers for the source and
     destination, submits the range through the worker-managed call, and checks
     that the destination buffer matches the expected offset placement.
+72. worker-managed direct fallback now executes. When daemon planning returns a
+    direct-only plan with no relay lease, `WorkerManagedTransferClient` submits
+    the exact plan through the CUDA backend, reports daemon-owned completion,
+    and returns a complete transfer without sending a worker relay request.
+    `turbobus.verification` now accepts `--mode direct` and handles pool
+    requests that resolve to direct fallback.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

@@ -8,7 +8,7 @@ import socket
 import tempfile
 import time
 from dataclasses import asdict, dataclass
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from .backends.cuda import default_cuda_backend
 from .client import CudaIpcDeviceBuffer, SharedPinnedCpuBufferAllocator
@@ -160,8 +160,8 @@ def _verify_worker_managed_relay(
     if direction not in {"h2d", "d2h"}:
         raise ValueError("direction must be h2d or d2h")
     mode = str(mode).lower()
-    if mode not in {"relay", "pool"}:
-        raise ValueError("mode must be relay or pool")
+    if mode not in {"direct", "relay", "pool"}:
+        raise ValueError("mode must be direct, relay, or pool")
     target = int(target_gpu)
     relay = int(relay_gpu)
     total_bytes = int(bytes_to_copy)
@@ -321,7 +321,12 @@ def _verify_worker_managed_relay(
                     cpu_buffer,
                     _expected_payload(destination_size, pattern, dst_offset),
                 )
-            _assert_transfer_complete(transfer, total_bytes)
+            resolved_mode = _resolved_transfer_mode(transfer.plan, mode)
+            _assert_transfer_complete(
+                transfer,
+                total_bytes,
+                require_worker_completion=resolved_mode != "direct",
+            )
 
             daemon_profile = daemon_client.describe()
             if not daemon_profile.ok:
@@ -335,20 +340,27 @@ def _verify_worker_managed_relay(
                 raise RuntimeError("daemon relay active chunk count was not released")
 
             worker_completion = transfer.worker_completion
-            worker_result = (
-                {}
-                if worker_completion.worker_result is None
-                else dict(worker_completion.worker_result)
-            )
-            metadata = dict(worker_result.get("metadata") or {})
-            worker_path = str(metadata.get("path", ""))
-            direct_bytes = int(metadata.get("direct_bytes", 0) or 0)
-            direct_chunks = int(metadata.get("direct_chunks", 0) or 0)
-            relay_bytes = int(metadata.get("relay_bytes", 0) or 0)
-            relay_chunks = int(metadata.get("relay_chunks", 0) or 0)
+            if worker_completion is None:
+                worker_path = f"direct_{direction}"
+                direct_bytes = _planned_path_bytes(transfer.plan["plan"], "direct")
+                direct_chunks = _planned_path_chunks(transfer.plan["plan"], "direct")
+                relay_bytes = 0
+                relay_chunks = 0
+            else:
+                worker_result = (
+                    {}
+                    if worker_completion.worker_result is None
+                    else dict(worker_completion.worker_result)
+                )
+                metadata = dict(worker_result.get("metadata") or {})
+                worker_path = str(metadata.get("path", ""))
+                direct_bytes = int(metadata.get("direct_bytes", 0) or 0)
+                direct_chunks = int(metadata.get("direct_chunks", 0) or 0)
+                relay_bytes = int(metadata.get("relay_bytes", 0) or 0)
+                relay_chunks = int(metadata.get("relay_chunks", 0) or 0)
             _assert_worker_path_split(
                 direction=direction,
-                mode=mode,
+                mode=resolved_mode,
                 total_bytes=total_bytes,
                 worker_path=worker_path,
                 direct_bytes=direct_bytes,
@@ -358,7 +370,7 @@ def _verify_worker_managed_relay(
             )
             return result_type(
                 direction=direction,
-                transfer_mode=mode,
+                transfer_mode=resolved_mode,
                 transfer_id=transfer.transfer_id,
                 job_id=job_id,
                 bytes_requested=total_bytes,
@@ -398,7 +410,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         description="Verify TurboBus worker-managed CUDA relay over helper socket",
     )
     parser.add_argument("--direction", choices=["h2d", "d2h"], default="h2d")
-    parser.add_argument("--mode", choices=["relay", "pool"], default="relay")
+    parser.add_argument("--mode", choices=["direct", "relay", "pool"], default="relay")
     parser.add_argument("--target-gpu", type=int, default=0)
     parser.add_argument("--relay-gpu", type=int, default=1)
     parser.add_argument("--bytes", type=int, default=1024 * 1024)
@@ -649,7 +661,51 @@ def _assert_shared_cpu_matches(cpu_buffer, expected: bytearray) -> None:
     )
 
 
-def _assert_transfer_complete(transfer, total_bytes: int) -> None:
+def _resolved_transfer_mode(
+    plan_payload: Mapping[str, object],
+    requested_mode: str,
+) -> str:
+    stats = plan_payload.get("stats")
+    if isinstance(stats, Mapping):
+        return str(stats.get("resolved_mode", requested_mode)).lower()
+    return str(requested_mode).lower()
+
+
+def _planned_path_bytes(plan_payload: Mapping[str, object], path_kind: str) -> int:
+    total = 0
+    for assignment in plan_payload.get("assignments", ()) or ():
+        if not isinstance(assignment, Mapping):
+            continue
+        path = assignment.get("path")
+        if not isinstance(path, Mapping):
+            continue
+        if str(path.get("kind", "")).lower() != path_kind:
+            continue
+        for chunk in assignment.get("chunks", ()) or ():
+            if isinstance(chunk, Mapping):
+                total += int(chunk.get("bytes", 0))
+    return total
+
+
+def _planned_path_chunks(plan_payload: Mapping[str, object], path_kind: str) -> int:
+    total = 0
+    for assignment in plan_payload.get("assignments", ()) or ():
+        if not isinstance(assignment, Mapping):
+            continue
+        path = assignment.get("path")
+        if not isinstance(path, Mapping):
+            continue
+        if str(path.get("kind", "")).lower() == path_kind:
+            total += len(assignment.get("chunks", ()) or ())
+    return total
+
+
+def _assert_transfer_complete(
+    transfer,
+    total_bytes: int,
+    *,
+    require_worker_completion: bool,
+) -> None:
     if transfer.state != "complete":
         raise RuntimeError(f"transfer did not complete: {transfer.state}")
     if transfer.bytes_completed != total_bytes:
@@ -657,9 +713,12 @@ def _assert_transfer_complete(transfer, total_bytes: int) -> None:
             "transfer completed an unexpected byte count: "
             f"{transfer.bytes_completed} != {total_bytes}"
         )
-    if transfer.worker_completion is None:
+    if require_worker_completion and transfer.worker_completion is None:
         raise RuntimeError("worker helper did not return a completion envelope")
-    if transfer.worker_completion.final_state != "complete":
+    if (
+        transfer.worker_completion is not None
+        and transfer.worker_completion.final_state != "complete"
+    ):
         raise RuntimeError(
             "worker helper did not complete: "
             f"{transfer.worker_completion.final_state}"
@@ -680,6 +739,16 @@ def _assert_worker_path_split(
     expected_path = f"{mode}_{direction}"
     if worker_path != expected_path:
         raise RuntimeError(f"worker did not report the {expected_path} executor path")
+    if mode == "direct":
+        if relay_bytes != 0 or relay_chunks != 0:
+            raise RuntimeError("direct verification unexpectedly reported relay work")
+        if direct_chunks <= 0:
+            raise RuntimeError("direct verification did not report direct chunks")
+        if direct_bytes != total_bytes:
+            raise RuntimeError(
+                f"worker direct bytes mismatch: {direct_bytes} != {total_bytes}"
+            )
+        return
     if relay_chunks <= 0:
         raise RuntimeError("worker did not report relay chunks")
     if relay_bytes <= 0:

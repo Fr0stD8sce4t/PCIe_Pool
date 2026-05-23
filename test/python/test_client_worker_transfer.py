@@ -58,6 +58,57 @@ class FakeCudaBackend:
         return b"g" * 64
 
 
+class FakeDirectBackend(FakeCudaBackend):
+    def __init__(self) -> None:
+        self.initialized = []
+        self.fetches = []
+        self.offloads = []
+        self.registered = []
+        self.unregistered = []
+
+    def make_transfer_plan(self, plan):
+        return plan
+
+    def create_runtime(self, options):
+        return {"options": options}
+
+    def initialize_runtime(self, runtime, target_device, relay_gpus):
+        self.initialized.append((target_device, tuple(relay_gpus)))
+
+    def register_host_memory(self, host_ptr, bytes_):
+        self.registered.append((host_ptr, bytes_))
+
+    def unregister_host_memory(self, host_ptr):
+        self.unregistered.append(host_ptr)
+
+    def fetch_plan_to_gpu(
+        self,
+        runtime,
+        host_ptr,
+        host_bytes,
+        target_ptr,
+        target_bytes,
+        plan,
+    ):
+        self.fetches.append((host_ptr, host_bytes, target_ptr, target_bytes, plan))
+        return "fetch-handle"
+
+    def offload_plan_to_cpu(
+        self,
+        runtime,
+        target_ptr,
+        target_bytes,
+        host_ptr,
+        host_bytes,
+        plan,
+    ):
+        self.offloads.append((target_ptr, target_bytes, host_ptr, host_bytes, plan))
+        return "offload-handle"
+
+    def wait(self, runtime, handle):
+        return None
+
+
 def planned_bytes(request: WorkerTransferRequest) -> int:
     return sum(
         int(chunk["bytes"])
@@ -530,13 +581,16 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
         self.assertEqual(profile["reservations"], {})
         self.assertEqual(profile["relay_quotas"][1]["active_chunks"], 0)
 
-    def test_worker_managed_transfer_rejects_direct_fallback_without_relay_lease(self) -> None:
-        daemon = daemon_with_relay_path()
+    def test_worker_managed_transfer_runs_direct_fallback_without_relay_lease(self) -> None:
+        daemon = daemon_with_relay_path(max_inflight_chunks_per_relay=1)
+        direct_backend = FakeDirectBackend()
+        executor = CompleteExecutor()
         transfer_client = make_worker_managed_transfer_client(
             daemon,
             target_gpu=0,
             relay_gpus=[1],
-            worker_client=WorkerTransferClient(daemon, executor=CompleteExecutor()),
+            worker_client=WorkerTransferClient(daemon, executor=executor),
+            backend=direct_backend,
         )
         allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-client-worker-test")
 
@@ -550,14 +604,35 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
                 backend=FakeCudaBackend(),
             )
 
-            with self.assertRaisesRegex(RuntimeError, "exactly one relay lease"):
-                transfer_client.fetch_shared_cpu_to_cuda_ipc(
-                    source,
-                    target,
-                    ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
-                    chunk_bytes=16,
-                    mode="direct",
-                )
+            result = transfer_client.fetch_shared_cpu_to_cuda_ipc(
+                source,
+                target,
+                ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 64},),
+                chunk_bytes=16,
+                mode="pool",
+            )
+
+        self.assertEqual(result.state, "complete")
+        self.assertEqual(result.bytes_completed, 64)
+        self.assertIsNone(result.lease_token)
+        self.assertIsNone(result.authorization_request)
+        self.assertIsNone(result.worker_lifecycle)
+        self.assertIsNone(result.worker_completion)
+        self.assertEqual(result.plan["stats"]["resolved_mode"], "direct")
+        self.assertEqual(executor.requests, [])
+        self.assertEqual(direct_backend.initialized, [(0, ())])
+        self.assertEqual(len(direct_backend.fetches), 1)
+        self.assertEqual(direct_backend.fetches[0][2], 4096)
+        self.assertEqual(direct_backend.fetches[0][3], 64)
+        self.assertEqual(direct_backend.fetches[0][4], result.plan["plan"])
+        self.assertEqual(len(direct_backend.registered), 1)
+        self.assertEqual(len(direct_backend.unregistered), 1)
+        status = daemon.transfer_status(result.transfer_id)
+        self.assertTrue(status.ok)
+        self.assertEqual(status.payload["status"]["state"], "complete")
+        profile = daemon.describe().payload
+        self.assertEqual(profile["reservations"], {})
+        self.assertEqual(profile["relay_quotas"][1]["active_chunks"], 0)
 
     def test_worker_managed_transfer_surfaces_worker_failure(self) -> None:
         class FailedExecutor:
@@ -844,11 +919,11 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
         )
 
 
-def daemon_with_relay_path() -> TurboBusDaemon:
+def daemon_with_relay_path(max_inflight_chunks_per_relay: int = 8) -> TurboBusDaemon:
     daemon = TurboBusDaemon(
         relay_gpus=[1],
         max_sessions_per_relay=1,
-        max_inflight_chunks_per_relay=8,
+        max_inflight_chunks_per_relay=max_inflight_chunks_per_relay,
         topology_provider=StaticTopologyProvider(
             DaemonResourceInventory(
                 gpus=(

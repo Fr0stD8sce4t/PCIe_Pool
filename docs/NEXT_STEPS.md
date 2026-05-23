@@ -207,12 +207,23 @@ Completed current code cut:
   `--destination-buffer-bytes`, initializes larger real source/destination
   buffers, submits the offset range through the worker-managed path, and checks
   that bytes land at the daemon-approved destination offset.
+- Execute daemon-issued direct fallback plans in the worker-managed client.
+  If daemon planning resolves to a direct-only plan without a relay lease, the
+  client now runs that exact direct plan through the CUDA backend, reports
+  daemon-owned completion, and returns a complete transfer instead of treating
+  missing relay lease tokens as an error. The verifier accepts `--mode direct`
+  and also handles pool requests that resolve to direct fallback.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
    - Run `python -m turbobus.verification --direction h2d --target-gpu 0 --relay-gpu 1`.
    - Also run an offset-range verifier, for example
      `python -m turbobus.verification --direction h2d --target-gpu 0 --relay-gpu 1 --bytes 1048576 --chunk-bytes 262144 --src-offset 4096 --dst-offset 8192`.
+   - Verify direct fallback with
+     `python -m turbobus.verification --direction h2d --mode direct --target-gpu 0 --relay-gpu 1 --bytes 1048576 --chunk-bytes 262144`.
+   - Verify quota-triggered fallback with a pool request whose relay quota is
+     too small, for example
+     `python -m turbobus.verification --direction h2d --mode pool --target-gpu 0 --relay-gpu 1 --bytes 1048576 --chunk-bytes 262144 --max-inflight-chunks 1`.
    - If it fails, fix the failing real data-path layer first: shared CPU
      binding, CUDA IPC target opening, relay runtime execution, daemon status,
      or reservation release.
