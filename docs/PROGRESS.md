@@ -288,6 +288,11 @@ transfer request objects:
   A helper response that only reports local worker completion is rejected and
   cleans the relay reservation with `worker_completion_invalid`, keeping
   successful client completion tied to daemon-observed completion.
+- worker-managed client completion handling now also requires complete helper
+  envelopes to carry a successful daemon release response for the relay
+  reservation. A helper response that reports copied bytes and daemon status
+  but omits reservation release evidence is rejected before the client accepts
+  the transfer as complete.
 
 ## What Was Updated
 
@@ -864,6 +869,11 @@ phase:
     completion envelope that omits the daemon status update or response is
     rejected before the client accepts helper completion or releases the relay
     reservation.
+97. worker-managed client completion envelopes now require daemon reservation
+    release evidence for complete helper results. A helper completion envelope
+    that omits the release response, reports a failed release, or reports a
+    release for another reservation is rejected before the client accepts the
+    transfer as complete.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

@@ -734,6 +734,14 @@ def _require_worker_completion_matches_request(
             completion.daemon_status_response,
             int(expected_bytes),
         )
+        if completion.daemon_cleanup_response is None:
+            raise _WorkerCompletionEnvelopeError(
+                "worker completion missing daemon release response"
+            )
+        _require_worker_release_response_matches_request(
+            completion.daemon_cleanup_response,
+            request,
+        )
 
 
 def _require_worker_mapping_matches_request(
@@ -793,6 +801,24 @@ def _require_worker_daemon_response_completed_bytes(
         expected_bytes,
         label="worker daemon status response",
     )
+
+
+def _require_worker_release_response_matches_request(
+    response: Mapping[str, object],
+    request: WorkerTransferAuthorizationRequest,
+) -> None:
+    if not bool(response.get("ok", False)):
+        raise _WorkerCompletionEnvelopeError(
+            "worker daemon release response was not ok"
+        )
+    payload = response.get("payload")
+    if not isinstance(payload, Mapping):
+        return
+    reservation_id = payload.get("reservation_id")
+    if reservation_id is not None and str(reservation_id) != request.lease_id:
+        raise _WorkerCompletionEnvelopeError(
+            "worker daemon release response reservation mismatch"
+        )
 
 
 def _require_worker_completed_bytes(
