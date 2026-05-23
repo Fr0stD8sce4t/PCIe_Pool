@@ -75,15 +75,19 @@ Current status:
 - a `turbobus.worker` helper package now consumes daemon-authorized transfer
   contexts and reports unsupported execution explicitly, without CUDA IPC or
   real data movement.
+- worker helper code can now ask a daemon client for worker-transfer
+  authorization and convert the daemon response into a `WorkerTransferRequest`;
+  execution still reports unsupported until the IPC-backed worker data path is
+  added.
 
 Next code cut:
 
-- connect the worker helper skeleton to daemon-authorized transfer requests
-  through a small client-side helper, still returning unsupported execution
-  until IPC-backed movement exists;
-- keep the daemon as the owner of planning/control decisions;
-- do not add worker execution yet, but shape the protocol so worker/helper
-  execution can consume the same `TransferRequest` and lease records later.
+- add a worker-side status reporting helper that can translate unsupported,
+  failed, and later completed worker results into daemon `TRANSFER_STATUS`
+  updates;
+- keep this as control-plane plumbing only, without adding CUDA IPC or real
+  data movement yet;
+- keep worker execution behind the daemon-authorized request and lease context.
 
 ## Upcoming
 

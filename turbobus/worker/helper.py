@@ -4,7 +4,12 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Mapping
 
-from ..schema import BufferRegistration, WorkerTransferAuthorization
+from ..schema import (
+    BufferRegistration,
+    DaemonResponse,
+    WorkerTransferAuthorization,
+    WorkerTransferAuthorizationRequest,
+)
 
 
 class WorkerTransferState(str, Enum):
@@ -12,6 +17,10 @@ class WorkerTransferState(str, Enum):
 
 
 class UnsupportedWorkerExecution(RuntimeError):
+    pass
+
+
+class WorkerAuthorizationError(RuntimeError):
     pass
 
 
@@ -99,6 +108,50 @@ class WorkerTransferUnsupportedExecutor:
     def execute_or_raise(self, request: WorkerTransferRequest) -> WorkerTransferResult:
         result = self.execute(request)
         raise UnsupportedWorkerExecution(result.error or "worker execution is unsupported")
+
+
+class WorkerTransferAuthorizer:
+    def __init__(self, daemon_client) -> None:
+        self.daemon_client = daemon_client
+
+    def authorize(
+        self,
+        request: WorkerTransferAuthorizationRequest,
+    ) -> WorkerTransferRequest:
+        response: DaemonResponse = self.daemon_client.authorize_worker_transfer(request)
+        if not response.ok:
+            raise WorkerAuthorizationError(
+                response.error or "worker transfer authorization failed"
+            )
+        try:
+            return WorkerTransferRequest.from_authorization_payload(response.payload)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise WorkerAuthorizationError(
+                f"invalid worker authorization response: {exc}"
+            ) from exc
+
+
+class WorkerTransferClient:
+    def __init__(
+        self,
+        daemon_client,
+        executor: WorkerTransferUnsupportedExecutor | None = None,
+    ) -> None:
+        self.authorizer = WorkerTransferAuthorizer(daemon_client)
+        self.executor = executor or WorkerTransferUnsupportedExecutor()
+
+    def authorize(
+        self,
+        request: WorkerTransferAuthorizationRequest,
+    ) -> WorkerTransferRequest:
+        return self.authorizer.authorize(request)
+
+    def submit(
+        self,
+        request: WorkerTransferAuthorizationRequest,
+    ) -> WorkerTransferResult:
+        worker_request = self.authorize(request)
+        return self.executor.execute(worker_request)
 
 
 def _buffer_from_payload(payload: object) -> BufferRegistration:

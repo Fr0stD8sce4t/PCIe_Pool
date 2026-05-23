@@ -78,6 +78,10 @@ transfer request objects:
 - `turbobus.worker` now has a helper skeleton that parses daemon authorization
   payloads into worker transfer requests and reports unsupported execution
   without pretending data movement happened.
+- `turbobus.worker` now also has a client-side authorization helper that calls
+  `authorize_worker_transfer` on the daemon client, builds a
+  `WorkerTransferRequest` from the daemon response, and keeps execution on the
+  explicit unsupported path until worker IPC movement exists.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -114,15 +118,16 @@ phase:
    snapshots.
 10. lease validation now ties relay permission to registered transfer buffers,
     job ownership, and session ownership.
-11. worker/helper authorization can be requested without adding worker
-    execution, so the next data-plane layer has a daemon-approved input shape.
+11. worker/helper authorization can be requested through the daemon client
+    without adding worker execution, so the next data-plane layer has a
+    daemon-approved input shape.
 12. worker/helper code now has a package boundary and a no-op unsupported
     executor for daemon-authorized transfer contexts.
 
-The next immediate goal is to connect the worker helper skeleton to
-daemon-authorized transfer requests through a small client-side helper. This
-continues the privileged-daemon work, but still does not add CUDA IPC or real
-data movement yet.
+The next immediate goal is to add worker-side status reporting plumbing that
+can send unsupported, failed, and later completed worker outcomes back through
+the daemon `TRANSFER_STATUS` request. This continues the privileged-daemon
+work, but still does not add CUDA IPC or real data movement yet.
 
 ## Verification
 
@@ -147,14 +152,15 @@ $env:PYTHONPATH='.'; python test/python/test_vllm_connector.py
 $env:PYTHONPATH='.'; python test/python/test_vllm_integration.py
 $env:PYTHONPATH='.'; python test/python/test_vllm_kv_connector.py
 $env:PYTHONPATH='.'; python test/python/test_vllm_kv_connector_sweep.py
+$env:PYTHONPATH='.'; python test/python/test_worker_helper.py
 ```
 
 ## Remaining Work
 
 - define daemon protocol records for job identity, buffer registration,
   lease tokens, and worker-facing cleanup;
-- connect worker/helper request creation to daemon-authorized transfers while
-  keeping execution unsupported;
+- add worker-side status reporting plumbing while keeping execution
+  unsupported;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper
