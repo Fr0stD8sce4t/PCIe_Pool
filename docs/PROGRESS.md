@@ -272,6 +272,12 @@ transfer request objects:
   envelopes against the daemon-authorized transfer id and lease id before
   accepting a result. Mismatched or incomplete successful completion envelopes
   clean the relay reservation instead of reaching the normal completion path.
+- worker-managed client completion handling now also validates the nested
+  worker result, daemon status update, and daemon status response inside a
+  helper completion envelope. A helper response whose outer envelope is
+  complete but whose inner completion records name a different transfer or
+  lease is rejected and cleans the relay reservation with
+  `worker_completion_invalid`.
 
 ## What Was Updated
 
@@ -833,6 +839,11 @@ phase:
     authorization. A helper response that reports the wrong transfer id, wrong
     lease id, or a non-ok complete result is rejected and the relay reservation
     is cleaned with `worker_completion_invalid`.
+94. worker-managed client completion envelopes now also bind nested helper
+    records to the daemon authorization. Mismatched worker result, daemon
+    status update, or daemon status response transfer/lease identity is
+    rejected before the client accepts helper completion or releases the relay
+    reservation.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

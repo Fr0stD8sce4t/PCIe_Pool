@@ -663,6 +663,20 @@ def _require_worker_completion_matches_request(
         raise _WorkerCompletionEnvelopeError("worker completion transfer mismatch")
     if completion.lease_id is not None and completion.lease_id != request.lease_id:
         raise _WorkerCompletionEnvelopeError("worker completion lease mismatch")
+    _require_worker_mapping_matches_request(
+        completion.worker_result,
+        request,
+        label="worker result",
+    )
+    _require_worker_mapping_matches_request(
+        completion.daemon_status_update,
+        request,
+        label="worker daemon status update",
+    )
+    _require_worker_daemon_response_matches_request(
+        completion.daemon_status_response,
+        request,
+    )
     final_state = "" if completion.final_state is None else str(completion.final_state)
     if final_state == "complete":
         if not completion.ok:
@@ -671,6 +685,60 @@ def _require_worker_completion_matches_request(
             raise _WorkerCompletionEnvelopeError("worker completion missing transfer id")
         if completion.lease_id is None:
             raise _WorkerCompletionEnvelopeError("worker completion missing lease id")
+        if completion.worker_result is None:
+            raise _WorkerCompletionEnvelopeError("worker completion missing worker result")
+        result_state = str(completion.worker_result.get("state", "")).lower()
+        if result_state != "complete":
+            raise _WorkerCompletionEnvelopeError("worker result did not complete")
+        if completion.daemon_status_update is not None:
+            update_state = str(
+                completion.daemon_status_update.get("state", "")
+            ).lower()
+            if update_state != "complete":
+                raise _WorkerCompletionEnvelopeError(
+                    "worker daemon status update did not complete"
+                )
+        if completion.daemon_status_response is not None and not bool(
+            completion.daemon_status_response.get("ok", False)
+        ):
+            raise _WorkerCompletionEnvelopeError(
+                "worker daemon status response was not ok"
+            )
+
+
+def _require_worker_mapping_matches_request(
+    payload: Mapping[str, object] | None,
+    request: WorkerTransferAuthorizationRequest,
+    *,
+    label: str,
+) -> None:
+    if payload is None:
+        return
+    transfer_id = payload.get("transfer_id")
+    if transfer_id is not None and str(transfer_id) != request.transfer_id:
+        raise _WorkerCompletionEnvelopeError(f"{label} transfer mismatch")
+    lease_id = payload.get("lease_id")
+    if lease_id is not None and str(lease_id) != request.lease_id:
+        raise _WorkerCompletionEnvelopeError(f"{label} lease mismatch")
+
+
+def _require_worker_daemon_response_matches_request(
+    response: Mapping[str, object] | None,
+    request: WorkerTransferAuthorizationRequest,
+) -> None:
+    if response is None:
+        return
+    payload = response.get("payload")
+    if not isinstance(payload, Mapping):
+        return
+    status = payload.get("status")
+    if not isinstance(status, Mapping):
+        return
+    _require_worker_mapping_matches_request(
+        status,
+        request,
+        label="worker daemon status response",
+    )
 
 
 def _require_ok(response: DaemonResponse, message: str) -> None:
