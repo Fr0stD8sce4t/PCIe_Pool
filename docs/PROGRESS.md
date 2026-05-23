@@ -59,6 +59,9 @@ transfer request objects:
   buffer, lease, transfer status, and cleanup records.
 - `TurboBusDaemon` now tracks registered jobs and buffers and can clean up job,
   buffer, session, and reservation state through the new cleanup request shape.
+- `TurboBusDaemon` now creates transfer status records for daemon-issued plans,
+  exposes `TRANSFER_STATUS` queries and updates, and marks relay-backed
+  transfers complete when their reservations are released.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -88,6 +91,8 @@ phase:
    registration, lease tokens, transfer status, and cleanup.
 7. daemon state now tracks jobs and buffers and can clean them up through the
    new protocol path.
+8. daemon-issued plans now have transfer ids and status records that can be
+   queried, updated, and completed when relay reservations are released.
 
 The next immediate goal is the daemon protocol baseline: job registration,
 buffer registration, transfer status, lease-token records, and cleanup
@@ -122,8 +127,8 @@ $env:PYTHONPATH='.'; python test/python/test_vllm_kv_connector_sweep.py
 ## Remaining Work
 
 - define daemon protocol records for job identity, buffer registration,
-  transfer status, lease tokens, and cleanup;
-- add daemon state and validation tests for those records;
+  lease tokens, and worker-facing cleanup;
+- add daemon state and validation tests for lease token handling;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

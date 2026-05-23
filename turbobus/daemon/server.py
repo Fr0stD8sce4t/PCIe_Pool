@@ -19,6 +19,8 @@ from .protocol import (
     RequestType,
     Session,
     TransferReservation,
+    TransferStatus,
+    TransferStatusState,
 )
 from .scheduler import DaemonScheduler, SchedulerDecision
 
@@ -44,6 +46,8 @@ class TurboBusDaemon:
         self._buffers: dict[str, BufferRegistration] = {}
         self._sessions: dict[str, Session] = {}
         self._reservations: dict[str, TransferReservation] = {}
+        self._reservation_transfers: dict[str, str] = {}
+        self._transfer_statuses: dict[str, TransferStatus] = {}
         self._cleanup_events: list[CleanupRequest] = []
         self._profile_cache: dict[str, dict] = {}
         self._scheduler = DaemonScheduler()
@@ -175,7 +179,10 @@ class TurboBusDaemon:
                     return DaemonResponse(ok=False, error="unknown session")
                 removed["sessions"] = 1
             elif cleanup.target_kind == "reservation":
-                reservation = self._release_reservation_locked(cleanup.target_id)
+                reservation = self._release_reservation_locked(
+                    cleanup.target_id,
+                    final_state=TransferStatusState.CANCELED,
+                )
                 if reservation is None:
                     return DaemonResponse(ok=False, error="unknown reservation")
                 removed["reservations"] = 1
@@ -250,6 +257,35 @@ class TurboBusDaemon:
                 return DaemonResponse(ok=False, error="unknown reservation")
             return DaemonResponse(ok=True, payload={"reservation_id": reservation_id})
 
+    def transfer_status(
+        self,
+        transfer_id: str,
+        state: str | None = None,
+        bytes_completed: int | None = None,
+        error: str | None = None,
+    ) -> DaemonResponse:
+        with self._lock:
+            status = self._transfer_statuses.get(str(transfer_id))
+            if status is None:
+                return DaemonResponse(ok=False, error="unknown transfer")
+            if state is None and bytes_completed is None and error is None:
+                return DaemonResponse(ok=True, payload={"status": asdict(status)})
+            updated = TransferStatus(
+                transfer_id=status.transfer_id,
+                job_id=status.job_id,
+                state=status.state if state is None else TransferStatusState(state),
+                bytes_total=status.bytes_total,
+                bytes_completed=(
+                    status.bytes_completed
+                    if bytes_completed is None
+                    else int(bytes_completed)
+                ),
+                session_id=status.session_id,
+                error=status.error if error is None else error,
+            )
+            self._transfer_statuses[updated.transfer_id] = updated
+            return DaemonResponse(ok=True, payload={"status": asdict(updated)})
+
     def plan_transfer(
         self,
         session_id: str,
@@ -281,9 +317,25 @@ class TurboBusDaemon:
                 now=now,
                 job_id=job_id,
             )
-            reservations = self._commit_scheduler_leases_locked(session, decision)
+            transfer_id = str(uuid.uuid4())
+            reservations = self._commit_scheduler_leases_locked(
+                session,
+                decision,
+                transfer_id=transfer_id,
+            )
+            status = TransferStatus(
+                transfer_id=transfer_id,
+                job_id=str(job_id or session.session_id),
+                state=TransferStatusState.SUBMITTED,
+                bytes_total=int(total_bytes),
+                bytes_completed=0,
+                session_id=session.session_id,
+            )
+            self._transfer_statuses[transfer_id] = status
             self._touch_session_locked(session.session_id, now)
             payload = decision.as_dict()
+            payload["transfer_id"] = transfer_id
+            payload["transfer_status"] = asdict(status)
             payload["reservations"] = [asdict(reservation) for reservation in reservations]
             return DaemonResponse(ok=True, payload=payload)
 
@@ -334,22 +386,30 @@ class TurboBusDaemon:
         with self._lock:
             return self._reap_stale_sessions_locked(time.time() if now is None else float(now))
 
-    def _release_reservation_locked(self, reservation_id: str) -> TransferReservation | None:
+    def _release_reservation_locked(
+        self,
+        reservation_id: str,
+        final_state: TransferStatusState = TransferStatusState.COMPLETE,
+    ) -> TransferReservation | None:
         reservation = self._reservations.pop(reservation_id, None)
         if reservation is None:
             return None
+        transfer_id = self._reservation_transfers.pop(reservation_id, None)
         session = self._sessions.get(reservation.session_id)
         if session is not None:
             session.active_chunks = max(0, session.active_chunks - reservation.chunks)
         quota = self._relay_quotas.get(reservation.relay_gpu)
         if quota is not None:
             quota.active_chunks = max(0, quota.active_chunks - reservation.chunks)
+        if transfer_id is not None:
+            self._mark_transfer_terminal_if_unblocked_locked(transfer_id, final_state)
         return reservation
 
     def _commit_scheduler_leases_locked(
         self,
         session: Session,
         decision: SchedulerDecision,
+        transfer_id: str | None = None,
     ) -> list[TransferReservation]:
         reservations: list[TransferReservation] = []
         for lease in decision.leases:
@@ -366,8 +426,35 @@ class TurboBusDaemon:
             quota = self._relay_quotas.get(reservation.relay_gpu)
             if quota is not None:
                 quota.active_chunks += reservation.chunks
+            if transfer_id is not None:
+                self._reservation_transfers[reservation.reservation_id] = transfer_id
             reservations.append(reservation)
         return reservations
+
+    def _mark_transfer_terminal_if_unblocked_locked(
+        self,
+        transfer_id: str,
+        final_state: TransferStatusState,
+    ) -> None:
+        if any(value == transfer_id for value in self._reservation_transfers.values()):
+            return
+        status = self._transfer_statuses.get(transfer_id)
+        if status is None or status.state in {
+            TransferStatusState.COMPLETE,
+            TransferStatusState.FAILED,
+            TransferStatusState.CANCELED,
+        }:
+            return
+        completed = status.bytes_total if final_state is TransferStatusState.COMPLETE else status.bytes_completed
+        self._transfer_statuses[transfer_id] = TransferStatus(
+            transfer_id=status.transfer_id,
+            job_id=status.job_id,
+            state=final_state,
+            bytes_total=status.bytes_total,
+            bytes_completed=completed,
+            session_id=status.session_id,
+            error=status.error,
+        )
 
     def _close_session_locked(self, session_id: str) -> Session | None:
         session = self._sessions.pop(session_id, None)
@@ -377,7 +464,10 @@ class TurboBusDaemon:
         session.closed_at = time.time()
         for reservation_id, reservation in list(self._reservations.items()):
             if reservation.session_id == session_id:
-                self._release_reservation_locked(reservation_id)
+                self._release_reservation_locked(
+                    reservation_id,
+                    final_state=TransferStatusState.CANCELED,
+                )
         for gpu in session.relay_gpus:
             quota = self._relay_quotas.get(gpu)
             if quota is not None:
@@ -427,6 +517,9 @@ class TurboBusDaemon:
                     "sessions": {key: asdict(value) for key, value in self._sessions.items()},
                     "reservations": {
                         key: asdict(value) for key, value in self._reservations.items()
+                    },
+                    "transfer_statuses": {
+                        key: asdict(value) for key, value in self._transfer_statuses.items()
                     },
                     "cleanup_events": [asdict(item) for item in self._cleanup_events],
                     "relay_quotas": {
@@ -513,6 +606,14 @@ class TurboBusDaemon:
             if reservation_id is None:
                 return DaemonResponse(ok=False, error="reservation_id is required")
             return self.release_transfer(str(reservation_id))
+        if request.request_type == RequestType.TRANSFER_STATUS:
+            payload = request.payload
+            return self.transfer_status(
+                transfer_id=str(payload["transfer_id"]),
+                state=payload.get("state"),
+                bytes_completed=payload.get("bytes_completed"),
+                error=payload.get("error"),
+            )
         if request.request_type == RequestType.CLEANUP:
             payload = request.payload
             return self.cleanup(

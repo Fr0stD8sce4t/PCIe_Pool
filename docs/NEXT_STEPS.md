@@ -57,11 +57,14 @@ Current status:
   are re-exported through `turbobus.daemon.protocol`.
 - `TurboBusDaemon` now tracks registered jobs and buffers and exposes cleanup
   for job, buffer, session, and reservation records.
+- daemon-issued plans now include a transfer id and status record; status can
+  be queried or updated through `TRANSFER_STATUS`, and relay-backed transfers
+  complete when reservations are released.
 
 Next code cut:
 
-- add transfer status tracking for daemon-issued transfer plans and reservation
-  cleanup;
+- add lease-token handling that worker/helper code can later validate without
+  trusting client-owned relay access;
 - keep the daemon as the owner of planning/control decisions;
 - do not add worker execution yet, but shape the protocol so worker/helper
   execution can consume the same `TransferRequest` and lease records later.
