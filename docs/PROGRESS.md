@@ -38,6 +38,9 @@ transfer request objects:
 - worker endpoint observability requests now record a separate event stream
   with request and response byte counts while keeping the returned snapshot
   payload stable.
+- `turbobus.worker.transport` now defines a transport protocol and loopback
+  adapter for the in-process worker endpoint without changing request or
+  observability semantics.
 - daemon control plane now exposes backend-neutral relay discovery snapshots
   with per-relay eligibility, quota, active sessions, active reservations, and
   redacted lease bookkeeping across jobs.
@@ -200,6 +203,8 @@ transfer request objects:
 - `WorkerServiceEndpoint.handle_observability_message()` now records a
   separate observability event stream and `clear_events()` clears both worker
   and observability histories.
+- `turbobus.worker.transport` now provides a loopback transport wrapper and a
+  transport protocol for the worker service boundary.
 - worker endpoint observability snapshots now have JSON-safe encode/decode
   helpers for future transport observability clients.
 - `TurboBusDaemon.discover_relays()` now reports cross-job relay occupancy,
@@ -355,10 +360,9 @@ phase:
     transports can reuse the in-process helper contract without changing
     authorization, lifecycle, or observability handling.
 
-The next immediate goal is to make the worker service boundary transport-neutral
-so the in-process helper can later move behind a socket or IPC transport
-without changing request parsing, authorization, lifecycle, or observability
-handling.
+The next immediate goal is to add the first concrete worker transport shell on
+top of the in-process endpoint without changing request parsing,
+authorization, lifecycle, or observability handling.
 
 ## Verification
 

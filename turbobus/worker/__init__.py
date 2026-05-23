@@ -36,6 +36,7 @@ from .codec import (
     handle_worker_service_message,
 )
 from .endpoint import WorkerEndpointEvent, WorkerServiceEndpoint
+from .transport import WorkerServiceLoopbackTransport, WorkerServiceTransport
 from .staging_pool import (
     WorkerStagingPool,
     WorkerStagingPoolError,
@@ -51,6 +52,7 @@ __all__ = [
     "WorkerServiceResponseEnvelope",
     "WorkerEndpointEvent",
     "WorkerServiceEndpoint",
+    "WorkerServiceLoopbackTransport",
     "WorkerStatusReportError",
     "WorkerDataPlaneCompletion",
     "WorkerDataPlaneCompletionEnvelope",
@@ -68,6 +70,7 @@ __all__ = [
     "WorkerStagingPool",
     "WorkerStagingPoolError",
     "WorkerStagingSlot",
+    "WorkerServiceTransport",
     "WorkerMessageCodecError",
     "decode_worker_observability_request_envelope",
     "decode_worker_observability_snapshot",

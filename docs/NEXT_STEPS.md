@@ -2,10 +2,10 @@
 
 ## Current
 
-Start the next phase after the current refactor layer: make the worker service
-boundary transport-neutral so future socket or IPC helpers can reuse the
-existing in-process worker service without changing authorization, lifecycle,
-or observability handling.
+Start the next phase after the worker boundary split: add the first concrete
+worker transport shell on top of the in-process endpoint, likely a Unix socket
+or IPC adapter, without changing authorization, lifecycle, or observability
+semantics.
 
 Completed in the refactor layer:
 
@@ -210,15 +210,17 @@ Current status:
   reads.
 - explicit expired-lease reaping now reaches the daemon through
   `TurboBusDaemonClient.reap_expired_leases()` and the socket control path.
+- `turbobus.worker.transport` now defines a transport protocol and loopback
+  adapter that forwards worker and observability messages without changing
+  endpoint behavior.
 
 Next code cut:
 
-- make the worker service boundary transport-neutral so the in-process helper
-  can later move behind a socket or IPC transport without changing
-  authorization, lifecycle, or observability handling;
-- keep the worker helper in process for now, with no sockets, IPC, CUDA IPC, or
-  real data movement yet;
-- add focused tests that the new boundary forwards worker request and
+- add the first concrete worker transport shell on top of the in-process
+  endpoint;
+- keep request parsing, authorization, lifecycle, and observability wiring on
+  the same worker service contract;
+- add focused tests that the new transport forwards worker request and
   observability messages without changing endpoint behavior.
 
 ## Upcoming
