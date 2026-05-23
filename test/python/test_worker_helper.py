@@ -34,6 +34,7 @@ from turbobus.worker import (
     WorkerTransferStatusReporter,
     WorkerTransferUnsupportedExecutor,
     parse_worker_authorization_request_payload,
+    run_worker_service_control_plane_smoke,
 )
 
 
@@ -92,6 +93,75 @@ def authorization_request_payload() -> dict:
         "ranges": [{"src_offset": 0, "dst_offset": 0, "bytes": 16}],
         "relay_gpu": 1,
     }
+
+
+def daemon_with_relay_transfer_path() -> tuple[TurboBusDaemon, str]:
+    daemon = TurboBusDaemon(
+        relay_gpus=[1],
+        max_sessions_per_relay=1,
+        max_inflight_chunks_per_relay=8,
+        topology_provider=StaticTopologyProvider(
+            DaemonResourceInventory(
+                gpus=(
+                    GpuInventoryRecord(device_id=0, role="target"),
+                    GpuInventoryRecord(device_id=1, role="relay"),
+                ),
+                pcie_paths=(PciePathRecord(device_id=1),),
+                fabric_links=(
+                    FabricLinkRecord(
+                        src_device_id=1,
+                        dst_device_id=0,
+                        fabric="nvlink",
+                        enabled=True,
+                    ),
+                ),
+                source="test",
+            )
+        ),
+    )
+    registered = daemon.register_session(
+        target_gpu=0,
+        requested_relays=[1],
+        max_inflight_chunks=8,
+    )
+    session_id = registered.payload["session"]["session_id"]
+    daemon.register_job(job_id="job-1", session_id=session_id)
+    daemon.register_buffer(
+        buffer_id="cpu-buffer",
+        job_id="job-1",
+        kind="cpu_pinned",
+        size_bytes=64,
+        pinned=True,
+    )
+    daemon.register_buffer(
+        buffer_id="gpu-buffer",
+        job_id="job-1",
+        kind="gpu",
+        size_bytes=64,
+        device_index=0,
+    )
+    daemon.put_profile(
+        target_gpu=0,
+        relay_gpus=[1],
+        profile={
+            "target_device": 0,
+            "direct_h2d_bw_gbps": 7.5,
+            "direct_d2h_bw_gbps": 6.5,
+            "relays": [
+                {
+                    "relay_device": 1,
+                    "target_device": 0,
+                    "h2d_bw_gbps": 7.5,
+                    "d2h_bw_gbps": 6.5,
+                    "p2p_bw_gbps": 40.0,
+                    "effective_bw_gbps": 7.5,
+                    "effective_d2h_bw_gbps": 6.5,
+                    "p2p_enabled": True,
+                }
+            ],
+        },
+    )
+    return daemon, session_id
 
 
 class FakeDaemonClient:
@@ -400,71 +470,7 @@ class WorkerHelperTest(unittest.TestCase):
         )
 
     def test_worker_client_cleanup_releases_daemon_reservation(self) -> None:
-        daemon = TurboBusDaemon(
-            relay_gpus=[1],
-            max_sessions_per_relay=1,
-            max_inflight_chunks_per_relay=8,
-            topology_provider=StaticTopologyProvider(
-                DaemonResourceInventory(
-                    gpus=(
-                        GpuInventoryRecord(device_id=0, role="target"),
-                        GpuInventoryRecord(device_id=1, role="relay"),
-                    ),
-                    pcie_paths=(PciePathRecord(device_id=1),),
-                    fabric_links=(
-                        FabricLinkRecord(
-                            src_device_id=1,
-                            dst_device_id=0,
-                            fabric="nvlink",
-                            enabled=True,
-                        ),
-                    ),
-                    source="test",
-                )
-            ),
-        )
-        registered = daemon.register_session(
-            target_gpu=0,
-            requested_relays=[1],
-            max_inflight_chunks=8,
-        )
-        session_id = registered.payload["session"]["session_id"]
-        daemon.register_job(job_id="job-1", session_id=session_id)
-        daemon.register_buffer(
-            buffer_id="cpu-buffer",
-            job_id="job-1",
-            kind="cpu_pinned",
-            size_bytes=64,
-            pinned=True,
-        )
-        daemon.register_buffer(
-            buffer_id="gpu-buffer",
-            job_id="job-1",
-            kind="gpu",
-            size_bytes=64,
-            device_index=0,
-        )
-        daemon.put_profile(
-            target_gpu=0,
-            relay_gpus=[1],
-            profile={
-                "target_device": 0,
-                "direct_h2d_bw_gbps": 7.5,
-                "direct_d2h_bw_gbps": 6.5,
-                "relays": [
-                    {
-                        "relay_device": 1,
-                        "target_device": 0,
-                        "h2d_bw_gbps": 7.5,
-                        "d2h_bw_gbps": 6.5,
-                        "p2p_bw_gbps": 40.0,
-                        "effective_bw_gbps": 7.5,
-                        "effective_d2h_bw_gbps": 6.5,
-                        "p2p_enabled": True,
-                    }
-                ],
-            },
-        )
+        daemon, session_id = daemon_with_relay_transfer_path()
         planned = daemon.plan_transfer(
             session_id=session_id,
             total_bytes=64,
@@ -508,6 +514,68 @@ class WorkerHelperTest(unittest.TestCase):
         status = daemon.transfer_status(transfer_id)
         self.assertTrue(status.ok)
         self.assertEqual(status.payload["status"]["state"], "failed")
+
+    def test_worker_service_smoke_reclaims_daemon_reservation(self) -> None:
+        daemon, session_id = daemon_with_relay_transfer_path()
+
+        smoke = run_worker_service_control_plane_smoke(
+            daemon,
+            session_id=session_id,
+            job_id="job-1",
+            src_buffer_id="cpu-buffer",
+            dst_buffer_id="gpu-buffer",
+            total_bytes=64,
+            chunk_bytes=16,
+            direction="h2d",
+            mode="pool",
+            relay_gpu=1,
+        )
+
+        service_response = smoke["service_response"]
+        self.assertTrue(service_response["ok"])
+        self.assertEqual(service_response["final_state"], "unsupported")
+        self.assertEqual(
+            service_response["lifecycle"]["cleanup_target"]["target_id"],
+            smoke["lease_id"],
+        )
+        describe = smoke["daemon_describe"]["payload"]
+        self.assertEqual(describe["reservations"], {})
+        self.assertIn(
+            {
+                "target_kind": "reservation",
+                "target_id": smoke["lease_id"],
+                "reason": "worker_unsupported",
+                "force": True,
+            },
+            describe["cleanup_events"],
+        )
+
+    def test_worker_service_smoke_reports_unsupported_execution_failed(self) -> None:
+        daemon, session_id = daemon_with_relay_transfer_path()
+
+        smoke = run_worker_service_control_plane_smoke(
+            daemon,
+            session_id=session_id,
+            job_id="job-1",
+            src_buffer_id="cpu-buffer",
+            dst_buffer_id="gpu-buffer",
+            total_bytes=64,
+            chunk_bytes=16,
+            direction="h2d",
+            mode="pool",
+            relay_gpu=1,
+            ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
+        )
+
+        lifecycle = smoke["service_response"]["lifecycle"]
+        self.assertEqual(lifecycle["result"]["state"], "unsupported")
+        self.assertEqual(lifecycle["status_update"]["state"], "failed")
+        self.assertIn("not implemented", lifecycle["status_update"]["error"])
+        self.assertEqual(smoke["daemon_status"]["payload"]["status"]["state"], "failed")
+        self.assertEqual(
+            smoke["daemon_status"]["payload"]["status"]["bytes_completed"],
+            0,
+        )
 
     def test_lifecycle_record_serializes_control_plane_state(self) -> None:
         request = authorization_request()

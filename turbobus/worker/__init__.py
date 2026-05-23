@@ -16,6 +16,7 @@ from .helper import (
     WorkerTransferStatusReporter,
     WorkerTransferUnsupportedExecutor,
     parse_worker_authorization_request_payload,
+    run_worker_service_control_plane_smoke,
 )
 
 __all__ = [
@@ -36,4 +37,5 @@ __all__ = [
     "WorkerTransferStatusReporter",
     "WorkerTransferUnsupportedExecutor",
     "parse_worker_authorization_request_payload",
+    "run_worker_service_control_plane_smoke",
 ]

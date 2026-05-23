@@ -125,6 +125,11 @@ transfer request objects:
 - `WorkerServiceRequestEnvelope` and `WorkerServiceResponseEnvelope` now wrap
   successful lifecycle payloads, malformed payload errors, status failures, and
   cleanup failures in one stable in-process response shape.
+- `run_worker_service_control_plane_smoke` now wires daemon-owned planning,
+  worker service envelope handling, daemon status reporting, and daemon
+  reservation cleanup together in process, proving the service boundary can
+  fail unsupported execution and reclaim the relay lease without sockets, IPC,
+  or real data movement.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -196,12 +201,16 @@ phase:
     worker authorization requests before they enter the service path.
 24. worker service request/response envelopes now provide a stable shape for
     future helper process boundaries without adding sockets or IPC.
+25. worker service control-plane smoke coverage now proves a daemon-owned
+    planned relay transfer can pass through the service envelope path, report
+    unsupported execution as daemon `failed`, and reclaim the daemon
+    reservation.
 
-The next immediate goal is to add a worker service control-plane smoke helper
-that wires a daemon-owned planned transfer, worker service envelope handling,
-daemon status reporting, and daemon reservation cleanup together without a
-socket. This should stay in-process and should not add CUDA IPC, sockets, real
-data movement, or hardware discovery.
+The next immediate goal is to define the first worker data-plane request shape
+for daemon-approved relay execution. This should stay at schema and
+worker-layer plumbing level, consume the existing daemon worker authorization
+result, and should not add CUDA IPC, sockets, real data movement, or hardware
+discovery yet.
 
 ## Verification
 
@@ -256,7 +265,9 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
 - add worker service request/response envelope records; done through
   `WorkerServiceRequestEnvelope` and `WorkerServiceResponseEnvelope`;
 - add worker service control-plane smoke coverage for daemon-owned planned
-  transfers;
+  transfers; done through `run_worker_service_control_plane_smoke`;
+- define the first worker data-plane request shape for daemon-approved relay
+  execution;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

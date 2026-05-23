@@ -123,16 +123,19 @@ Current status:
   future helper process boundaries one stable in-process shape for parsed
   lifecycle payloads, malformed payload errors, status failures, and cleanup
   failures.
+- an in-process worker service smoke helper now wires daemon-owned planning,
+  worker service envelope handling, daemon status reporting, and daemon
+  reservation cleanup together without sockets, IPC, or real data movement.
 
 Next code cut:
 
-- add a worker service control-plane smoke helper that wires a daemon-owned
-  planned transfer, worker service envelope handling, daemon status reporting,
-  and daemon reservation cleanup together without a socket;
-- add focused tests that the smoke helper proves the service envelope path can
-  reclaim a daemon reservation and report failed unsupported execution;
-- keep this as in-process control-plane smoke coverage only, without adding
-  CUDA IPC, sockets, real data movement, or hardware discovery.
+- define the first worker data-plane request shape for daemon-approved relay
+  execution, including source/destination buffer handles, staging-buffer needs,
+  relay device, direction, chunk ranges, and completion/error reporting fields;
+- keep this as schema and worker-layer plumbing only, with focused validation
+  tests and no CUDA IPC, sockets, real data movement, or hardware discovery yet;
+- make the shape consume the existing daemon worker authorization result instead
+  of letting worker code invent transfer authority locally.
 
 ## Upcoming
 
