@@ -75,25 +75,23 @@ class SharedPinnedCpuBufferTest(unittest.TestCase):
             finally:
                 opened.close()
 
-    def test_open_requires_shared_memory_size_metadata(self) -> None:
+    def test_registration_requires_shared_memory_size_metadata(self) -> None:
         allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-test")
 
         with allocator.allocate("cpu-buffer", "job-1", 64) as buffer:
-            registration = BufferRegistration(
-                buffer_id="cpu-buffer",
-                job_id="job-1",
-                kind="cpu_pinned",
-                size_bytes=64,
-                pinned=True,
-                handle_type="shared_pinned_cpu",
-                metadata={
-                    "shared_memory_name": buffer.shared_memory_name,
-                    "offset_bytes": 0,
-                },
-            )
-
             with self.assertRaisesRegex(ValueError, "shared_memory_size_bytes"):
-                SharedPinnedCpuBuffer.open_from_registration(registration)
+                BufferRegistration(
+                    buffer_id="cpu-buffer",
+                    job_id="job-1",
+                    kind="cpu_pinned",
+                    size_bytes=64,
+                    pinned=True,
+                    handle_type="shared_pinned_cpu",
+                    metadata={
+                        "shared_memory_name": buffer.shared_memory_name,
+                        "offset_bytes": 0,
+                    },
+                )
 
             self.assertFalse(buffer.closed)
 

@@ -226,6 +226,11 @@ Completed current code cut:
   rejects daemon-authorized shared CPU handles that omit
   `shared_memory_size_bytes` before the worker can host-register the mapping
   or pass it into CUDA execution.
+- Reject shared pinned CPU registrations that omit logical backing size
+  metadata before daemon authorization. `BufferRegistration` and
+  `WorkerBufferHandle` now require `shared_memory_size_bytes` for
+  `shared_pinned_cpu` handles, so malformed shared CPU handles are stopped
+  before worker resource binding.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -264,6 +269,8 @@ Completed current code cut:
      after worker/helper execution.
    - Require explicit shared pinned CPU backing-size metadata before worker
      resource binding opens a shared CPU handle.
+   - Reject missing shared pinned CPU backing-size metadata at buffer
+     registration and worker-handle construction time.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor

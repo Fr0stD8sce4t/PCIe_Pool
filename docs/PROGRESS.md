@@ -190,6 +190,9 @@ transfer request objects:
 - worker-opened shared pinned CPU handles now require explicit
   `shared_memory_size_bytes` metadata before the worker can reopen the shared
   memory mapping, host-register it with CUDA, or pass it into the executor;
+- shared pinned CPU handle metadata is now rejected at registration/worker
+  handle construction time if it omits `shared_memory_size_bytes`, preventing a
+  malformed shared CPU handle from reaching worker resource binding;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -692,6 +695,11 @@ phase:
     shared pinned CPU registrations that omit `shared_memory_size_bytes`, so
     worker resource binding cannot host-register an underspecified CPU mapping
     before CUDA execution.
+76. shared pinned CPU registrations now require explicit logical backing size
+    metadata before daemon authorization. `BufferRegistration` and
+    `WorkerBufferHandle` reject `shared_pinned_cpu` handles without
+    `shared_memory_size_bytes`, moving that failure ahead of worker resource
+    binding and CUDA host registration.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

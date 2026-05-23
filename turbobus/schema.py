@@ -664,19 +664,22 @@ def _normalize_buffer_handle_metadata(
             raise ValueError("shared_pinned_cpu handles require pinned buffers")
         if not isinstance(metadata, dict):
             raise TypeError("metadata must be a dict")
-        required = ("shared_memory_name", "offset_bytes")
+        required = (
+            "shared_memory_name",
+            "offset_bytes",
+            "shared_memory_size_bytes",
+        )
         for field_name in required:
             if field_name not in metadata:
                 raise ValueError(f"shared_pinned_cpu metadata requires {field_name}")
         if int(metadata["offset_bytes"]) < 0:
             raise ValueError("shared_pinned_cpu offset_bytes must be non-negative")
         span = int(metadata["offset_bytes"]) + int(size_bytes)
-        if "shared_memory_size_bytes" in metadata:
-            shared_size = int(metadata["shared_memory_size_bytes"])
-            if shared_size < span:
-                raise ValueError(
-                    "shared_pinned_cpu shared_memory_size_bytes is smaller than buffer span"
-                )
+        shared_size = int(metadata["shared_memory_size_bytes"])
+        if shared_size < span:
+            raise ValueError(
+                "shared_pinned_cpu shared_memory_size_bytes is smaller than buffer span"
+            )
     elif handle_type == "cuda_ipc_device":
         if kind != "gpu":
             raise ValueError("cuda_ipc_device handles require gpu buffers")
