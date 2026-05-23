@@ -184,6 +184,10 @@ Completed current code cut:
   non-complete worker completion envelope without raising an exception. The
   client now treats that as a failed worker-managed transfer and best-effort
   cleans the daemon reservation with `worker_completion_not_complete`.
+- Clean daemon relay reservations when the client cannot query the daemon-owned
+  final transfer status after worker/helper execution. The client now
+  best-effort cleans the relay reservation with `daemon_status_query_failed`
+  before surfacing the status error.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -211,6 +215,8 @@ Completed current code cut:
      helper execution.
    - Clean daemon relay reservations when helper completion envelopes report a
      non-complete final state.
+   - Clean daemon relay reservations when the final daemon status query fails
+     after worker/helper execution.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor

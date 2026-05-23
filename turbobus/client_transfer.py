@@ -206,11 +206,20 @@ class WorkerManagedTransferClient:
                 strict=False,
             )
             raise
-        status = self.daemon_client.transfer_status(
-            str(planned.payload["transfer_id"])
-        )
-        _require_ok(status, "daemon transfer status query failed")
-        final_status = dict(status.payload["status"])
+        try:
+            status = self.daemon_client.transfer_status(
+                str(planned.payload["transfer_id"])
+            )
+            _require_ok(status, "daemon transfer status query failed")
+            final_status = dict(status.payload["status"])
+        except Exception:
+            _cleanup_planned_relay_lease(
+                self.daemon_client,
+                lease_token,
+                reason="daemon_status_query_failed",
+                strict=False,
+            )
+            raise
         if worker_execution.final_state != "complete":
             _cleanup_planned_relay_lease(
                 self.daemon_client,

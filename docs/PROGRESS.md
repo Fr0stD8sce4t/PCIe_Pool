@@ -147,6 +147,10 @@ transfer request objects:
   that return without raising but report a non-complete final state. The client
   best-effort cleans the daemon reservation with
   `worker_completion_not_complete` before surfacing the worker failure;
+- worker-managed client cleanup now also covers final daemon status query
+  failures after helper execution. If the client cannot read daemon-owned
+  transfer status, it best-effort cleans the relay reservation with
+  `daemon_status_query_failed` before surfacing the status error;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -605,6 +609,11 @@ phase:
     with `worker_completion_not_complete` before raising the worker failure,
     preventing an active relay lease from being left behind by a failed helper
     response.
+67. worker-managed client cleanup now covers final daemon status query
+    failures after helper execution. The client cleans the daemon reservation
+    with `daemon_status_query_failed` before raising the status query error,
+    keeping the relay lease from being left active when the final daemon-owned
+    completion read fails.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
