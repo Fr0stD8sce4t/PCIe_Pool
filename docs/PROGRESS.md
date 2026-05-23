@@ -268,6 +268,10 @@ transfer request objects:
   reservations when native wait fails or daemon completion status reporting
   fails. Those paths no longer call normal release after the daemon has a
   failed or incomplete planned transfer.
+- worker-managed client completion handling now validates helper completion
+  envelopes against the daemon-authorized transfer id and lease id before
+  accepting a result. Mismatched or incomplete successful completion envelopes
+  clean the relay reservation instead of reaching the normal completion path.
 
 ## What Was Updated
 
@@ -825,6 +829,10 @@ phase:
     Native wait failures and daemon completion status-report failures call
     cleanup instead of normal release, preserving the stricter
     daemon-planned completion rule without leaking relay quota.
+93. worker-managed client completion envelopes are now bound to the daemon
+    authorization. A helper response that reports the wrong transfer id, wrong
+    lease id, or a non-ok complete result is rejected and the relay reservation
+    is cleaned with `worker_completion_invalid`.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

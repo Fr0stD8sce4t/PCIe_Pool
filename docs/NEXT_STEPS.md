@@ -291,6 +291,10 @@ Completed current code cut:
   daemon completion status reporting fails. These failure paths now use daemon
   cleanup instead of normal release, so stricter planned-release semantics do
   not leave relay reservations active.
+- Validate worker/helper completion envelopes against the daemon-authorized
+  transfer and lease before accepting a worker-managed result. Mismatched
+  completion envelopes now clean the relay reservation instead of entering the
+  normal completion path.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -340,6 +344,8 @@ Completed current code cut:
      daemon-owned transfer status is complete.
    - Clean daemon-planned runtime baseline reservations when native wait or
      daemon completion status reporting fails.
+   - Reject worker/helper completion envelopes whose transfer id or lease id
+     does not match the daemon authorization.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor

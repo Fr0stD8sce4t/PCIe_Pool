@@ -42,6 +42,10 @@ class WorkerManagedTransferResult:
         return str(getattr(state, "value", state))
 
 
+class _WorkerCompletionEnvelopeError(RuntimeError):
+    pass
+
+
 @dataclass
 class WorkerManagedTransferClient:
     daemon_client: object
@@ -214,6 +218,14 @@ class WorkerManagedTransferClient:
                 self.worker_client,
                 authorization_request,
             )
+        except _WorkerCompletionEnvelopeError:
+            _cleanup_planned_relay_lease(
+                self.daemon_client,
+                lease_token,
+                reason="worker_completion_invalid",
+                strict=False,
+            )
+            raise
         except Exception:
             _cleanup_planned_relay_lease(
                 self.daemon_client,
@@ -602,11 +614,13 @@ def _submit_worker_execution(
     lifecycle_submitter = getattr(worker_client, "submit_report_cleanup_lifecycle", None)
     if callable(lifecycle_submitter):
         lifecycle = lifecycle_submitter(request, cleanup_target_kind="reservation")
+        completion = lifecycle.completion_envelope()
+        _require_worker_completion_matches_request(completion, request)
         return _WorkerExecutionResult(
             final_state=lifecycle.final_state,
             error=lifecycle.error,
             lifecycle=lifecycle,
-            completion=lifecycle.completion_envelope(),
+            completion=completion,
         )
     envelope_submitter = getattr(worker_client, "submit_envelope", None)
     if callable(envelope_submitter):
@@ -627,6 +641,7 @@ def _submit_worker_execution(
                 cleanup_target_kind="reservation",
             )
         )
+        _require_worker_completion_matches_request(completion, request)
         return _WorkerExecutionResult(
             final_state=completion.final_state,
             error=completion.error,
@@ -634,6 +649,28 @@ def _submit_worker_execution(
             completion=completion,
         )
     raise TypeError("worker_client must submit worker-managed transfers")
+
+
+def _require_worker_completion_matches_request(
+    completion: WorkerDataPlaneCompletionEnvelope,
+    request: WorkerTransferAuthorizationRequest,
+) -> None:
+    if not isinstance(completion, WorkerDataPlaneCompletionEnvelope):
+        raise _WorkerCompletionEnvelopeError(
+            "worker completion must be a WorkerDataPlaneCompletionEnvelope"
+        )
+    if completion.transfer_id is not None and completion.transfer_id != request.transfer_id:
+        raise _WorkerCompletionEnvelopeError("worker completion transfer mismatch")
+    if completion.lease_id is not None and completion.lease_id != request.lease_id:
+        raise _WorkerCompletionEnvelopeError("worker completion lease mismatch")
+    final_state = "" if completion.final_state is None else str(completion.final_state)
+    if final_state == "complete":
+        if not completion.ok:
+            raise _WorkerCompletionEnvelopeError("worker completion was not ok")
+        if completion.transfer_id is None:
+            raise _WorkerCompletionEnvelopeError("worker completion missing transfer id")
+        if completion.lease_id is None:
+            raise _WorkerCompletionEnvelopeError("worker completion missing lease id")
 
 
 def _require_ok(response: DaemonResponse, message: str) -> None:
