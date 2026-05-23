@@ -283,6 +283,11 @@ transfer request objects:
   whose outer envelope is complete but whose worker result or daemon status
   record reports a partial byte count is rejected and cleans the relay
   reservation with `worker_completion_invalid`.
+- worker-managed client completion handling now requires complete helper
+  envelopes to carry both the daemon status update and daemon status response.
+  A helper response that only reports local worker completion is rejected and
+  cleans the relay reservation with `worker_completion_invalid`, keeping
+  successful client completion tied to daemon-observed completion.
 
 ## What Was Updated
 
@@ -852,6 +857,11 @@ phase:
 95. worker-managed client completion envelopes now also bind nested helper
     byte counts to the daemon-requested transfer size. A complete helper
     envelope with a partial worker result or daemon status byte count is
+    rejected before the client accepts helper completion or releases the relay
+    reservation.
+96. worker-managed client completion envelopes now require daemon status
+    reporting evidence for complete helper results. A local-only worker
+    completion envelope that omits the daemon status update or response is
     rejected before the client accepts helper completion or releases the relay
     reservation.
 

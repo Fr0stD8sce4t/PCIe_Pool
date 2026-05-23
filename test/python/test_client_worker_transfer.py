@@ -325,7 +325,7 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
         self.assertEqual(profile["reservations"], {})
         self.assertEqual(profile["relay_quotas"][1]["active_chunks"], 0)
 
-    def test_worker_managed_transfer_requires_daemon_complete_status(self) -> None:
+    def test_worker_managed_transfer_requires_helper_status_report(self) -> None:
         class CompletionOnlyWorkerClient:
             def submit_envelope(
                 self,
@@ -365,7 +365,7 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 RuntimeError,
-                "daemon transfer status did not complete",
+                "worker completion missing daemon status update",
             ):
                 transfer_client.fetch_shared_cpu_to_cuda_ipc(
                     source,
@@ -378,6 +378,8 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
         profile = daemon.describe().payload
         self.assertEqual(profile["reservations"], {})
         self.assertEqual(profile["relay_quotas"][1]["active_chunks"], 0)
+        cleanup_events = profile["cleanup_events"]
+        self.assertEqual(cleanup_events[-1]["reason"], "worker_completion_invalid")
 
     def test_worker_authorization_uses_daemon_plan_chunks(self) -> None:
         daemon = daemon_with_relay_path()
@@ -1131,20 +1133,37 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
         self.assertEqual(cleanup_events[-1]["reason"], "worker_completion_invalid")
 
     def test_worker_managed_transfer_cleans_daemon_reservation_on_status_query_failure(self) -> None:
-        class CompletionOnlyWorkerClient:
+        class StatusReportingWorkerClient:
             def submit_envelope(
                 self,
                 envelope: WorkerServiceRequestEnvelope,
             ) -> WorkerDataPlaneCompletionEnvelope:
+                transfer_id = str(envelope.payload["transfer_id"])
                 return WorkerDataPlaneCompletionEnvelope(
                     ok=True,
-                    transfer_id=str(envelope.payload["transfer_id"]),
+                    transfer_id=transfer_id,
                     lease_id=str(envelope.payload["lease_id"]),
                     final_state="complete",
                     worker_result={
-                        "transfer_id": str(envelope.payload["transfer_id"]),
+                        "transfer_id": transfer_id,
                         "state": "complete",
                         "bytes_completed": 16,
+                    },
+                    daemon_status_update={
+                        "transfer_id": transfer_id,
+                        "state": "complete",
+                        "bytes_completed": 16,
+                    },
+                    daemon_status_response={
+                        "ok": True,
+                        "payload": {
+                            "status": {
+                                "transfer_id": transfer_id,
+                                "state": "complete",
+                                "bytes_total": 16,
+                                "bytes_completed": 16,
+                            }
+                        },
                     },
                 )
 
@@ -1163,7 +1182,7 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
             StatusQueryFailingDaemonClient(daemon),
             target_gpu=0,
             relay_gpus=[1],
-            worker_client=CompletionOnlyWorkerClient(),
+            worker_client=StatusReportingWorkerClient(),
         )
         allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-client-worker-test")
 

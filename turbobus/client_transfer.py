@@ -708,20 +708,25 @@ def _require_worker_completion_matches_request(
             int(expected_bytes),
             label="worker result",
         )
-        if completion.daemon_status_update is not None:
-            update_state = _state_text(completion.daemon_status_update.get("state", ""))
-            if update_state != "complete":
-                raise _WorkerCompletionEnvelopeError(
-                    "worker daemon status update did not complete"
-                )
-            _require_worker_completed_bytes(
-                completion.daemon_status_update,
-                int(expected_bytes),
-                label="worker daemon status update",
+        if completion.daemon_status_update is None:
+            raise _WorkerCompletionEnvelopeError(
+                "worker completion missing daemon status update"
             )
-        if completion.daemon_status_response is not None and not bool(
-            completion.daemon_status_response.get("ok", False)
-        ):
+        if completion.daemon_status_response is None:
+            raise _WorkerCompletionEnvelopeError(
+                "worker completion missing daemon status response"
+            )
+        update_state = _state_text(completion.daemon_status_update.get("state", ""))
+        if update_state != "complete":
+            raise _WorkerCompletionEnvelopeError(
+                "worker daemon status update did not complete"
+            )
+        _require_worker_completed_bytes(
+            completion.daemon_status_update,
+            int(expected_bytes),
+            label="worker daemon status update",
+        )
+        if not bool(completion.daemon_status_response.get("ok", False)):
             raise _WorkerCompletionEnvelopeError(
                 "worker daemon status response was not ok"
             )
