@@ -237,6 +237,9 @@ transfer request objects:
 - daemon job registration now rejects unknown session ids. Worker-managed
   buffer registrations must be tied to a live daemon session before their
   shared CPU or CUDA IPC handles can be authorized.
+- daemon transfer planning now requires buffer-owning jobs to belong to the
+  transfer session. Detached legacy jobs and cross-session jobs cannot lend
+  registered buffers to worker-managed transfer authorization.
 
 ## What Was Updated
 
@@ -763,6 +766,10 @@ phase:
 84. daemon job registration now requires named sessions to exist. This keeps
     worker-managed buffer handles anchored to a live daemon session before
     transfer planning or worker authorization can use them.
+85. daemon transfer planning now rejects registered buffers owned by jobs that
+    are not bound to the transfer session. Detached legacy jobs remain
+    registerable for compatibility, but their buffers cannot enter
+    worker-managed plan/lease authorization.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

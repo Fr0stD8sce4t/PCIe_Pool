@@ -1303,6 +1303,33 @@ class DaemonStateTest(unittest.TestCase):
         self.assertFalse(wrong_session.ok)
         self.assertIn("job session", wrong_session.error)
 
+        detached_job = daemon.register_job(job_id="detached-job")
+        self.assertTrue(detached_job.ok)
+        detached_buffer = daemon.register_buffer(
+            buffer_id="detached-buffer",
+            job_id="detached-job",
+            kind="cpu_pinned",
+            size_bytes=64,
+            pinned=True,
+        )
+        self.assertTrue(detached_buffer.ok)
+        detached_owner = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.PLAN_TRANSFER,
+                session_id=session_id,
+                payload={
+                    "total_bytes": 64,
+                    "chunk_bytes": 16,
+                    "mode": "pool",
+                    "direction": "h2d",
+                    "job_id": "detached-job",
+                    "buffer_ids": ["detached-buffer"],
+                },
+            )
+        )
+        self.assertFalse(detached_owner.ok)
+        self.assertIn("job session", detached_owner.error)
+
     def test_worker_transfer_authorization_packages_validated_transfer_context(self) -> None:
         daemon = TurboBusDaemon(
             relay_gpus=[1],

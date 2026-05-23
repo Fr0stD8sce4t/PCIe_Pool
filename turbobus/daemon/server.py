@@ -770,7 +770,7 @@ class TurboBusDaemon:
         job = self._jobs.get(str(owner_job_id))
         if job is None:
             raise ValueError("unknown job")
-        if job.session_id is not None and job.session_id != session_id:
+        if job.session_id != session_id:
             raise ValueError("job session does not match transfer session")
         for buffer_id in normalized:
             buffer = self._buffers.get(buffer_id)

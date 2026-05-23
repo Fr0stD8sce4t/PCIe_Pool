@@ -259,6 +259,9 @@ Completed current code cut:
 - Reject job registrations that name an unknown daemon session. Buffer handles
   used by worker-managed transfers must now be anchored to an existing session
   before they can be registered and authorized.
+- Reject transfer planning with buffer handles owned by jobs outside the
+  transfer session, including detached legacy jobs, so worker-managed handles
+  are session-anchored before lease issuance.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
