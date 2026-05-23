@@ -110,17 +110,21 @@ Current status:
   request, daemon-approved worker context, status update, status response,
   cleanup target, cleanup response, final outcome, and error for future helper
   processes.
+- `WorkerTransferService` now provides an in-process worker helper service
+  boundary that accepts a `WorkerTransferAuthorizationRequest`, runs the
+  existing worker control path, and returns a serialized lifecycle record for
+  unsupported execution, authorization denial, status failure, and cleanup
+  failure.
 
 Next code cut:
 
-- add a worker helper service skeleton that accepts a
-  `WorkerTransferAuthorizationRequest`, runs the existing worker client control
-  path, and returns a serialized lifecycle record;
-- add focused tests that the service skeleton returns lifecycle records for
-  successful authorization plus unsupported execution, authorization denial,
-  status report failure, and cleanup failure;
-- keep this as an in-process worker service boundary only, without adding CUDA
-  IPC, sockets, real data movement, or hardware discovery.
+- add worker service payload parsing helpers so a future worker process can
+  accept plain daemon JSON dictionaries and convert them into
+  `WorkerTransferAuthorizationRequest` objects before calling the service;
+- add focused tests for valid payload parsing, missing required fields, invalid
+  direction/ranges, and preserving lifecycle output from parsed payloads;
+- keep this as in-process payload validation only, without adding CUDA IPC,
+  sockets, real data movement, or hardware discovery.
 
 ## Upcoming
 

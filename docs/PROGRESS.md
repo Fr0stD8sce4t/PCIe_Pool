@@ -115,6 +115,10 @@ transfer request objects:
   request, daemon-approved transfer context, status update and response,
   cleanup target and response, final outcome, and error for future helper
   process handoff.
+- `WorkerTransferService` now exposes an in-process worker helper service
+  boundary that accepts a worker authorization request and returns serialized
+  lifecycle records across unsupported execution, authorization denial, status
+  failure, and cleanup failure paths.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -180,12 +184,14 @@ phase:
     transfers and ask the daemon to reclaim the matching reservation or session.
 21. worker request lifecycle records now make status and cleanup decisions
     explicit and serializable for future helper processes.
+22. an in-process worker helper service skeleton now returns serialized
+    lifecycle records without adding sockets, IPC, or real data movement.
 
-The next immediate goal is to add an in-process worker helper service skeleton
-that accepts a `WorkerTransferAuthorizationRequest`, runs the existing worker
-client control path, and returns a serialized lifecycle record. This should stay
-inside the worker control-plane boundary and should not add CUDA IPC, sockets,
-real data movement, or hardware discovery.
+The next immediate goal is to add worker service payload parsing helpers so a
+future worker process can accept plain daemon JSON dictionaries and convert them
+into `WorkerTransferAuthorizationRequest` objects before calling the service.
+This should stay inside in-process payload validation and should not add CUDA
+IPC, sockets, real data movement, or hardware discovery.
 
 ## Verification
 
@@ -234,7 +240,9 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
 - add worker request lifecycle records for future helper processes; done
   through `WorkerTransferLifecycleRecord`;
 - add an in-process worker helper service skeleton that returns lifecycle
-  records;
+  records; done through `WorkerTransferService`;
+- add worker service payload parsing helpers for future worker process
+  boundaries;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

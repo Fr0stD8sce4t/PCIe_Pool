@@ -467,6 +467,37 @@ class WorkerTransferClient:
         )
 
 
+class WorkerTransferService:
+    def __init__(
+        self,
+        daemon_client,
+        transfer_client: WorkerTransferClient | None = None,
+    ) -> None:
+        self.transfer_client = transfer_client or WorkerTransferClient(daemon_client)
+
+    def handle_lifecycle(
+        self,
+        request: WorkerTransferAuthorizationRequest,
+        cleanup_target_kind: str = "reservation",
+    ) -> WorkerTransferLifecycleRecord:
+        if not isinstance(request, WorkerTransferAuthorizationRequest):
+            raise TypeError("request must be a WorkerTransferAuthorizationRequest")
+        return self.transfer_client.submit_report_cleanup_lifecycle(
+            request,
+            cleanup_target_kind=cleanup_target_kind,
+        )
+
+    def handle(
+        self,
+        request: WorkerTransferAuthorizationRequest,
+        cleanup_target_kind: str = "reservation",
+    ) -> dict[str, object]:
+        return self.handle_lifecycle(
+            request,
+            cleanup_target_kind=cleanup_target_kind,
+        ).as_dict()
+
+
 def _buffer_from_payload(payload: object) -> BufferRegistration:
     if not isinstance(payload, Mapping):
         raise ValueError("buffer payload must be a mapping")
