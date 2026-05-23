@@ -112,7 +112,7 @@ class SharedPinnedCpuBuffer:
                 "shared_pinned_cpu metadata requires shared_memory_size_bytes"
             )
         shared_size = int(metadata["shared_memory_size_bytes"])
-        shared = shared_memory.SharedMemory(name=name, create=False)
+        shared = _open_borrowed_shared_memory(name)
         actual_shared_size = len(shared.buf)
         try:
             _validate_shared_memory_backing(

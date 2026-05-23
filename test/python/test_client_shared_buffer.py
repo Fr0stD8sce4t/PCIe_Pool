@@ -66,14 +66,20 @@ class SharedPinnedCpuBufferTest(unittest.TestCase):
 
         with allocator.allocate("cpu-buffer", "job-1", 64) as buffer:
             buffer.write(b"TurboBus", offset=4)
-            opened = SharedPinnedCpuBuffer.open_from_registration(
-                buffer.buffer_registration()
-            )
+            with patch.object(
+                client_module,
+                "_open_borrowed_shared_memory",
+                wraps=client_module._open_borrowed_shared_memory,
+            ) as open_borrowed:
+                opened = SharedPinnedCpuBuffer.open_from_registration(
+                    buffer.buffer_registration()
+                )
             try:
                 self.assertFalse(opened.owner)
                 self.assertEqual(opened.read(8, offset=4), b"TurboBus")
                 opened.write(b"relay", offset=16)
                 self.assertEqual(buffer.read(5, offset=16), b"relay")
+                open_borrowed.assert_called_once_with(buffer.shared_memory_name)
             finally:
                 opened.close()
 

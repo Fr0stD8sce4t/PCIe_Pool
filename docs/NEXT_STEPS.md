@@ -243,6 +243,10 @@ Completed current code cut:
   opens now avoid POSIX resource-tracker ownership for shared-memory backing
   they did not create, while same-process owner opens stay tracked until the
   owner unlinks them.
+- Wire that borrowed-open behavior into the actual registration reopen path.
+  `SharedPinnedCpuBuffer.open_from_registration`, which is what worker resource
+  binding calls before CUDA host registration, now opens through the borrowed
+  shared-memory helper.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.

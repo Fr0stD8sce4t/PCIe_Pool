@@ -194,6 +194,9 @@ transfer request objects:
   helper processes. On POSIX Python runtimes without `SharedMemory(track=False)`,
   non-owner opens are removed from that process's resource tracker so helper
   shutdown does not unlink client-owned shared memory;
+- the borrowed shared-memory open is now wired into
+  `SharedPinnedCpuBuffer.open_from_registration`, the same reopen path used by
+  worker resource binding before CUDA host registration;
 - shared pinned CPU handle metadata is now rejected at registration/worker
   handle construction time if it omits `shared_memory_size_bytes`, preventing a
   malformed shared CPU handle from reaching worker resource binding;
@@ -726,6 +729,11 @@ phase:
     unregisters only non-owner borrowed opens on older Python runtimes so worker
     exit cannot unlink the client's shared CPU buffer before verification
     cleanup.
+80. the worker-visible registration reopen path now actually uses the borrowed
+    shared-memory helper. The shared-buffer test now checks that
+    `SharedPinnedCpuBuffer.open_from_registration` reaches the borrowed-open
+    path, so the helper process cannot accidentally fall back to owner-tracked
+    shared memory before CUDA host registration.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
