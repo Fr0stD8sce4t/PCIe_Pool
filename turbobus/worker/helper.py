@@ -265,6 +265,106 @@ class WorkerTransferLifecycleRecord:
             "error": self.error,
         }
 
+    def completion_envelope(self) -> "WorkerDataPlaneCompletionEnvelope":
+        return WorkerDataPlaneCompletionEnvelope.from_lifecycle(self)
+
+
+@dataclass(frozen=True)
+class WorkerDataPlaneCompletionEnvelope:
+    ok: bool
+    transfer_id: str | None = None
+    lease_id: str | None = None
+    final_state: str | None = None
+    staging_slot: Mapping[str, object] | None = None
+    worker_result: Mapping[str, object] | None = None
+    daemon_status_update: Mapping[str, object] | None = None
+    daemon_status_response: Mapping[str, object] | None = None
+    daemon_cleanup_response: Mapping[str, object] | None = None
+    staging_release: Mapping[str, object] | None = None
+    error: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "ok", bool(self.ok))
+        for field_name in (
+            "staging_slot",
+            "worker_result",
+            "daemon_status_update",
+            "daemon_status_response",
+            "daemon_cleanup_response",
+            "staging_release",
+        ):
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            if not isinstance(value, Mapping):
+                raise TypeError(f"{field_name} must be a mapping")
+            object.__setattr__(self, field_name, dict(value))
+        if self.transfer_id is not None:
+            object.__setattr__(self, "transfer_id", str(self.transfer_id))
+        if self.lease_id is not None:
+            object.__setattr__(self, "lease_id", str(self.lease_id))
+        if self.final_state is not None:
+            object.__setattr__(self, "final_state", str(self.final_state))
+        if self.error is not None:
+            object.__setattr__(self, "error", str(self.error))
+
+    @classmethod
+    def from_lifecycle(
+        cls,
+        lifecycle: WorkerTransferLifecycleRecord,
+    ) -> "WorkerDataPlaneCompletionEnvelope":
+        if not isinstance(lifecycle, WorkerTransferLifecycleRecord):
+            raise TypeError("lifecycle must be a WorkerTransferLifecycleRecord")
+        payload = lifecycle.as_dict()
+        return cls(
+            ok=True,
+            transfer_id=_lifecycle_transfer_id(lifecycle),
+            lease_id=_lifecycle_lease_id(lifecycle),
+            final_state=lifecycle.final_state,
+            staging_slot=payload["staging_slot"],
+            worker_result=payload["result"],
+            daemon_status_update=payload["status_update"],
+            daemon_status_response=payload["status_response"],
+            daemon_cleanup_response=payload["cleanup_response"],
+            staging_release=payload["staging_release"],
+            error=lifecycle.error,
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "ok": self.ok,
+            "transfer_id": self.transfer_id,
+            "lease_id": self.lease_id,
+            "final_state": self.final_state,
+            "staging_slot": (
+                dict(self.staging_slot) if self.staging_slot is not None else None
+            ),
+            "worker_result": (
+                dict(self.worker_result) if self.worker_result is not None else None
+            ),
+            "daemon_status_update": (
+                dict(self.daemon_status_update)
+                if self.daemon_status_update is not None
+                else None
+            ),
+            "daemon_status_response": (
+                dict(self.daemon_status_response)
+                if self.daemon_status_response is not None
+                else None
+            ),
+            "daemon_cleanup_response": (
+                dict(self.daemon_cleanup_response)
+                if self.daemon_cleanup_response is not None
+                else None
+            ),
+            "staging_release": (
+                dict(self.staging_release)
+                if self.staging_release is not None
+                else None
+            ),
+            "error": self.error,
+        }
+
 
 @dataclass(frozen=True)
 class WorkerServiceRequestEnvelope:
@@ -873,6 +973,20 @@ def _cleanup_target_id(target_kind: str, lease_id: str, session_id: str) -> str:
     raise ValueError("worker cleanup target must be reservation or session")
 
 
+def _lifecycle_transfer_id(lifecycle: WorkerTransferLifecycleRecord) -> str:
+    if lifecycle.result is not None:
+        return lifecycle.result.transfer_id
+    if lifecycle.worker_request is not None:
+        return lifecycle.worker_request.transfer_id
+    return lifecycle.authorization_request.transfer_id
+
+
+def _lifecycle_lease_id(lifecycle: WorkerTransferLifecycleRecord) -> str:
+    if lifecycle.worker_request is not None:
+        return lifecycle.worker_request.authorization.lease_id
+    return lifecycle.authorization_request.lease_id
+
+
 def _select_smoke_lease_token(
     lease_tokens: object,
     relay_gpu: int | None,
@@ -923,6 +1037,7 @@ __all__ = [
     "WorkerAuthorizationError",
     "WorkerCleanupError",
     "WorkerDataPlaneCompletion",
+    "WorkerDataPlaneCompletionEnvelope",
     "WorkerDataPlaneRequest",
     "WorkerServiceRequestEnvelope",
     "WorkerServiceResponseEnvelope",

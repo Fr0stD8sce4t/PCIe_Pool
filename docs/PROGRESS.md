@@ -149,6 +149,10 @@ transfer request objects:
   `WorkerTransferRequest` and its allocated `WorkerStagingSlot`. The default
   executor still returns explicit unsupported execution without CUDA IPC,
   sockets, real data movement, or hardware discovery.
+- `WorkerDataPlaneCompletionEnvelope` now gives the future helper-process
+  boundary a completion-specific serialized shape for allocated staging slots,
+  worker results, daemon status updates and responses, daemon cleanup responses,
+  and staging release records.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -237,11 +241,14 @@ phase:
 29. worker data-plane executor calls now receive the allocated staging slot
     alongside the worker request, while preserving the unsupported default
     executor path.
+30. worker data-plane completion envelopes now serialize lifecycle completion
+    output without losing staging release information on unsupported,
+    status-failed, or cleanup-failed paths.
 
-The next immediate goal is to add a worker data-plane completion envelope for
-future helper process boundaries. It should serialize the staging slot, worker
-result, daemon status update, daemon cleanup response, and staging release from
-existing lifecycle records.
+The next immediate goal is to thread the worker data-plane completion envelope
+through the in-process worker service response path. That keeps future helper
+process callers from needing to parse full lifecycle records just to observe
+completion, cleanup, and staging-release output.
 
 ## Verification
 
@@ -308,7 +315,9 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
   request and allocated staging slot; done in `WorkerTransferUnsupportedExecutor`
   and the worker lifecycle call path;
 - add a worker data-plane completion envelope for future helper process
-  boundaries;
+  boundaries; done through `WorkerDataPlaneCompletionEnvelope`;
+- thread the worker data-plane completion envelope through worker service
+  responses;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

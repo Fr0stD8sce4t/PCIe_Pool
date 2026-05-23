@@ -21,6 +21,7 @@ from turbobus.worker import (
     UnsupportedWorkerExecution,
     WorkerAuthorizationError,
     WorkerCleanupError,
+    WorkerDataPlaneCompletionEnvelope,
     WorkerServiceRequestEnvelope,
     WorkerServiceResponseEnvelope,
     WorkerStatusReportError,
@@ -751,6 +752,31 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(daemon_client.status_updates[0]["state"], "failed")
         self.assertEqual(daemon_client.cleanup_requests[0]["target_id"], "lease-1")
 
+    def test_worker_data_plane_completion_envelope_serializes_success_lifecycle(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        staging_pool = WorkerStagingPool()
+        client = WorkerTransferClient(daemon_client, staging_pool=staging_pool)
+
+        lifecycle = client.submit_report_cleanup_lifecycle(authorization_request())
+        envelope = WorkerDataPlaneCompletionEnvelope.from_lifecycle(lifecycle)
+        payload = envelope.as_dict()
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["transfer_id"], "transfer-1")
+        self.assertEqual(payload["lease_id"], "lease-1")
+        self.assertEqual(payload["final_state"], "unsupported")
+        self.assertEqual(payload["staging_slot"]["slot_id"], "staging-1")
+        self.assertTrue(payload["staging_slot"]["active"])
+        self.assertEqual(payload["worker_result"]["state"], "unsupported")
+        self.assertEqual(payload["daemon_status_update"]["state"], "failed")
+        self.assertTrue(payload["daemon_status_response"]["ok"])
+        self.assertTrue(payload["daemon_cleanup_response"]["ok"])
+        self.assertEqual(payload["staging_release"]["slot_id"], "staging-1")
+        self.assertFalse(payload["staging_release"]["active"])
+        self.assertEqual(staging_pool.describe(), {"active_slots": {}})
+
     def test_worker_client_lifecycle_passes_staging_slot_to_executor(self) -> None:
         class RecordingExecutor:
             def __init__(self) -> None:
@@ -818,6 +844,27 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertFalse(lifecycle.staging_release.active)
         self.assertEqual(staging_pool.describe(), {"active_slots": {}})
 
+    def test_worker_data_plane_completion_envelope_preserves_status_failure_release(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload()),
+            status_response=DaemonResponse(ok=False, error="unknown transfer"),
+        )
+        staging_pool = WorkerStagingPool()
+        client = WorkerTransferClient(daemon_client, staging_pool=staging_pool)
+
+        lifecycle = client.submit_report_cleanup_lifecycle(authorization_request())
+        payload = lifecycle.completion_envelope().as_dict()
+
+        self.assertEqual(payload["final_state"], "status_failed")
+        self.assertIn("unknown transfer", payload["error"])
+        self.assertEqual(payload["worker_result"]["state"], "unsupported")
+        self.assertEqual(payload["daemon_status_update"]["state"], "failed")
+        self.assertIsNone(payload["daemon_status_response"])
+        self.assertIsNone(payload["daemon_cleanup_response"])
+        self.assertEqual(payload["staging_release"]["slot_id"], "staging-1")
+        self.assertFalse(payload["staging_release"]["active"])
+        self.assertEqual(staging_pool.describe(), {"active_slots": {}})
+
     def test_worker_client_lifecycle_cleanup_failure_releases_staging(self) -> None:
         daemon_client = FakeDaemonClient(
             DaemonResponse(ok=True, payload=authorization_payload()),
@@ -831,6 +878,27 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(lifecycle.final_state, "cleanup_failed")
         self.assertEqual(lifecycle.staging_slot.transfer_id, "transfer-1")
         self.assertFalse(lifecycle.staging_release.active)
+        self.assertEqual(staging_pool.describe(), {"active_slots": {}})
+
+    def test_worker_data_plane_completion_envelope_preserves_cleanup_failure_release(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload()),
+            cleanup_response=DaemonResponse(ok=False, error="unknown reservation"),
+        )
+        staging_pool = WorkerStagingPool()
+        client = WorkerTransferClient(daemon_client, staging_pool=staging_pool)
+
+        lifecycle = client.submit_report_cleanup_lifecycle(authorization_request())
+        payload = WorkerDataPlaneCompletionEnvelope.from_lifecycle(lifecycle).as_dict()
+
+        self.assertEqual(payload["final_state"], "cleanup_failed")
+        self.assertIn("unknown reservation", payload["error"])
+        self.assertEqual(payload["worker_result"]["state"], "unsupported")
+        self.assertEqual(payload["daemon_status_update"]["state"], "failed")
+        self.assertTrue(payload["daemon_status_response"]["ok"])
+        self.assertIsNone(payload["daemon_cleanup_response"])
+        self.assertEqual(payload["staging_release"]["slot_id"], "staging-1")
+        self.assertFalse(payload["staging_release"]["active"])
         self.assertEqual(staging_pool.describe(), {"active_slots": {}})
 
     def test_worker_client_lifecycle_records_status_and_cleanup_without_custom_pool(self) -> None:

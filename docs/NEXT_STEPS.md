@@ -141,16 +141,20 @@ Current status:
 - worker data-plane executors now receive both the daemon-authorized
   `WorkerTransferRequest` and its allocated `WorkerStagingSlot`, while the
   default executor remains on the explicit unsupported path.
+- worker data-plane completion envelopes now serialize the allocated staging
+  slot, worker result, daemon status update, daemon status response, daemon
+  cleanup response, and staging release from lifecycle records without adding
+  CUDA IPC, sockets, real data movement, or hardware discovery.
 
 Next code cut:
 
-- add a worker data-plane completion envelope that serializes the allocated
-  staging slot, worker result, daemon status update, daemon cleanup response,
-  and staging release in one stable worker-process-facing shape;
+- thread the worker data-plane completion envelope through the in-process
+  worker service response path, so future helper process boundaries can consume
+  completion-specific output without parsing the full lifecycle record;
 - keep it in process only, with no CUDA IPC, sockets, real data movement, or
   hardware discovery yet;
-- add focused tests that success, status-failed, and cleanup-failed lifecycle
-  records produce completion envelopes without dropping staging release data.
+- add focused tests that normal, status-failed, and cleanup-failed service
+  responses carry the completion envelope without dropping lifecycle output.
 
 ## Upcoming
 
