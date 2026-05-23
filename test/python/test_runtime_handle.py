@@ -1600,7 +1600,7 @@ class RangeValidationTest(unittest.TestCase):
         try:
             plan = runtime_module._runtime_engine._native_transfer_plan(
                 {
-                    "total_bytes": 32,
+                    "total_bytes": 16,
                     "chunk_bytes": 16,
                     "assignments": [
                         {
@@ -1624,7 +1624,7 @@ class RangeValidationTest(unittest.TestCase):
         finally:
             runtime_module._runtime_engine._turbobus = old_extension
 
-        self.assertEqual(plan.total_bytes, 32)
+        self.assertEqual(plan.total_bytes, 16)
         self.assertEqual(plan.chunk_bytes, 16)
         self.assertEqual(len(plan.assignments), 1)
         assignment = plan.assignments[0]
@@ -1634,6 +1634,91 @@ class RangeValidationTest(unittest.TestCase):
         self.assertEqual(assignment.chunks[0].src_offset, 0)
         self.assertEqual(assignment.chunks[0].dst_offset, 8)
         self.assertEqual(assignment.chunks[0].bytes, 16)
+
+    def test_native_transfer_plan_rejects_total_byte_mismatch(self) -> None:
+        class NativePlan:
+            def __init__(self) -> None:
+                self.total_bytes = 0
+                self.chunk_bytes = 0
+                self.assignments = []
+
+        class NativeAssignment:
+            def __init__(self) -> None:
+                self.path = None
+                self.chunks = []
+
+        class NativePath:
+            def __init__(self) -> None:
+                self.kind_value = None
+                self.direction_value = None
+                self.target_device = -1
+                self.relay_device = -1
+                self.h2d_bw_gbps = 0.0
+                self.d2h_bw_gbps = 0.0
+                self.p2p_bw_gbps = 0.0
+                self.effective_bw_gbps = 0.0
+                self.enabled = False
+
+        class NativeChunk:
+            def __init__(self) -> None:
+                self.src_offset = 0
+                self.dst_offset = 0
+                self.bytes = 0
+
+        class PathKind:
+            RelayH2DThenP2P = "relay-h2d"
+            RelayP2PThenD2H = "relay-d2h"
+            DirectH2D = "direct-h2d"
+            DirectD2H = "direct-d2h"
+
+        class TransferDirection:
+            H2D = "h2d"
+            D2H = "d2h"
+
+        old_extension = runtime_module._runtime_engine._turbobus
+        runtime_module._runtime_engine._turbobus = type(
+            "Ext",
+            (),
+            {
+                "TransferPlan": NativePlan,
+                "PathAssignment": NativeAssignment,
+                "Path": NativePath,
+                "Chunk": NativeChunk,
+                "PathKind": PathKind,
+                "TransferDirection": TransferDirection,
+            },
+        )
+        try:
+            with self.assertRaisesRegex(
+                ValueError,
+                "total_bytes must match assigned chunk bytes",
+            ):
+                runtime_module._runtime_engine._native_transfer_plan(
+                    {
+                        "total_bytes": 32,
+                        "chunk_bytes": 16,
+                        "assignments": [
+                            {
+                                "path": {
+                                    "kind": "relay",
+                                    "direction": "h2d",
+                                    "target_device": 0,
+                                    "relay_device": 1,
+                                    "enabled": True,
+                                },
+                                "chunks": [
+                                    {
+                                        "src_offset": 0,
+                                        "dst_offset": 0,
+                                        "bytes": 16,
+                                    },
+                                ],
+                            }
+                        ],
+                    }
+                )
+        finally:
+            runtime_module._runtime_engine._turbobus = old_extension
 
     def test_range_tensor_validation_does_not_require_equal_sizes_for_d2h(self) -> None:
         class TensorType:

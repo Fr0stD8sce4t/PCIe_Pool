@@ -889,6 +889,10 @@ phase:
     must include an active `staging_slot` and an inactive `staging_release`
     for the same slot, transfer, and lease before client completion is
     accepted.
+100. native exact-plan conversion now rejects daemon-issued plans whose
+     declared `total_bytes` does not match the sum of assigned chunk bytes.
+     Direct fallback, relay, and pooled worker/helper execution all fail before
+     native CUDA submission if the daemon plan byte accounting is malformed.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

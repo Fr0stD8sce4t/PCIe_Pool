@@ -322,6 +322,10 @@ Completed current code cut:
   staging slot lifecycle. The client now requires a matching active
   `staging_slot` record and a matching inactive `staging_release` record for
   that same slot before accepting helper completion.
+- Reject daemon-issued exact plans whose declared `total_bytes` does not match
+  the sum of assigned chunk bytes before converting them to native CUDA plans,
+  so malformed direct, relay, or pooled plans cannot reach native copy
+  submission.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -387,6 +391,8 @@ Completed current code cut:
    - Reject complete worker/helper completion envelopes that do not prove the
      active worker staging slot and inactive staging release refer to the same
      slot for the daemon-authorized transfer and lease.
+   - Reject daemon-issued exact plans whose declared total byte count does not
+     match their assigned chunks before native CUDA execution.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor

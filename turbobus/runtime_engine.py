@@ -347,6 +347,7 @@ def _native_transfer_plan(plan):
         raise ValueError("transfer plan chunk_bytes must be positive")
 
     assignments = []
+    chunk_total_bytes = 0
     for assignment_payload in payload.get("assignments", []) or []:
         if not isinstance(assignment_payload, Mapping):
             raise ValueError("transfer plan assignment must be an object")
@@ -392,6 +393,7 @@ def _native_transfer_plan(plan):
             native_chunk.dst_offset = dst_offset
             native_chunk.bytes = bytes_
             chunks.append(native_chunk)
+            chunk_total_bytes += bytes_
         if not chunks:
             continue
         native_assignment.path = native_path
@@ -400,6 +402,10 @@ def _native_transfer_plan(plan):
 
     if native_plan.total_bytes > 0 and not assignments:
         raise ValueError("transfer plan has no chunk assignments")
+    if assignments and chunk_total_bytes != native_plan.total_bytes:
+        raise ValueError(
+            "transfer plan total_bytes must match assigned chunk bytes"
+        )
     native_plan.assignments = assignments
     return native_plan
 
