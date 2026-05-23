@@ -146,6 +146,66 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
         self.assertTrue(status.ok)
         self.assertEqual(status.payload["status"]["state"], "complete")
 
+    def test_offload_cuda_ipc_to_shared_cpu_runs_daemon_worker_completion(self) -> None:
+        daemon = daemon_with_relay_path()
+        executor = CompleteExecutor()
+        worker_client = WorkerTransferClient(daemon, executor=executor)
+        transfer_client = make_worker_managed_transfer_client(
+            daemon,
+            target_gpu=0,
+            relay_gpus=[1],
+            worker_client=worker_client,
+            max_inflight_chunks=8,
+        )
+        allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-client-worker-test")
+
+        source = CudaIpcDeviceBuffer.from_device_pointer(
+            buffer_id="gpu-buffer",
+            job_id="job-1",
+            device_index=0,
+            size_bytes=64,
+            device_ptr=4096,
+            backend=FakeCudaBackend(),
+        )
+        with allocator.allocate("cpu-buffer", "job-1", 64) as target:
+            result = transfer_client.offload_cuda_ipc_to_shared_cpu(
+                source,
+                target,
+                ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
+                chunk_bytes=16,
+                mode="relay",
+            )
+
+        self.assertEqual(result.state, "complete")
+        self.assertEqual(result.bytes_completed, 16)
+        self.assertEqual(result.source_buffer_id, "gpu-buffer")
+        self.assertEqual(result.target_buffer_id, "cpu-buffer")
+        self.assertEqual(result.authorization_request.src_buffer_id, "gpu-buffer")
+        self.assertEqual(result.authorization_request.dst_buffer_id, "cpu-buffer")
+        self.assertEqual(result.authorization_request.direction, "d2h")
+        self.assertEqual(result.authorization_request.ranges, ())
+        self.assertEqual(len(executor.requests), 1)
+        self.assertEqual(executor.requests[0].authorization.direction, "d2h")
+        self.assertEqual(
+            executor.requests[0].authorization.src_buffer.handle_type,
+            "cuda_ipc_device",
+        )
+        self.assertEqual(
+            executor.requests[0].authorization.dst_buffer.handle_type,
+            "shared_pinned_cpu",
+        )
+        self.assertEqual(executor.requests[0].authorization.ranges[0]["bytes"], 16)
+        self.assertEqual(
+            executor.requests[0].data_plane.plan,
+            result.plan["plan"],
+        )
+        profile = daemon.describe().payload
+        self.assertEqual(profile["reservations"], {})
+        self.assertEqual(profile["relay_quotas"][1]["active_chunks"], 0)
+        status = daemon.transfer_status(result.transfer_id)
+        self.assertTrue(status.ok)
+        self.assertEqual(status.payload["status"]["state"], "complete")
+
     def test_fetch_shared_cpu_to_cuda_ipc_accepts_envelope_worker_client(self) -> None:
         daemon = daemon_with_relay_path()
         executor = CompleteExecutor()

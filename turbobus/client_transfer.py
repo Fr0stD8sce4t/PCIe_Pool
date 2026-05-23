@@ -85,6 +85,55 @@ class WorkerManagedTransferClient:
             raise TypeError("source must be a SharedPinnedCpuBuffer")
         if not isinstance(target, CudaIpcDeviceBuffer):
             raise TypeError("target must be a CudaIpcDeviceBuffer")
+        return self._submit_worker_managed_transfer(
+            source,
+            target,
+            direction="h2d",
+            ranges=ranges,
+            chunk_bytes=chunk_bytes,
+            mode=mode,
+            job_id=job_id,
+            user_id=user_id,
+        )
+
+    def offload_cuda_ipc_to_shared_cpu(
+        self,
+        source: CudaIpcDeviceBuffer,
+        target: SharedPinnedCpuBuffer,
+        *,
+        ranges: Iterable[TransferRange | tuple[int, int, int] | dict] | None = None,
+        chunk_bytes: int = 16 * 1024 * 1024,
+        mode: str = "relay",
+        job_id: str | None = None,
+        user_id: str | None = None,
+    ) -> WorkerManagedTransferResult:
+        if not isinstance(source, CudaIpcDeviceBuffer):
+            raise TypeError("source must be a CudaIpcDeviceBuffer")
+        if not isinstance(target, SharedPinnedCpuBuffer):
+            raise TypeError("target must be a SharedPinnedCpuBuffer")
+        return self._submit_worker_managed_transfer(
+            source,
+            target,
+            direction="d2h",
+            ranges=ranges,
+            chunk_bytes=chunk_bytes,
+            mode=mode,
+            job_id=job_id,
+            user_id=user_id,
+        )
+
+    def _submit_worker_managed_transfer(
+        self,
+        source: SharedPinnedCpuBuffer | CudaIpcDeviceBuffer,
+        target: SharedPinnedCpuBuffer | CudaIpcDeviceBuffer,
+        *,
+        direction: str,
+        ranges: Iterable[TransferRange | tuple[int, int, int] | dict] | None,
+        chunk_bytes: int,
+        mode: str,
+        job_id: str | None,
+        user_id: str | None,
+    ) -> WorkerManagedTransferResult:
         job = str(job_id or source.job_id)
         if target.job_id != job or source.job_id != job:
             raise ValueError("source and target buffers must belong to the transfer job")
@@ -105,7 +154,7 @@ class WorkerManagedTransferClient:
         transfer_request = TransferRequest.from_ranges(
             _ranges_or_full_buffer(ranges, source.size_bytes, target.size_bytes),
             chunk_bytes=int(chunk_bytes),
-            direction="h2d",
+            direction=direction,
             mode=mode,
             job_id=job,
             metadata={
@@ -124,7 +173,11 @@ class WorkerManagedTransferClient:
         _require_ok(planned, "daemon transfer planning failed")
         lease_token = _single_lease_token(self.daemon_client, planned)
         try:
-            _require_single_relay_worker_h2d_plan(planned.payload, lease_token)
+            _require_single_relay_worker_plan(
+                planned.payload,
+                lease_token,
+                direction=direction,
+            )
         except Exception:
             _cleanup_planned_relay_lease(self.daemon_client, lease_token)
             raise
@@ -136,7 +189,7 @@ class WorkerManagedTransferClient:
             job_id=job,
             src_buffer_id=source.buffer_id,
             dst_buffer_id=target.buffer_id,
-            direction="h2d",
+            direction=direction,
             ranges=(),
             relay_gpu=int(lease_token["relay_gpu"]),
         )
@@ -228,14 +281,17 @@ def _single_lease_token(daemon_client, response: DaemonResponse) -> Mapping[str,
     return dict(lease_tokens[0])
 
 
-def _require_single_relay_worker_h2d_plan(
+def _require_single_relay_worker_plan(
     plan_payload: Mapping[str, object],
     lease_token: Mapping[str, object],
+    *,
+    direction: str,
 ) -> None:
     plan = plan_payload.get("plan")
     if not isinstance(plan, Mapping):
         raise RuntimeError("daemon response did not include a transfer plan")
     relay_gpu = int(lease_token["relay_gpu"])
+    expected_direction = str(direction).lower()
     found_relay_chunks = False
     for assignment in plan.get("assignments", ()) or ():
         if not isinstance(assignment, Mapping):
@@ -246,15 +302,15 @@ def _require_single_relay_worker_h2d_plan(
         path_kind = str(path.get("kind", "")).lower()
         path_direction = str(path.get("direction", "")).lower()
         assignment_relay = int(path.get("relay_device", -1))
-        if path_direction != "h2d":
+        if path_direction != expected_direction:
             raise RuntimeError(
-                "worker-managed transfer currently supports only daemon H2D plans"
+                f"worker-managed transfer requires daemon {expected_direction} plans"
             )
         if path_kind == "direct":
             continue
         if path_kind != "relay" or assignment_relay != relay_gpu:
             raise RuntimeError(
-                "worker-managed H2D transfer currently supports direct chunks "
+                "worker-managed transfer currently supports direct chunks "
                 "plus the leased relay only"
             )
         if assignment.get("chunks"):

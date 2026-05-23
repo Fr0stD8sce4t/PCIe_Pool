@@ -15,7 +15,7 @@ from .staging_pool import WorkerStagingSlot
 
 
 class CudaWorkerExecutor:
-    """CUDA worker executor for the first daemon-authorized H2D relay path."""
+    """CUDA worker executor for daemon-authorized worker-managed transfers."""
 
     def __init__(
         self,
