@@ -97,16 +97,20 @@ Current status:
 - `TurboBusDaemonClient.describe()` now exposes the daemon profile/describe
   path, and socket coverage checks that cleanup observability is reachable
   through the same control-plane client.
+- `TurboBusDaemonClient.cleanup()` now wraps the existing `CLEANUP` request so
+  clients can request job, buffer, session, or reservation cleanup through the
+  daemon control path; socket coverage checks client-driven session cleanup and
+  the resulting user/system cleanup events.
 
 Next code cut:
 
-- add a daemon client helper for the existing `CLEANUP` request so clients can
-  request job, buffer, session, or reservation cleanup without hand-building
-  daemon messages;
-- add focused socket coverage for client-driven cleanup and the resulting
-  cleanup/system cleanup events;
-- keep this as control-plane cleanup only, without adding worker execution,
-  CUDA IPC, or hardware discovery.
+- add a worker-side cleanup coordinator that can call the daemon client's
+  cleanup helper after worker authorization or execution failure;
+- add focused worker tests that an unsupported or failed worker transfer can
+  report status and then request cleanup for the daemon-owned reservation or
+  session;
+- keep this as control-plane cleanup coordination only, without adding CUDA
+  IPC, real data movement, or hardware discovery.
 
 ## Upcoming
 

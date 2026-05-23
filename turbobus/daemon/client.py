@@ -178,6 +178,25 @@ class TurboBusDaemonClient:
             )
         )
 
+    def cleanup(
+        self,
+        target_kind: str,
+        target_id: str,
+        reason: str = "manual",
+        force: bool = False,
+    ) -> DaemonResponse:
+        return self.send(
+            DaemonRequest(
+                request_type=RequestType.CLEANUP,
+                payload={
+                    "target_kind": str(target_kind),
+                    "target_id": str(target_id),
+                    "reason": str(reason),
+                    "force": bool(force),
+                },
+            )
+        )
+
     def transfer_status(
         self,
         transfer_id: str,

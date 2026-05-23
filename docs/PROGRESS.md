@@ -103,6 +103,10 @@ transfer request objects:
 - `TurboBusDaemonClient.describe()` now queries the daemon profile/describe
   path, making cleanup observability available through the socket client used
   by runtime and future worker code.
+- `TurboBusDaemonClient.cleanup()` now wraps the existing daemon `CLEANUP`
+  request, and socket coverage checks that client-driven session cleanup records
+  both the client cleanup event and daemon-generated session/reservation cleanup
+  events.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -162,12 +166,13 @@ phase:
 18. daemon profile/describe reporting is now reachable from
     `TurboBusDaemonClient.describe()`, with socket coverage for cleanup
     observability.
+19. client-driven cleanup is now reachable from `TurboBusDaemonClient.cleanup()`
+    and covered through the daemon socket path.
 
-The next immediate goal is to add a daemon client helper for the existing
-`CLEANUP` request so clients can request job, buffer, session, or reservation
-cleanup without hand-building daemon messages. This should remain control-plane
-cleanup only and should not add worker execution, CUDA IPC, or hardware
-discovery.
+The next immediate goal is to add a worker-side cleanup coordinator that can use
+the daemon cleanup helper after worker authorization or execution failure. This
+should remain control-plane cleanup coordination only and should not add CUDA
+IPC, real data movement, or hardware discovery.
 
 ## Verification
 
@@ -209,7 +214,10 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
   reservations; done through `system_cleanup_events`;
 - add a daemon client helper for profile/describe reporting; done through
   `TurboBusDaemonClient.describe()`;
-- add a daemon client helper for `CLEANUP` requests;
+- add a daemon client helper for `CLEANUP` requests; done through
+  `TurboBusDaemonClient.cleanup()`;
+- add worker-side cleanup coordination for failed or unsupported helper
+  transfers;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

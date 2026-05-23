@@ -64,6 +64,29 @@ class DaemonSocketTest(unittest.TestCase):
         self.assertEqual(len(client.requests), 1)
         self.assertEqual(client.requests[0].request_type, RequestType.PROFILE)
 
+    def test_client_cleanup_uses_cleanup_request(self) -> None:
+        client = RecordingDaemonClient()
+
+        response = client.cleanup(
+            target_kind="session",
+            target_id="session-1",
+            reason="test",
+            force=True,
+        )
+
+        self.assertTrue(response.ok)
+        self.assertEqual(len(client.requests), 1)
+        self.assertEqual(client.requests[0].request_type, RequestType.CLEANUP)
+        self.assertEqual(
+            client.requests[0].payload,
+            {
+                "target_kind": "session",
+                "target_id": "session-1",
+                "reason": "test",
+                "force": True,
+            },
+        )
+
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
     def test_socket_session_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -291,6 +314,74 @@ class DaemonSocketTest(unittest.TestCase):
             self.assertEqual(
                 inventory.payload["inventory"]["gpus"][0]["device_id"],
                 1,
+            )
+
+    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
+    def test_client_cleanup_reports_control_plane_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            socket_path = os.path.join(tmpdir, "turbobusd.sock")
+            daemon = TurboBusDaemon(
+                relay_gpus=[1],
+                max_sessions_per_relay=1,
+                max_inflight_chunks_per_relay=4,
+            )
+            thread = threading.Thread(
+                target=daemon.serve_forever,
+                args=(socket_path,),
+                daemon=True,
+            )
+            thread.start()
+
+            for _ in range(100):
+                if os.path.exists(socket_path):
+                    break
+                time.sleep(0.01)
+            self.assertTrue(os.path.exists(socket_path))
+
+            client = TurboBusDaemonClient(socket_path)
+            registered = client.register_session(
+                target_gpu=0,
+                relay_gpus=[1],
+                max_inflight_chunks=4,
+            )
+            self.assertTrue(registered.ok)
+            session_id = registered.payload["session"]["session_id"]
+            reserved = client.reserve_transfer(
+                session_id=session_id,
+                relay_gpu=1,
+                chunks=4,
+            )
+            self.assertTrue(reserved.ok)
+            reservation_id = reserved.payload["reservation"]["reservation_id"]
+
+            cleanup = client.cleanup(
+                target_kind="session",
+                target_id=session_id,
+                reason="client_requested",
+                force=True,
+            )
+            self.assertTrue(cleanup.ok)
+            self.assertEqual(cleanup.payload["removed"]["sessions"], 1)
+            profile = client.describe()
+
+            self.assertIn(cleanup.payload["cleanup"], profile.payload["cleanup_events"])
+            self.assertIn(
+                {
+                    "target_kind": "session",
+                    "target_id": session_id,
+                    "reason": "client_requested",
+                    "force": True,
+                },
+                profile.payload["system_cleanup_events"],
+            )
+            self.assertIn(
+                {
+                    "target_kind": "reservation",
+                    "target_id": reservation_id,
+                    "reason": "client_requested",
+                    "force": True,
+                },
+                profile.payload["system_cleanup_events"],
             )
 
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
