@@ -232,6 +232,7 @@ class TurboBusDaemon:
                 session = self._close_session_locked(
                     cleanup.target_id,
                     reason=cleanup.reason,
+                    removed=removed,
                 )
                 if session is None:
                     return DaemonResponse(ok=False, error="unknown session")
@@ -806,6 +807,7 @@ class TurboBusDaemon:
         self,
         session_id: str,
         reason: str = "session_closed",
+        removed: dict[str, object] | None = None,
     ) -> Session | None:
         session = self._sessions.pop(session_id, None)
         if session is None:
@@ -831,7 +833,29 @@ class TurboBusDaemon:
             quota = self._relay_quotas.get(gpu)
             if quota is not None:
                 quota.sessions.discard(session_id)
+        removed_jobs = self._remove_session_jobs_and_buffers_locked(session_id)
+        if removed is not None:
+            removed["jobs"] = int(removed["jobs"]) + removed_jobs["jobs"]
+            removed["buffers"] = int(removed["buffers"]) + removed_jobs["buffers"]
         return session
+
+    def _remove_session_jobs_and_buffers_locked(self, session_id: str) -> dict[str, int]:
+        job_ids = {
+            job_id
+            for job_id, job in self._jobs.items()
+            if job.session_id == session_id
+        }
+        removed = {"jobs": 0, "buffers": 0}
+        if not job_ids:
+            return removed
+        for job_id in job_ids:
+            if self._jobs.pop(job_id, None) is not None:
+                removed["jobs"] += 1
+        for buffer_id, buffer in list(self._buffers.items()):
+            if buffer.job_id in job_ids:
+                self._buffers.pop(buffer_id, None)
+                removed["buffers"] += 1
+        return removed
 
     def _touch_session_locked(self, session_id: str, now: float | None = None) -> None:
         session = self._sessions.get(session_id)

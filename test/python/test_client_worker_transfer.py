@@ -206,6 +206,12 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
         self.assertTrue(status.ok)
         self.assertEqual(status.payload["status"]["state"], "complete")
 
+        closed = transfer_client.close_session()
+        self.assertTrue(closed.ok)
+        profile = daemon.describe().payload
+        self.assertEqual(profile["jobs"], {})
+        self.assertEqual(profile["buffers"], {})
+
     def test_offload_cuda_ipc_to_shared_cpu_runs_daemon_worker_completion(self) -> None:
         daemon = daemon_with_relay_path()
         executor = CompleteExecutor()

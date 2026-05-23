@@ -230,6 +230,10 @@ transfer request objects:
   before relay discovery, planning, validation, and description readouts.
 - explicit expired-lease reaping now reaches the daemon through
   `TurboBusDaemonClient.reap_expired_leases()` and the socket control path.
+- daemon session close now also reclaims jobs and buffer registrations scoped
+  to that session. Worker-managed runs no longer leave stale shared-memory or
+  CUDA IPC buffer metadata in a long-lived daemon after the client closes the
+  session.
 
 ## What Was Updated
 
@@ -749,6 +753,10 @@ phase:
     to be visible. The verifier now scopes CUDA environment checks to the
     target GPU for `--mode direct`, while `relay` and `pool` modes continue to
     require both devices.
+83. daemon session close now removes session-scoped job and buffer
+    registrations. This keeps stale shared pinned CPU and CUDA IPC handle
+    metadata from surviving after worker-managed transfers close their daemon
+    session.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

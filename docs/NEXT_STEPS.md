@@ -253,6 +253,9 @@ Completed current code cut:
 - Keep direct fallback verification scoped to the direct CUDA device. Direct
   mode no longer requires the configured relay GPU to be visible, while relay
   and pool verification still require both target and relay GPUs.
+- Reclaim session-scoped job and buffer registrations when a session is
+  closed. Long-lived daemons no longer keep stale shared CPU or CUDA IPC handle
+  metadata after a worker-managed verification or client session ends.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.

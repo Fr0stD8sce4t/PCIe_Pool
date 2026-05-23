@@ -130,6 +130,71 @@ class DaemonStateTest(unittest.TestCase):
         self.assertNotIn("job-1", daemon.describe().payload["jobs"])
         self.assertNotIn("buffer-1", daemon.describe().payload["buffers"])
 
+    def test_close_session_removes_session_jobs_and_buffers(self) -> None:
+        daemon = TurboBusDaemon(relay_gpus=[1])
+        session = daemon.register_session(target_gpu=0, requested_relays=[1])
+        self.assertTrue(session.ok)
+        session_id = session.payload["session"]["session_id"]
+        self.assertTrue(daemon.register_job("job-1", session_id=session_id).ok)
+        self.assertTrue(
+            daemon.register_buffer(
+                buffer_id="cpu-buffer",
+                job_id="job-1",
+                kind="cpu_pinned",
+                size_bytes=64,
+                pinned=True,
+            ).ok
+        )
+        self.assertTrue(daemon.register_job("detached-job").ok)
+        self.assertTrue(
+            daemon.register_buffer(
+                buffer_id="detached-buffer",
+                job_id="detached-job",
+                kind="cpu_pinned",
+                size_bytes=64,
+                pinned=True,
+            ).ok
+        )
+
+        closed = daemon.close_session(session_id)
+        snapshot = daemon.describe().payload
+
+        self.assertTrue(closed.ok)
+        self.assertNotIn("job-1", snapshot["jobs"])
+        self.assertNotIn("cpu-buffer", snapshot["buffers"])
+        self.assertIn("detached-job", snapshot["jobs"])
+        self.assertIn("detached-buffer", snapshot["buffers"])
+
+    def test_cleanup_session_reports_removed_jobs_and_buffers(self) -> None:
+        daemon = TurboBusDaemon(relay_gpus=[1])
+        session = daemon.register_session(target_gpu=0, requested_relays=[1])
+        self.assertTrue(session.ok)
+        session_id = session.payload["session"]["session_id"]
+        self.assertTrue(daemon.register_job("job-1", session_id=session_id).ok)
+        self.assertTrue(
+            daemon.register_buffer(
+                buffer_id="cpu-buffer",
+                job_id="job-1",
+                kind="cpu_pinned",
+                size_bytes=64,
+                pinned=True,
+            ).ok
+        )
+
+        cleanup = daemon.cleanup(
+            target_kind="session",
+            target_id=session_id,
+            reason="test_session_cleanup",
+            force=True,
+        )
+
+        self.assertTrue(cleanup.ok)
+        self.assertEqual(cleanup.payload["removed"]["sessions"], 1)
+        self.assertEqual(cleanup.payload["removed"]["jobs"], 1)
+        self.assertEqual(cleanup.payload["removed"]["buffers"], 1)
+        self.assertEqual(daemon.describe().payload["jobs"], {})
+        self.assertEqual(daemon.describe().payload["buffers"], {})
+
     def test_handle_request_profile(self) -> None:
         daemon = TurboBusDaemon(relay_gpus=[1, 2], max_sessions_per_relay=2)
         register = daemon.handle_request(
