@@ -190,6 +190,10 @@ transfer request objects:
 - worker-opened shared pinned CPU handles now require explicit
   `shared_memory_size_bytes` metadata before the worker can reopen the shared
   memory mapping, host-register it with CUDA, or pass it into the executor;
+- worker-opened shared pinned CPU handles are treated as borrowed backing in
+  helper processes. On POSIX Python runtimes without `SharedMemory(track=False)`,
+  non-owner opens are removed from that process's resource tracker so helper
+  shutdown does not unlink client-owned shared memory;
 - shared pinned CPU handle metadata is now rejected at registration/worker
   handle construction time if it omits `shared_memory_size_bytes`, preventing a
   malformed shared CPU handle from reaching worker resource binding;
@@ -716,6 +720,12 @@ phase:
     backend rejects CUDA IPC handles unless they are exactly 64 bytes before
     opening them through native CUDA, and rejects malformed handles returned by
     native export before they can enter daemon registration metadata.
+79. borrowed shared pinned CPU backing now stays client-owned across helper
+    processes. `SharedPinnedCpuBuffer.open_from_registration` opens borrowed
+    shared memory without POSIX resource-tracker ownership when available, and
+    unregisters only non-owner borrowed opens on older Python runtimes so worker
+    exit cannot unlink the client's shared CPU buffer before verification
+    cleanup.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

@@ -239,6 +239,10 @@ Completed current code cut:
   `CudaNativeBackend` now rejects malformed exported or opened IPC handles
   unless they are exactly 64 bytes, so direct backend calls cannot bypass the
   daemon/worker metadata checks and pass bad handles into native CUDA IPC.
+- Keep borrowed shared pinned CPU handles owned by the client process. Worker
+  opens now avoid POSIX resource-tracker ownership for shared-memory backing
+  they did not create, while same-process owner opens stay tracked until the
+  owner unlinks them.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
+from turbobus import client as client_module
 from turbobus.client import (
     CudaIpcDeviceBuffer,
     SharedPinnedCpuBuffer,
@@ -74,6 +76,38 @@ class SharedPinnedCpuBufferTest(unittest.TestCase):
                 self.assertEqual(buffer.read(5, offset=16), b"relay")
             finally:
                 opened.close()
+
+    def test_borrowed_shared_memory_untracks_non_owner_posix_handle(self) -> None:
+        class FakeSharedMemory:
+            _name = "/tb-borrowed"
+            name = "tb-borrowed"
+
+        with patch.object(client_module.os, "name", "posix"):
+            with patch.object(
+                client_module.resource_tracker,
+                "unregister",
+            ) as unregister:
+                client_module._untrack_borrowed_shared_memory(FakeSharedMemory())
+
+        unregister.assert_called_once_with("/tb-borrowed", "shared_memory")
+
+    def test_borrowed_shared_memory_keeps_local_owner_tracked(self) -> None:
+        class FakeSharedMemory:
+            _name = "/tb-owned"
+            name = "tb-owned"
+
+        client_module._LOCAL_OWNED_SHARED_MEMORY_NAMES.add("/tb-owned")
+        try:
+            with patch.object(client_module.os, "name", "posix"):
+                with patch.object(
+                    client_module.resource_tracker,
+                    "unregister",
+                ) as unregister:
+                    client_module._untrack_borrowed_shared_memory(FakeSharedMemory())
+        finally:
+            client_module._LOCAL_OWNED_SHARED_MEMORY_NAMES.discard("/tb-owned")
+
+        unregister.assert_not_called()
 
     def test_registration_requires_shared_memory_size_metadata(self) -> None:
         allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-test")

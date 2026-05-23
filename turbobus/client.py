@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import uuid
 from dataclasses import dataclass, field
-from multiprocessing import shared_memory
+from multiprocessing import resource_tracker, shared_memory
 from typing import Any
 
 from .backends.cuda import default_cuda_backend
 from .schema import BufferRegistration, DaemonResponse
+
+
+_LOCAL_OWNED_SHARED_MEMORY_NAMES: set[str] = set()
 
 
 def _shared_memory_name(prefix: str) -> str:
@@ -18,6 +22,36 @@ def _shared_memory_name(prefix: str) -> str:
     if not normalized:
         normalized = "turbobus"
     return f"{normalized}_{uuid.uuid4().hex}"
+
+
+def _open_borrowed_shared_memory(name: str) -> shared_memory.SharedMemory:
+    try:
+        return shared_memory.SharedMemory(name=name, create=False, track=False)
+    except TypeError:
+        shared = shared_memory.SharedMemory(name=name, create=False)
+        _untrack_borrowed_shared_memory(shared)
+        return shared
+
+
+def _untrack_borrowed_shared_memory(shared: shared_memory.SharedMemory) -> None:
+    if os.name != "posix":
+        return
+    tracker_name = _shared_memory_tracker_name(shared)
+    if not tracker_name:
+        return
+    if tracker_name in _LOCAL_OWNED_SHARED_MEMORY_NAMES:
+        return
+    resource_tracker.unregister(tracker_name, "shared_memory")
+
+
+def _shared_memory_tracker_name(shared: shared_memory.SharedMemory) -> str:
+    tracker_name = getattr(shared, "_name", None)
+    if tracker_name:
+        return str(tracker_name)
+    name = str(shared.name)
+    if os.name == "posix" and not name.startswith("/"):
+        return f"/{name}"
+    return name
 
 
 @dataclass
@@ -50,6 +84,7 @@ class SharedPinnedCpuBuffer:
             raise ValueError("size_bytes must be positive")
         name = _shared_memory_name(name_prefix)
         shared = shared_memory.SharedMemory(name=name, create=True, size=size_bytes)
+        _LOCAL_OWNED_SHARED_MEMORY_NAMES.add(_shared_memory_tracker_name(shared))
         return cls(
             buffer_id=str(buffer_id),
             job_id=str(job_id),
@@ -215,6 +250,9 @@ class SharedPinnedCpuBuffer:
         if self._unlinked:
             return
         self._shared_memory.unlink()
+        _LOCAL_OWNED_SHARED_MEMORY_NAMES.discard(
+            _shared_memory_tracker_name(self._shared_memory)
+        )
         self._unlinked = True
 
     def release(self) -> None:
