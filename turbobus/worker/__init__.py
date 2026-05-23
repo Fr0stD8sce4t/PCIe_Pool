@@ -1,9 +1,11 @@
 from .helper import (
     UnsupportedWorkerExecution,
     WorkerAuthorizationError,
+    WorkerCleanupError,
     WorkerStatusReportError,
     WorkerTransferAuthorizer,
     WorkerTransferClient,
+    WorkerTransferCleanupCoordinator,
     WorkerTransferRequest,
     WorkerTransferResult,
     WorkerTransferState,
@@ -14,9 +16,11 @@ from .helper import (
 __all__ = [
     "UnsupportedWorkerExecution",
     "WorkerAuthorizationError",
+    "WorkerCleanupError",
     "WorkerStatusReportError",
     "WorkerTransferAuthorizer",
     "WorkerTransferClient",
+    "WorkerTransferCleanupCoordinator",
     "WorkerTransferRequest",
     "WorkerTransferResult",
     "WorkerTransferState",

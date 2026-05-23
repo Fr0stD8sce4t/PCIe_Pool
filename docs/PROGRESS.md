@@ -107,6 +107,10 @@ transfer request objects:
   request, and socket coverage checks that client-driven session cleanup records
   both the client cleanup event and daemon-generated session/reservation cleanup
   events.
+- `WorkerTransferCleanupCoordinator` now lets worker helper code request daemon
+  cleanup after authorization or execution failure, and
+  `WorkerTransferClient.submit_report_and_cleanup()` keeps unsupported worker
+  execution on the daemon-owned status and cleanup paths.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -168,11 +172,14 @@ phase:
     observability.
 19. client-driven cleanup is now reachable from `TurboBusDaemonClient.cleanup()`
     and covered through the daemon socket path.
+20. worker-side cleanup coordination can now report failed or unsupported helper
+    transfers and ask the daemon to reclaim the matching reservation or session.
 
-The next immediate goal is to add a worker-side cleanup coordinator that can use
-the daemon cleanup helper after worker authorization or execution failure. This
-should remain control-plane cleanup coordination only and should not add CUDA
-IPC, real data movement, or hardware discovery.
+The next immediate goal is to add a worker request lifecycle record that captures
+authorization request, daemon-approved transfer context, status updates, cleanup
+target, and final outcome for future helper processes. This should remain worker
+control-plane state only and should not add CUDA IPC, real data movement, or
+hardware discovery.
 
 ## Verification
 
@@ -217,7 +224,8 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
 - add a daemon client helper for `CLEANUP` requests; done through
   `TurboBusDaemonClient.cleanup()`;
 - add worker-side cleanup coordination for failed or unsupported helper
-  transfers;
+  transfers; done through `WorkerTransferCleanupCoordinator`;
+- add worker request lifecycle records for future helper processes;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

@@ -8,12 +8,22 @@ from turbobus.schema import (
     WorkerTransferAuthorization,
     WorkerTransferAuthorizationRequest,
 )
+from turbobus.daemon.server import TurboBusDaemon
+from turbobus.daemon.topology import (
+    DaemonResourceInventory,
+    FabricLinkRecord,
+    GpuInventoryRecord,
+    PciePathRecord,
+    StaticTopologyProvider,
+)
 from turbobus.worker import (
     UnsupportedWorkerExecution,
     WorkerAuthorizationError,
+    WorkerCleanupError,
     WorkerStatusReportError,
     WorkerTransferAuthorizer,
     WorkerTransferClient,
+    WorkerTransferCleanupCoordinator,
     WorkerTransferRequest,
     WorkerTransferResult,
     WorkerTransferState,
@@ -69,11 +79,14 @@ class FakeDaemonClient:
         self,
         response: DaemonResponse,
         status_response: DaemonResponse | None = None,
+        cleanup_response: DaemonResponse | None = None,
     ) -> None:
         self.response = response
         self.status_response = status_response or DaemonResponse(ok=True)
+        self.cleanup_response = cleanup_response or DaemonResponse(ok=True)
         self.requests: list[WorkerTransferAuthorizationRequest] = []
         self.status_updates: list[dict[str, object]] = []
+        self.cleanup_requests: list[dict[str, object]] = []
 
     def authorize_worker_transfer(
         self,
@@ -98,6 +111,23 @@ class FakeDaemonClient:
             }
         )
         return self.status_response
+
+    def cleanup(
+        self,
+        target_kind: str,
+        target_id: str,
+        reason: str = "manual",
+        force: bool = False,
+    ) -> DaemonResponse:
+        self.cleanup_requests.append(
+            {
+                "target_kind": target_kind,
+                "target_id": target_id,
+                "reason": reason,
+                "force": force,
+            }
+        )
+        return self.cleanup_response
 
 
 class WorkerHelperTest(unittest.TestCase):
@@ -228,6 +258,236 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(result.state, WorkerTransferState.UNSUPPORTED)
         self.assertEqual(len(daemon_client.status_updates), 1)
         self.assertEqual(daemon_client.status_updates[0]["state"], "failed")
+
+    def test_cleanup_coordinator_cleans_authorization_failure_reservation(self) -> None:
+        daemon_client = FakeDaemonClient(DaemonResponse(ok=False, error="denied"))
+        coordinator = WorkerTransferCleanupCoordinator(daemon_client)
+
+        response = coordinator.cleanup_authorization_failure(authorization_request())
+
+        self.assertTrue(response.ok)
+        self.assertEqual(
+            daemon_client.cleanup_requests,
+            [
+                {
+                    "target_kind": "reservation",
+                    "target_id": "lease-1",
+                    "reason": "worker_authorization_failed",
+                    "force": True,
+                }
+            ],
+        )
+
+    def test_cleanup_coordinator_cleans_failed_worker_session(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        coordinator = WorkerTransferCleanupCoordinator(daemon_client)
+        request = WorkerTransferRequest.from_authorization_payload(authorization_payload())
+
+        coordinator.cleanup_execution_failure(
+            request,
+            WorkerTransferResult(
+                transfer_id="transfer-1",
+                state=WorkerTransferState.FAILED,
+                error="copy failed",
+            ),
+            target_kind="session",
+        )
+
+        self.assertEqual(
+            daemon_client.cleanup_requests,
+            [
+                {
+                    "target_kind": "session",
+                    "target_id": "session-1",
+                    "reason": "worker_failed",
+                    "force": True,
+                }
+            ],
+        )
+
+    def test_cleanup_coordinator_skips_complete_transfer(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        coordinator = WorkerTransferCleanupCoordinator(daemon_client)
+        request = WorkerTransferRequest.from_authorization_payload(authorization_payload())
+
+        response = coordinator.cleanup_execution_failure(
+            request,
+            WorkerTransferResult(
+                transfer_id="transfer-1",
+                state=WorkerTransferState.COMPLETE,
+                bytes_completed=64,
+            ),
+        )
+
+        self.assertTrue(response.ok)
+        self.assertTrue(response.payload["cleanup_skipped"])
+        self.assertEqual(daemon_client.cleanup_requests, [])
+
+    def test_cleanup_coordinator_raises_on_daemon_rejection(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload()),
+            cleanup_response=DaemonResponse(ok=False, error="unknown reservation"),
+        )
+        coordinator = WorkerTransferCleanupCoordinator(daemon_client)
+
+        with self.assertRaisesRegex(WorkerCleanupError, "unknown reservation"):
+            coordinator.cleanup_authorization_failure(authorization_request())
+
+    def test_worker_client_submit_report_and_cleanup_failed_result(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        client = WorkerTransferClient(daemon_client)
+
+        result = client.submit_report_and_cleanup(authorization_request())
+
+        self.assertEqual(result.state, WorkerTransferState.UNSUPPORTED)
+        self.assertEqual(daemon_client.status_updates[0]["state"], "failed")
+        self.assertEqual(
+            daemon_client.cleanup_requests,
+            [
+                {
+                    "target_kind": "reservation",
+                    "target_id": "lease-1",
+                    "reason": "worker_unsupported",
+                    "force": True,
+                }
+            ],
+        )
+
+    def test_worker_client_cleans_reservation_after_authorization_failure(self) -> None:
+        daemon_client = FakeDaemonClient(DaemonResponse(ok=False, error="denied"))
+        client = WorkerTransferClient(daemon_client)
+
+        with self.assertRaisesRegex(WorkerAuthorizationError, "denied"):
+            client.submit_report_and_cleanup(authorization_request())
+
+        self.assertEqual(daemon_client.status_updates, [])
+        self.assertEqual(
+            daemon_client.cleanup_requests,
+            [
+                {
+                    "target_kind": "reservation",
+                    "target_id": "lease-1",
+                    "reason": "worker_authorization_failed",
+                    "force": True,
+                }
+            ],
+        )
+
+    def test_worker_client_cleanup_releases_daemon_reservation(self) -> None:
+        daemon = TurboBusDaemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=1,
+            max_inflight_chunks_per_relay=8,
+            topology_provider=StaticTopologyProvider(
+                DaemonResourceInventory(
+                    gpus=(
+                        GpuInventoryRecord(device_id=0, role="target"),
+                        GpuInventoryRecord(device_id=1, role="relay"),
+                    ),
+                    pcie_paths=(PciePathRecord(device_id=1),),
+                    fabric_links=(
+                        FabricLinkRecord(
+                            src_device_id=1,
+                            dst_device_id=0,
+                            fabric="nvlink",
+                            enabled=True,
+                        ),
+                    ),
+                    source="test",
+                )
+            ),
+        )
+        registered = daemon.register_session(
+            target_gpu=0,
+            requested_relays=[1],
+            max_inflight_chunks=8,
+        )
+        session_id = registered.payload["session"]["session_id"]
+        daemon.register_job(job_id="job-1", session_id=session_id)
+        daemon.register_buffer(
+            buffer_id="cpu-buffer",
+            job_id="job-1",
+            kind="cpu_pinned",
+            size_bytes=64,
+            pinned=True,
+        )
+        daemon.register_buffer(
+            buffer_id="gpu-buffer",
+            job_id="job-1",
+            kind="gpu",
+            size_bytes=64,
+            device_index=0,
+        )
+        daemon.put_profile(
+            target_gpu=0,
+            relay_gpus=[1],
+            profile={
+                "target_device": 0,
+                "direct_h2d_bw_gbps": 7.5,
+                "direct_d2h_bw_gbps": 6.5,
+                "relays": [
+                    {
+                        "relay_device": 1,
+                        "target_device": 0,
+                        "h2d_bw_gbps": 7.5,
+                        "d2h_bw_gbps": 6.5,
+                        "p2p_bw_gbps": 40.0,
+                        "effective_bw_gbps": 7.5,
+                        "effective_d2h_bw_gbps": 6.5,
+                        "p2p_enabled": True,
+                    }
+                ],
+            },
+        )
+        planned = daemon.plan_transfer(
+            session_id=session_id,
+            total_bytes=64,
+            chunk_bytes=16,
+            mode="pool",
+            direction="h2d",
+            job_id="job-1",
+            buffer_ids=["cpu-buffer", "gpu-buffer"],
+        )
+        transfer_id = planned.payload["transfer_id"]
+        lease_token = planned.payload["lease_tokens"][0]
+        client = WorkerTransferClient(daemon)
+
+        result = client.submit_report_and_cleanup(
+            WorkerTransferAuthorizationRequest(
+                transfer_id=transfer_id,
+                lease_id=lease_token["lease_id"],
+                token=lease_token["token"],
+                session_id=session_id,
+                job_id="job-1",
+                src_buffer_id="cpu-buffer",
+                dst_buffer_id="gpu-buffer",
+                direction="h2d",
+                relay_gpu=1,
+                ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
+            )
+        )
+
+        self.assertEqual(result.state, WorkerTransferState.UNSUPPORTED)
+        profile = daemon.describe().payload
+        self.assertEqual(profile["reservations"], {})
+        self.assertIn(
+            {
+                "target_kind": "reservation",
+                "target_id": lease_token["lease_id"],
+                "reason": "worker_unsupported",
+                "force": True,
+            },
+            profile["cleanup_events"],
+        )
+        status = daemon.transfer_status(transfer_id)
+        self.assertTrue(status.ok)
+        self.assertEqual(status.payload["status"]["state"], "failed")
 
 
 if __name__ == "__main__":

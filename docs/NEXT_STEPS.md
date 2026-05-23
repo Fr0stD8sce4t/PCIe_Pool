@@ -101,16 +101,21 @@ Current status:
   clients can request job, buffer, session, or reservation cleanup through the
   daemon control path; socket coverage checks client-driven session cleanup and
   the resulting user/system cleanup events.
+- `WorkerTransferCleanupCoordinator` now lets worker-side helper code request
+  daemon cleanup after authorization or execution failure, and
+  `WorkerTransferClient.submit_report_and_cleanup()` ties authorization,
+  unsupported execution, daemon status reporting, and reservation/session
+  cleanup together without adding real data movement.
 
 Next code cut:
 
-- add a worker-side cleanup coordinator that can call the daemon client's
-  cleanup helper after worker authorization or execution failure;
-- add focused worker tests that an unsupported or failed worker transfer can
-  report status and then request cleanup for the daemon-owned reservation or
-  session;
-- keep this as control-plane cleanup coordination only, without adding CUDA
-  IPC, real data movement, or hardware discovery.
+- add a worker request lifecycle record that captures authorization request,
+  daemon-approved transfer context, status updates, cleanup target, and final
+  outcome for future helper processes;
+- add focused worker tests for serializing that lifecycle record and for using
+  it to keep status/cleanup decisions consistent;
+- keep this as worker control-plane state only, without adding CUDA IPC, real
+  data movement, or hardware discovery.
 
 ## Upcoming
 

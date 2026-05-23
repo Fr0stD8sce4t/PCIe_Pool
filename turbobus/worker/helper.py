@@ -31,6 +31,10 @@ class WorkerStatusReportError(RuntimeError):
     pass
 
 
+class WorkerCleanupError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class WorkerTransferRequest:
     authorization: WorkerTransferAuthorization
@@ -164,16 +168,93 @@ class WorkerTransferStatusReporter:
         return response
 
 
+class WorkerTransferCleanupCoordinator:
+    def __init__(self, daemon_client) -> None:
+        self.daemon_client = daemon_client
+
+    def cleanup_authorization_failure(
+        self,
+        request: WorkerTransferAuthorizationRequest,
+        target_kind: str = "reservation",
+        reason: str = "worker_authorization_failed",
+        force: bool = True,
+    ) -> DaemonResponse:
+        if not isinstance(request, WorkerTransferAuthorizationRequest):
+            raise TypeError("request must be a WorkerTransferAuthorizationRequest")
+        return self._cleanup(
+            target_kind=target_kind,
+            target_id=_cleanup_target_id(
+                target_kind,
+                lease_id=request.lease_id,
+                session_id=request.session_id,
+            ),
+            reason=reason,
+            force=force,
+        )
+
+    def cleanup_execution_failure(
+        self,
+        request: WorkerTransferRequest,
+        result: WorkerTransferResult,
+        target_kind: str = "reservation",
+        reason: str | None = None,
+        force: bool = True,
+    ) -> DaemonResponse:
+        if not isinstance(request, WorkerTransferRequest):
+            raise TypeError("request must be a WorkerTransferRequest")
+        if not isinstance(result, WorkerTransferResult):
+            raise TypeError("result must be a WorkerTransferResult")
+        if result.state == WorkerTransferState.COMPLETE:
+            return DaemonResponse(
+                ok=True,
+                payload={
+                    "cleanup_skipped": True,
+                    "reason": "transfer_complete",
+                },
+            )
+        return self._cleanup(
+            target_kind=target_kind,
+            target_id=_cleanup_target_id(
+                target_kind,
+                lease_id=request.authorization.lease_id,
+                session_id=request.authorization.session_id,
+            ),
+            reason=reason or f"worker_{result.state.value}",
+            force=force,
+        )
+
+    def _cleanup(
+        self,
+        target_kind: str,
+        target_id: str,
+        reason: str,
+        force: bool,
+    ) -> DaemonResponse:
+        response: DaemonResponse = self.daemon_client.cleanup(
+            target_kind=target_kind,
+            target_id=target_id,
+            reason=reason,
+            force=force,
+        )
+        if not response.ok:
+            raise WorkerCleanupError(response.error or "worker cleanup failed")
+        return response
+
+
 class WorkerTransferClient:
     def __init__(
         self,
         daemon_client,
         executor: WorkerTransferUnsupportedExecutor | None = None,
         status_reporter: WorkerTransferStatusReporter | None = None,
+        cleanup_coordinator: WorkerTransferCleanupCoordinator | None = None,
     ) -> None:
         self.authorizer = WorkerTransferAuthorizer(daemon_client)
         self.executor = executor or WorkerTransferUnsupportedExecutor()
         self.status_reporter = status_reporter or WorkerTransferStatusReporter(
+            daemon_client
+        )
+        self.cleanup_coordinator = cleanup_coordinator or WorkerTransferCleanupCoordinator(
             daemon_client
         )
 
@@ -198,6 +279,28 @@ class WorkerTransferClient:
         self.status_reporter.report(result)
         return result
 
+    def submit_report_and_cleanup(
+        self,
+        request: WorkerTransferAuthorizationRequest,
+        cleanup_target_kind: str = "reservation",
+    ) -> WorkerTransferResult:
+        try:
+            worker_request = self.authorize(request)
+        except WorkerAuthorizationError:
+            self.cleanup_coordinator.cleanup_authorization_failure(
+                request,
+                target_kind=cleanup_target_kind,
+            )
+            raise
+        result = self.executor.execute(worker_request)
+        self.status_reporter.report(result)
+        self.cleanup_coordinator.cleanup_execution_failure(
+            worker_request,
+            result,
+            target_kind=cleanup_target_kind,
+        )
+        return result
+
 
 def _buffer_from_payload(payload: object) -> BufferRegistration:
     if not isinstance(payload, Mapping):
@@ -220,3 +323,12 @@ def _daemon_state_for_worker_state(
     if worker_state == WorkerTransferState.COMPLETE:
         return TransferStatusState.COMPLETE
     return TransferStatusState.FAILED
+
+
+def _cleanup_target_id(target_kind: str, lease_id: str, session_id: str) -> str:
+    normalized = str(target_kind)
+    if normalized == "reservation":
+        return str(lease_id)
+    if normalized == "session":
+        return str(session_id)
+    raise ValueError("worker cleanup target must be reservation or session")
