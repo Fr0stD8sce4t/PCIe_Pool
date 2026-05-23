@@ -6,22 +6,37 @@ from `## Upcoming` to `## Current`, then update `docs/PROGRESS.md`.
 
 ## Current
 
-### 21. Trim redundant native mode switches in vLLM auto restore
+### 22. Re-run all-mode paper validation after the native mode trim
 
-Reduce the small vLLM auto-path overhead by reusing the already-selected
-native transfer mode when repeated auto decisions resolve to the same native
-path.
+Run the paper validation harness in `--mode all` on the target server again
+so the vLLM auto restore numbers can show whether the native mode trim closed
+the small gap to pool.
 
 Acceptance:
 
-- Repeated auto decisions that resolve to the same native mode do not emit
-  redundant native transfer-mode switches.
-- Explicit direct, relay, and pool mode changes still update the native
-  runtime when the mode actually changes.
-- Focused runtime tests cover repeated auto decisions and explicit mode
-  transitions.
+- The target-server run reports `paper_metric` and `paper_speedup` lines for
+  model loading, vLLM KV restore, and training offload after the native mode
+  trim.
+- The new vLLM numbers make it clear whether the auto-path gap to pool has
+  closed or still needs a further code change.
+- If the gap remains, the next `Current` item will capture the specific code
+  fix instead of burying it in docs.
 
 ## Completed
+
+- 2026-05-23: Trim redundant native mode switches in auto restore.
+  - `Runtime` now remembers the last native transfer mode it wrote and skips
+    redundant native mode updates when repeated decisions resolve to the same
+    path.
+  - Auto restore should now avoid reissuing the same pool mode write on back
+    to back requests, while explicit direct/relay/pool changes still update the
+    native runtime when they actually change mode.
+  - Added a focused runtime regression test that exercises repeated auto
+    decisions and confirms the native runtime is not switched again for the
+    same resolved mode.
+  - Verification: `python -m unittest discover -s test\python -p "test_runtime_handle.py" -v`,
+    `python -m compileall turbobus\runtime.py test\python\test_runtime_handle.py -q`,
+    `git diff --check`.
 
 - 2026-05-23: Validate all-mode paper speedup summaries on the target server.
   - The target-server paper validation harness completed in `--mode all` on
@@ -36,6 +51,8 @@ Acceptance:
     `auto_over_relay_restore_latency=0.922` showed auto was a little slower
     than the direct and relay baselines, so the next code task is to remove
     that redundant control-plane overhead.
+  - Next focus: re-run the all-mode server validation after the control-plane
+    trim and check whether the vLLM auto gap has narrowed.
 
 - 2026-05-22: Add explicit paper speedup summaries.
   - `benchmarks/paper_validation.py` now emits `paper_speedup` lines next to
