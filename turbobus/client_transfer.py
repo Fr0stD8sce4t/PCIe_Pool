@@ -742,9 +742,14 @@ def _require_worker_completion_matches_request(
             completion.daemon_cleanup_response,
             request,
         )
+        _require_worker_staging_slot_matches_request(
+            completion.staging_slot,
+            request,
+        )
         _require_worker_staging_release_matches_request(
             completion.staging_release,
             request,
+            slot=completion.staging_slot,
         )
 
 
@@ -825,9 +830,27 @@ def _require_worker_release_response_matches_request(
         )
 
 
+def _require_worker_staging_slot_matches_request(
+    slot: Mapping[str, object] | None,
+    request: WorkerTransferAuthorizationRequest,
+) -> None:
+    if slot is None:
+        raise _WorkerCompletionEnvelopeError("worker completion missing staging slot")
+    if not bool(slot.get("active", False)):
+        raise _WorkerCompletionEnvelopeError("worker staging slot was not active")
+    transfer_id = slot.get("transfer_id")
+    if transfer_id is not None and str(transfer_id) != request.transfer_id:
+        raise _WorkerCompletionEnvelopeError("worker staging slot transfer mismatch")
+    lease_id = slot.get("lease_id")
+    if lease_id is not None and str(lease_id) != request.lease_id:
+        raise _WorkerCompletionEnvelopeError("worker staging slot lease mismatch")
+
+
 def _require_worker_staging_release_matches_request(
     release: Mapping[str, object] | None,
     request: WorkerTransferAuthorizationRequest,
+    *,
+    slot: Mapping[str, object] | None,
 ) -> None:
     if release is None:
         raise _WorkerCompletionEnvelopeError(
@@ -841,6 +864,14 @@ def _require_worker_staging_release_matches_request(
     lease_id = release.get("lease_id")
     if lease_id is not None and str(lease_id) != request.lease_id:
         raise _WorkerCompletionEnvelopeError("worker staging release lease mismatch")
+    if slot is None:
+        return
+    slot_id = slot.get("slot_id")
+    release_slot_id = release.get("slot_id")
+    if slot_id is None or release_slot_id is None:
+        raise _WorkerCompletionEnvelopeError("worker staging slot id missing")
+    if str(release_slot_id) != str(slot_id):
+        raise _WorkerCompletionEnvelopeError("worker staging release slot mismatch")
 
 
 def _require_worker_completed_bytes(

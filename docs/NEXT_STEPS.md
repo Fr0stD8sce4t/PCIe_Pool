@@ -318,6 +318,10 @@ Completed current code cut:
   inactive staging release record. A helper response that reports daemon
   completion and reservation release but does not prove the worker-local relay
   staging slot was released is rejected before client completion.
+- Bind complete worker/helper completion envelopes to a concrete worker-local
+  staging slot lifecycle. The client now requires a matching active
+  `staging_slot` record and a matching inactive `staging_release` record for
+  that same slot before accepting helper completion.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -380,6 +384,9 @@ Completed current code cut:
      successful daemon release response for the relay reservation.
    - Reject complete worker/helper completion envelopes that do not include a
      matching inactive worker staging release record.
+   - Reject complete worker/helper completion envelopes that do not prove the
+     active worker staging slot and inactive staging release refer to the same
+     slot for the daemon-authorized transfer and lease.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor

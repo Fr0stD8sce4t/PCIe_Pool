@@ -884,6 +884,11 @@ phase:
     that omits the staging release, leaves it active, or reports release for
     another transfer or lease is rejected before the client accepts the
     transfer as complete.
+99. worker-managed client completion envelopes now bind the worker-local
+    staging allocation and release records together. Complete helper results
+    must include an active `staging_slot` and an inactive `staging_release`
+    for the same slot, transfer, and lease before client completion is
+    accepted.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
