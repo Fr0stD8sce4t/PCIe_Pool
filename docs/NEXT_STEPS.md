@@ -131,10 +131,14 @@ Completed current code cut:
   `d2h` plan and relay lease, submit the worker authorization, wait for worker
   completion, release the relay reservation, and return the daemon-owned final
   status.
+- Extend the CUDA-server helper-socket verifier to D2H. `python -m
+  turbobus.verification --direction d2h` now allocates a real CUDA IPC source,
+  offloads it into a shared pinned CPU destination through the daemon-approved
+  worker/helper path, checks destination bytes, and asserts reservation release.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
-   - Run `python -m turbobus.verification --target-gpu 0 --relay-gpu 1`.
+   - Run `python -m turbobus.verification --direction h2d --target-gpu 0 --relay-gpu 1`.
    - If it fails, fix the failing real data-path layer first: shared CPU
      binding, CUDA IPC target opening, relay runtime execution, daemon status,
      or reservation release.
@@ -149,7 +153,8 @@ Completed current code cut:
 3. Extend the worker executor only after the functional call works.
    - Add D2H through the same resource binding path; done for worker resource
      binding, CUDA executor exact-plan submission, and the client-facing
-     worker-managed call, pending CUDA-server byte verification.
+     worker-managed call, pending CUDA-server byte verification through
+     `python -m turbobus.verification --direction d2h`.
    - Add pooled direct-plus-relay execution through daemon-issued chunks; done
      for the narrow H2D single-relay worker-managed path, pending CUDA-server
      byte verification.

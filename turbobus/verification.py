@@ -26,7 +26,8 @@ from .worker import WorkerServiceSocketClient, run_worker_helper_process
 
 
 @dataclass(frozen=True)
-class WorkerManagedH2DRelayVerificationResult:
+class WorkerManagedRelayVerificationResult:
+    direction: str
     transfer_id: str
     job_id: str
     bytes_requested: int
@@ -42,6 +43,16 @@ class WorkerManagedH2DRelayVerificationResult:
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class WorkerManagedH2DRelayVerificationResult(WorkerManagedRelayVerificationResult):
+    pass
+
+
+@dataclass(frozen=True)
+class WorkerManagedD2HRelayVerificationResult(WorkerManagedRelayVerificationResult):
+    pass
 
 
 def verify_worker_managed_h2d_relay(
@@ -61,7 +72,60 @@ def verify_worker_managed_h2d_relay(
     into a CUDA IPC target tensor.
     """
 
+    return _verify_worker_managed_relay(
+        direction="h2d",
+        result_type=WorkerManagedH2DRelayVerificationResult,
+        target_gpu=target_gpu,
+        relay_gpu=relay_gpu,
+        bytes_to_copy=bytes_to_copy,
+        chunk_bytes=chunk_bytes,
+        max_inflight_chunks=max_inflight_chunks,
+        socket_dir=socket_dir,
+        startup_timeout_seconds=startup_timeout_seconds,
+    )
+
+
+def verify_worker_managed_d2h_relay(
+    *,
+    target_gpu: int = 0,
+    relay_gpu: int = 1,
+    bytes_to_copy: int = 1024 * 1024,
+    chunk_bytes: int = 1024 * 1024,
+    max_inflight_chunks: int = 8,
+    socket_dir: str | None = None,
+    startup_timeout_seconds: float = 10.0,
+) -> WorkerManagedD2HRelayVerificationResult:
+    """Run helper-socket D2H relay verification through the daemon plan path."""
+
+    return _verify_worker_managed_relay(
+        direction="d2h",
+        result_type=WorkerManagedD2HRelayVerificationResult,
+        target_gpu=target_gpu,
+        relay_gpu=relay_gpu,
+        bytes_to_copy=bytes_to_copy,
+        chunk_bytes=chunk_bytes,
+        max_inflight_chunks=max_inflight_chunks,
+        socket_dir=socket_dir,
+        startup_timeout_seconds=startup_timeout_seconds,
+    )
+
+
+def _verify_worker_managed_relay(
+    *,
+    direction: str,
+    result_type: type[WorkerManagedRelayVerificationResult],
+    target_gpu: int,
+    relay_gpu: int,
+    bytes_to_copy: int,
+    chunk_bytes: int,
+    max_inflight_chunks: int,
+    socket_dir: str | None,
+    startup_timeout_seconds: float,
+) -> WorkerManagedRelayVerificationResult:
     _require_unix_sockets()
+    direction = str(direction).lower()
+    if direction not in {"h2d", "d2h"}:
+        raise ValueError("direction must be h2d or d2h")
     target = int(target_gpu)
     relay = int(relay_gpu)
     total_bytes = int(bytes_to_copy)
@@ -75,8 +139,10 @@ def verify_worker_managed_h2d_relay(
 
     torch = _require_cuda_environment(target, relay)
     pattern = _make_pattern(total_bytes)
-    job_id = f"verify-worker-h2d-{os.getpid()}-{time.time_ns()}"
-    allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-worker-h2d-verify")
+    job_id = f"verify-worker-{direction}-{os.getpid()}-{time.time_ns()}"
+    allocator = SharedPinnedCpuBufferAllocator(
+        name_prefix=f"tb-worker-{direction}-verify"
+    )
 
     with tempfile.TemporaryDirectory(dir=socket_dir) as tmpdir:
         daemon_socket = os.path.join(tmpdir, "turbobusd.sock")
@@ -99,7 +165,7 @@ def verify_worker_managed_h2d_relay(
             daemon=True,
         )
         transfer_client = None
-        source = None
+        cpu_buffer = None
         try:
             daemon_process.start()
             _wait_for_socket(daemon_socket, daemon_process, startup_timeout_seconds)
@@ -115,49 +181,71 @@ def verify_worker_managed_h2d_relay(
                 max_inflight_chunks=int(max_inflight_chunks),
             )
 
-            source = allocator.allocate("verify-cpu-source", job_id, total_bytes)
-            source.write(pattern)
             torch.cuda.set_device(target)
-            target_tensor = torch.empty(
-                total_bytes,
-                dtype=torch.uint8,
-                device=f"cuda:{target}",
-            )
-            target_tensor.zero_()
-            torch.cuda.synchronize(target)
-            target_buffer = CudaIpcDeviceBuffer.from_device_pointer(
-                buffer_id="verify-gpu-target",
-                job_id=job_id,
-                device_index=target,
-                size_bytes=total_bytes,
-                device_ptr=int(target_tensor.data_ptr()),
-                backend=default_cuda_backend,
-            )
+            if direction == "h2d":
+                cpu_buffer = allocator.allocate(
+                    "verify-cpu-source",
+                    job_id,
+                    total_bytes,
+                )
+                cpu_buffer.write(pattern)
+                target_tensor = torch.empty(
+                    total_bytes,
+                    dtype=torch.uint8,
+                    device=f"cuda:{target}",
+                )
+                target_tensor.zero_()
+                torch.cuda.synchronize(target)
+                gpu_buffer = CudaIpcDeviceBuffer.from_device_pointer(
+                    buffer_id="verify-gpu-target",
+                    job_id=job_id,
+                    device_index=target,
+                    size_bytes=total_bytes,
+                    device_ptr=int(target_tensor.data_ptr()),
+                    backend=default_cuda_backend,
+                )
 
-            transfer = transfer_client.fetch_shared_cpu_to_cuda_ipc(
-                source,
-                target_buffer,
-                ranges=({"src_offset": 0, "dst_offset": 0, "bytes": total_bytes},),
-                chunk_bytes=chunk_size,
-                mode="relay",
-                job_id=job_id,
-            )
-            torch.cuda.synchronize(target)
-            _assert_target_matches(torch, target_tensor, pattern)
-            if transfer.state != "complete":
-                raise RuntimeError(f"transfer did not complete: {transfer.state}")
-            if transfer.bytes_completed != total_bytes:
-                raise RuntimeError(
-                    "transfer completed an unexpected byte count: "
-                    f"{transfer.bytes_completed} != {total_bytes}"
+                transfer = transfer_client.fetch_shared_cpu_to_cuda_ipc(
+                    cpu_buffer,
+                    gpu_buffer,
+                    ranges=({"src_offset": 0, "dst_offset": 0, "bytes": total_bytes},),
+                    chunk_bytes=chunk_size,
+                    mode="relay",
+                    job_id=job_id,
                 )
-            if transfer.worker_completion is None:
-                raise RuntimeError("worker helper did not return a completion envelope")
-            if transfer.worker_completion.final_state != "complete":
-                raise RuntimeError(
-                    "worker helper did not complete: "
-                    f"{transfer.worker_completion.final_state}"
+                torch.cuda.synchronize(target)
+                _assert_target_matches(torch, target_tensor, pattern)
+            else:
+                source_tensor = _expected_tensor(torch, pattern).to(
+                    device=f"cuda:{target}"
                 )
+                torch.cuda.synchronize(target)
+                gpu_buffer = CudaIpcDeviceBuffer.from_device_pointer(
+                    buffer_id="verify-gpu-source",
+                    job_id=job_id,
+                    device_index=target,
+                    size_bytes=total_bytes,
+                    device_ptr=int(source_tensor.data_ptr()),
+                    backend=default_cuda_backend,
+                )
+                cpu_buffer = allocator.allocate(
+                    "verify-cpu-destination",
+                    job_id,
+                    total_bytes,
+                )
+                cpu_buffer.write(bytes(total_bytes))
+
+                transfer = transfer_client.offload_cuda_ipc_to_shared_cpu(
+                    gpu_buffer,
+                    cpu_buffer,
+                    ranges=({"src_offset": 0, "dst_offset": 0, "bytes": total_bytes},),
+                    chunk_bytes=chunk_size,
+                    mode="relay",
+                    job_id=job_id,
+                )
+                torch.cuda.synchronize(target)
+                _assert_shared_cpu_matches(cpu_buffer, pattern)
+            _assert_transfer_complete(transfer, total_bytes)
 
             daemon_profile = daemon_client.describe()
             if not daemon_profile.ok:
@@ -177,8 +265,11 @@ def verify_worker_managed_h2d_relay(
                 else dict(worker_completion.worker_result)
             )
             metadata = dict(worker_result.get("metadata") or {})
-            if metadata.get("path") != "relay_h2d":
-                raise RuntimeError("worker did not report the relay_h2d executor path")
+            expected_path = f"relay_{direction}"
+            if metadata.get("path") != expected_path:
+                raise RuntimeError(
+                    f"worker did not report the {expected_path} executor path"
+                )
             relay_bytes = int(metadata.get("relay_bytes", 0) or 0)
             relay_chunks = int(metadata.get("relay_chunks", 0) or 0)
             if relay_bytes != total_bytes:
@@ -187,7 +278,8 @@ def verify_worker_managed_h2d_relay(
                 )
             if relay_chunks <= 0:
                 raise RuntimeError("worker did not report relay chunks")
-            return WorkerManagedH2DRelayVerificationResult(
+            return result_type(
+                direction=direction,
                 transfer_id=transfer.transfer_id,
                 job_id=job_id,
                 bytes_requested=total_bytes,
@@ -209,16 +301,17 @@ def verify_worker_managed_h2d_relay(
                     transfer_client.close_session()
                 except Exception:
                     pass
-            if source is not None:
-                source.release()
+            if cpu_buffer is not None:
+                cpu_buffer.release()
             _terminate_process(worker_process)
             _terminate_process(daemon_process)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Verify TurboBus worker-managed CUDA H2D relay over helper socket",
+        description="Verify TurboBus worker-managed CUDA relay over helper socket",
     )
+    parser.add_argument("--direction", choices=["h2d", "d2h"], default="h2d")
     parser.add_argument("--target-gpu", type=int, default=0)
     parser.add_argument("--relay-gpu", type=int, default=1)
     parser.add_argument("--bytes", type=int, default=1024 * 1024)
@@ -228,7 +321,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--startup-timeout-seconds", type=float, default=10.0)
     args = parser.parse_args(argv)
 
-    result = verify_worker_managed_h2d_relay(
+    verifier = (
+        verify_worker_managed_h2d_relay
+        if args.direction == "h2d"
+        else verify_worker_managed_d2h_relay
+    )
+    result = verifier(
         target_gpu=args.target_gpu,
         relay_gpu=args.relay_gpu,
         bytes_to_copy=args.bytes,
@@ -374,6 +472,45 @@ def _assert_target_matches(torch, target_tensor, pattern: bytearray) -> None:
     )
 
 
+def _assert_shared_cpu_matches(cpu_buffer, pattern: bytearray) -> None:
+    actual = cpu_buffer.read()
+    expected = bytes(pattern)
+    if actual == expected:
+        return
+    mismatch_index = -1
+    expected_value = -1
+    actual_value = -1
+    for index, (actual_byte, expected_byte) in enumerate(zip(actual, expected)):
+        if actual_byte != expected_byte:
+            mismatch_index = index
+            expected_value = expected_byte
+            actual_value = actual_byte
+            break
+    if mismatch_index < 0 and len(actual) != len(expected):
+        mismatch_index = min(len(actual), len(expected))
+    raise AssertionError(
+        "worker-managed D2H relay verification failed at byte "
+        f"{mismatch_index}: expected {expected_value}, got {actual_value}"
+    )
+
+
+def _assert_transfer_complete(transfer, total_bytes: int) -> None:
+    if transfer.state != "complete":
+        raise RuntimeError(f"transfer did not complete: {transfer.state}")
+    if transfer.bytes_completed != total_bytes:
+        raise RuntimeError(
+            "transfer completed an unexpected byte count: "
+            f"{transfer.bytes_completed} != {total_bytes}"
+        )
+    if transfer.worker_completion is None:
+        raise RuntimeError("worker helper did not return a completion envelope")
+    if transfer.worker_completion.final_state != "complete":
+        raise RuntimeError(
+            "worker helper did not complete: "
+            f"{transfer.worker_completion.final_state}"
+        )
+
+
 def _expected_tensor(torch, pattern: bytearray):
     from_buffer = getattr(torch, "frombuffer", None)
     if callable(from_buffer):
@@ -421,7 +558,10 @@ def _relay_quota(payload: dict[str, object], relay_gpu: int) -> dict[str, object
 
 
 __all__ = [
+    "WorkerManagedD2HRelayVerificationResult",
     "WorkerManagedH2DRelayVerificationResult",
+    "WorkerManagedRelayVerificationResult",
+    "verify_worker_managed_d2h_relay",
     "verify_worker_managed_h2d_relay",
 ]
 

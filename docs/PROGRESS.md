@@ -92,6 +92,10 @@ transfer request objects:
   source and shared pinned CPU destination, requests a daemon-issued `d2h`
   relay plan, submits the worker/helper authorization, waits for daemon-owned
   completion, and releases the relay reservation;
+- `turbobus.verification` now supports both H2D and D2H helper-socket relay
+  verification. The D2H mode allocates a CUDA IPC GPU source, offloads through
+  the daemon-approved worker/helper path into shared pinned CPU memory, checks
+  destination bytes, and asserts daemon reservation release;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -314,6 +318,9 @@ transfer request objects:
 - Added worker-managed client coverage for the D2H daemon-to-worker flow, with
   CUDA IPC source handles, shared pinned CPU destination handles, daemon
   authorization, worker completion reporting, and relay reservation release.
+- Added verification daemon coverage showing the seeded server profile can
+  issue a D2H relay plan and lease for CUDA IPC source to shared pinned CPU
+  destination verification.
 
 ## Immediate Goal
 
@@ -474,18 +481,21 @@ phase:
     caller can offload from a CUDA IPC GPU source into a shared pinned CPU
     destination through daemon planning, worker authorization, worker
     completion reporting, and daemon reservation release.
+53. the CUDA-server verification entry point now has a D2H mode. The same
+    spawned daemon and worker helper path can move real bytes from a CUDA IPC
+    source into shared pinned CPU memory and check the host destination.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
 daemon-managed data movement slice. The worker control-plane smoke helper,
 worker endpoint observability/event-history plumbing, loopback transport
 wrapper, and full worker response lifecycle serialization have been removed.
-The next code should verify the worker-managed H2D relay call on a CUDA server
-through the helper socket by running `python -m turbobus.verification`. If it
-fails, the next code should fix the failing real data-path layer before adding
-new functionality. If it passes, the next functional expansion should verify
-the D2H worker-managed call against real CUDA bytes through the same daemon
-plan path, then expand deeper direct-plus-relay coverage.
+The next code should verify the worker-managed relay calls on a CUDA server
+through the helper socket by running `python -m turbobus.verification
+--direction h2d` and `python -m turbobus.verification --direction d2h`. If
+either fails, the next code should fix the failing real data-path layer before
+adding new functionality. If both pass, the next functional expansion should
+deepen direct-plus-relay verification through the same daemon plan path.
 
 ## Verification
 
