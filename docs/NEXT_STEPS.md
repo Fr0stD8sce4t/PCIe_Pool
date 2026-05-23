@@ -262,6 +262,10 @@ Completed current code cut:
 - Reject transfer planning with buffer handles owned by jobs outside the
   transfer session, including detached legacy jobs, so worker-managed handles
   are session-anchored before lease issuance.
+- Infer daemon plan ownership from registered buffer owners when a transfer
+  request omits `job_id`, and carry that job identity into scheduler leases,
+  transfer status, and worker authorization instead of falling back to the
+  session id.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.

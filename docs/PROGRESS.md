@@ -240,6 +240,9 @@ transfer request objects:
 - daemon transfer planning now requires buffer-owning jobs to belong to the
   transfer session. Detached legacy jobs and cross-session jobs cannot lend
   registered buffers to worker-managed transfer authorization.
+- daemon transfer planning now infers the owning job from registered buffers
+  when the request omits `job_id`, then carries that job id through the
+  scheduler lease, transfer status, and worker authorization path.
 
 ## What Was Updated
 
@@ -770,6 +773,10 @@ phase:
     are not bound to the transfer session. Detached legacy jobs remain
     registerable for compatibility, but their buffers cannot enter
     worker-managed plan/lease authorization.
+86. daemon transfer planning now binds omitted-job requests to the registered
+    buffer owner. The inferred job id is written into scheduler leases, lease
+    tokens, transfer status, and worker authorization, so same-session
+    multi-job transfers cannot fall back to a session-id pseudo owner.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

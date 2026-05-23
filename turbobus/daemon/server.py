@@ -525,11 +525,12 @@ class TurboBusDaemon:
             session = self._sessions.get(session_id)
             if session is None or not session.active:
                 return DaemonResponse(ok=False, error="unknown session")
-            buffer_ids_tuple = self._validate_transfer_buffers_locked(
+            buffer_ids_tuple, owner_job_id = self._validate_transfer_buffers_locked(
                 buffer_ids,
                 job_id=job_id,
                 session_id=session.session_id,
             )
+            plan_job_id = owner_job_id if owner_job_id is not None else job_id
             relay_eligibility = self._relay_eligibility_for_session_locked(session)
             planning_relays = tuple(
                 item["relay_gpu"] for item in relay_eligibility["eligible_relays"]
@@ -567,7 +568,7 @@ class TurboBusDaemon:
                 mode=mode,
                 direction=direction,
                 now=now,
-                job_id=job_id,
+                job_id=plan_job_id,
             )
             transfer_id = str(uuid.uuid4())
             reservations = self._commit_scheduler_leases_locked(
@@ -578,7 +579,7 @@ class TurboBusDaemon:
             )
             status = TransferStatus(
                 transfer_id=transfer_id,
-                job_id=str(job_id or session.session_id),
+                job_id=str(plan_job_id or session.session_id),
                 state=TransferStatusState.SUBMITTED,
                 bytes_total=int(total_bytes),
                 bytes_completed=0,
@@ -749,22 +750,25 @@ class TurboBusDaemon:
         buffer_ids: Iterable[str] | None,
         job_id: str | None,
         session_id: str,
-    ) -> tuple[str, ...]:
+    ) -> tuple[tuple[str, ...], str | None]:
         if buffer_ids is None:
-            return ()
+            return (), None
         normalized = tuple(str(buffer_id) for buffer_id in buffer_ids)
         if not normalized:
-            return ()
+            return (), None
         if any(not buffer_id.strip() for buffer_id in normalized):
             raise ValueError("buffer_ids must be non-empty")
         if len(set(normalized)) != len(normalized):
             raise ValueError("buffer_ids must be unique")
-        owner_job_id = job_id
-        if owner_job_id is None:
-            for job in self._jobs.values():
-                if job.session_id == session_id:
-                    owner_job_id = job.job_id
-                    break
+        owner_job_id = None if job_id is None else str(job_id)
+        for buffer_id in normalized:
+            buffer = self._buffers.get(buffer_id)
+            if buffer is None:
+                raise ValueError(f"unknown buffer: {buffer_id}")
+            if owner_job_id is None:
+                owner_job_id = buffer.job_id
+            if buffer.job_id != str(owner_job_id):
+                raise ValueError("buffer owner does not match job")
         if owner_job_id is None:
             raise ValueError("job_id is required when buffer_ids are provided")
         job = self._jobs.get(str(owner_job_id))
@@ -772,13 +776,7 @@ class TurboBusDaemon:
             raise ValueError("unknown job")
         if job.session_id != session_id:
             raise ValueError("job session does not match transfer session")
-        for buffer_id in normalized:
-            buffer = self._buffers.get(buffer_id)
-            if buffer is None:
-                raise ValueError(f"unknown buffer: {buffer_id}")
-            if buffer.job_id != str(owner_job_id):
-                raise ValueError("buffer owner does not match job")
-        return normalized
+        return normalized, str(owner_job_id)
 
     def _mark_transfer_terminal_if_unblocked_locked(
         self,
