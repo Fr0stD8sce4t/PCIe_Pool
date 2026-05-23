@@ -221,6 +221,11 @@ Completed current code cut:
   `python -m turbobus.verification --mode direct` now starts only the daemon
   and the direct data path; relay and pool modes still start the worker helper
   because they need daemon-authorized relay execution.
+- Require worker-opened shared pinned CPU handles to carry explicit logical
+  backing size metadata. `SharedPinnedCpuBuffer.open_from_registration` now
+  rejects daemon-authorized shared CPU handles that omit
+  `shared_memory_size_bytes` before the worker can host-register the mapping
+  or pass it into CUDA execution.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -257,6 +262,8 @@ Completed current code cut:
      non-complete final state.
    - Clean daemon relay reservations when the final daemon status query fails
      after worker/helper execution.
+   - Require explicit shared pinned CPU backing-size metadata before worker
+     resource binding opens a shared CPU handle.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor

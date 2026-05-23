@@ -72,13 +72,23 @@ class SharedPinnedCpuBuffer:
         metadata = registration.metadata
         name = str(metadata["shared_memory_name"])
         offset = int(metadata["offset_bytes"])
-        shared_size = int(
-            metadata.get(
-                "shared_memory_size_bytes",
-                offset + registration.size_bytes,
+        if "shared_memory_size_bytes" not in metadata:
+            raise ValueError(
+                "shared_pinned_cpu metadata requires shared_memory_size_bytes"
             )
-        )
+        shared_size = int(metadata["shared_memory_size_bytes"])
         shared = shared_memory.SharedMemory(name=name, create=False)
+        actual_shared_size = len(shared.buf)
+        try:
+            _validate_shared_memory_backing(
+                offset_bytes=offset,
+                size_bytes=registration.size_bytes,
+                declared_shared_memory_size=shared_size,
+                actual_shared_memory_size=actual_shared_size,
+            )
+        except Exception:
+            shared.close()
+            raise
         return cls(
             buffer_id=registration.buffer_id,
             job_id=registration.job_id,
@@ -308,6 +318,32 @@ def _set_cuda_device_if_available(backend, device_index: int) -> None:
     setter = getattr(backend, "set_device", None)
     if callable(setter):
         setter(int(device_index))
+
+
+def _validate_shared_memory_backing(
+    *,
+    offset_bytes: int,
+    size_bytes: int,
+    declared_shared_memory_size: int,
+    actual_shared_memory_size: int,
+) -> None:
+    offset = int(offset_bytes)
+    size = int(size_bytes)
+    declared = int(declared_shared_memory_size)
+    actual = int(actual_shared_memory_size)
+    span = offset + size
+    if span > declared:
+        raise ValueError(
+            "shared_pinned_cpu shared_memory_size_bytes is smaller than buffer span"
+        )
+    if span > actual:
+        raise ValueError(
+            "shared_pinned_cpu backing is smaller than authorized buffer span"
+        )
+    if declared > actual:
+        raise ValueError(
+            "shared_pinned_cpu backing is smaller than declared shared memory size"
+        )
 
 
 __all__ = [

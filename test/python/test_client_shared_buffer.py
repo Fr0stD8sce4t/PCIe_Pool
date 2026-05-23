@@ -7,7 +7,7 @@ from turbobus.client import (
     SharedPinnedCpuBuffer,
     SharedPinnedCpuBufferAllocator,
 )
-from turbobus.schema import DaemonResponse
+from turbobus.schema import BufferRegistration, DaemonResponse
 
 
 class FakeCudaBackend:
@@ -74,6 +74,28 @@ class SharedPinnedCpuBufferTest(unittest.TestCase):
                 self.assertEqual(buffer.read(5, offset=16), b"relay")
             finally:
                 opened.close()
+
+    def test_open_requires_shared_memory_size_metadata(self) -> None:
+        allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-test")
+
+        with allocator.allocate("cpu-buffer", "job-1", 64) as buffer:
+            registration = BufferRegistration(
+                buffer_id="cpu-buffer",
+                job_id="job-1",
+                kind="cpu_pinned",
+                size_bytes=64,
+                pinned=True,
+                handle_type="shared_pinned_cpu",
+                metadata={
+                    "shared_memory_name": buffer.shared_memory_name,
+                    "offset_bytes": 0,
+                },
+            )
+
+            with self.assertRaisesRegex(ValueError, "shared_memory_size_bytes"):
+                SharedPinnedCpuBuffer.open_from_registration(registration)
+
+            self.assertFalse(buffer.closed)
 
     def test_buffer_registers_shared_memory_with_cuda_backend(self) -> None:
         allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-test")

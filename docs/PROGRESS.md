@@ -187,6 +187,9 @@ transfer request objects:
   daemon-approved direct data path without launching a worker helper; relay and
   pool verifier modes still use the helper socket because they execute
   daemon-authorized relay chunks;
+- worker-opened shared pinned CPU handles now require explicit
+  `shared_memory_size_bytes` metadata before the worker can reopen the shared
+  memory mapping, host-register it with CUDA, or pass it into the executor;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -684,6 +687,11 @@ phase:
     `turbobus.verification --mode direct` verifies the daemon-approved direct
     data path without starting the worker helper socket, while relay and pool
     verifier modes continue to use the helper process.
+75. worker shared CPU handle opening now requires explicit logical backing
+    size metadata. `SharedPinnedCpuBuffer.open_from_registration` rejects
+    shared pinned CPU registrations that omit `shared_memory_size_bytes`, so
+    worker resource binding cannot host-register an underspecified CPU mapping
+    before CUDA execution.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
