@@ -102,14 +102,20 @@ Completed current code cut:
   through a completion-only worker service envelope, and
   `WorkerServiceSocketClient` can send that envelope to the Unix socket helper
   path without requiring an in-process lifecycle record.
+- Add a CUDA-server verification entry point for the worker-managed H2D relay
+  path. `python -m turbobus.verification` starts a daemon socket, starts a
+  worker helper socket process, allocates shared CPU source memory and a CUDA
+  IPC target tensor, runs the relay transfer, checks target bytes, and asserts
+  that the daemon released relay reservations.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
-   - Allocate a real shared pinned CPU source and CUDA IPC target buffer.
-   - Run the worker-managed client path through the worker helper socket and
-     CUDA worker executor.
-   - Verify bytes land on the target GPU and the daemon releases the relay
-     reservation.
+   - Run `python -m turbobus.verification --target-gpu 0 --relay-gpu 1`.
+   - If it fails, fix the failing real data-path layer first: shared CPU
+     binding, CUDA IPC target opening, relay runtime execution, daemon status,
+     or reservation release.
+   - Treat the current task as complete only after bytes land on the target GPU
+     and the daemon releases the relay reservation on the CUDA server.
 
 2. Add cleanup and isolation only where the real path needs it.
    - Validate lease tokens before touching relay resources.

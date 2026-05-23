@@ -63,6 +63,11 @@ transfer request objects:
   boundary through a completion-only worker service envelope, so a socket
   helper can execute the daemon-authorized request without returning an
   in-process lifecycle record;
+- `turbobus.verification` now provides the CUDA-server verification entry
+  point for the first real worker-managed H2D relay path. It starts daemon and
+  worker helper sockets, runs the worker-managed relay transfer with shared CPU
+  source memory and a CUDA IPC target tensor, verifies the target bytes, and
+  asserts daemon reservation release;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -265,6 +270,10 @@ transfer request objects:
   client and Unix socket helper boundary. The Windows local run skips the
   Unix socket case, but the envelope path verifies completion-only helper
   output and daemon reservation release.
+- Added `test/python/test_verification.py` coverage for the verification
+  daemon setup. It confirms the server verifier seeds a relay-capable topology
+  and profile that produce a relay plan and lease before CUDA hardware is
+  required.
 
 ## Immediate Goal
 
@@ -399,6 +408,11 @@ phase:
     client. The client submits a worker service envelope, consumes the returned
     data-plane completion envelope, and no longer requires the worker helper to
     return local lifecycle state.
+47. a CUDA-server verification entry point now exists for the real
+    helper-socket H2D relay path. It uses spawned daemon and worker helper
+    processes, shared CPU memory, a CUDA IPC target tensor, daemon-issued relay
+    lease, worker CUDA executor, byte comparison, and daemon reservation-release
+    assertions.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
@@ -406,9 +420,9 @@ daemon-managed data movement slice. The worker control-plane smoke helper,
 worker endpoint observability/event-history plumbing, loopback transport
 wrapper, and full worker response lifecycle serialization have been removed.
 The next code should verify the worker-managed H2D relay call on a CUDA server
-through the helper socket and add only the minimum hardware-facing check needed
-to prove bytes moved through shared CPU memory, relay staging, and the CUDA IPC
-target buffer.
+through the helper socket by running `python -m turbobus.verification`. If it
+fails, the next code should fix the failing real data-path layer before adding
+new functionality.
 
 ## Verification
 
@@ -438,6 +452,8 @@ $env:PYTHONPATH='.'; python test/python/test_client_shared_buffer.py
 $env:PYTHONPATH='.'; python test/python/test_client_worker_transfer.py
 $env:PYTHONPATH='.'; python test/python/test_worker_transport.py
 $env:PYTHONPATH='.'; python test/python/test_worker_process.py
+$env:PYTHONPATH='.'; python test/python/test_verification.py
+$env:PYTHONPATH='.'; python -m turbobus.verification --help
 $env:PYTHONPATH='.'; python -m compileall turbobus
 ```
 
