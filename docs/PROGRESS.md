@@ -128,6 +128,9 @@ transfer request objects:
   direct or relay plan chunk against the registered source and destination
   buffer sizes before worker staging allocation, so pooled plans cannot pass
   an out-of-bounds direct chunk into native CUDA execution;
+- daemon transfer-status updates now reject `complete` states unless
+  `bytes_completed` equals the daemon-owned `bytes_total`, so the daemon cannot
+  record an incomplete worker/helper transfer as successful completion;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -368,6 +371,8 @@ transfer request objects:
   `complete` results fail before relay reservation release.
 - Added schema and worker-helper coverage proving out-of-bounds daemon-plan
   chunks fail before worker staging allocation.
+- Added schema and daemon-state coverage proving incomplete `complete`
+  transfer-status updates are rejected without changing the recorded status.
 
 ## Immediate Goal
 
@@ -562,6 +567,9 @@ phase:
     chunks against registered buffer sizes before staging allocation. This
     covers pooled direct-plus-relay plans where the relay-authorized ranges are
     valid but a direct chunk would otherwise reach native CUDA out of bounds.
+62. daemon transfer-status updates now reject incomplete completion. A
+    transfer cannot enter daemon-owned `complete` state unless
+    `bytes_completed` equals the transfer's `bytes_total`.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

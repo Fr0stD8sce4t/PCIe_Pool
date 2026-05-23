@@ -354,6 +354,14 @@ class SchemaTest(unittest.TestCase):
                 bytes_total=1,
                 bytes_completed=2,
             )
+        with self.assertRaisesRegex(ValueError, "bytes_total completed"):
+            TransferStatus(
+                transfer_id="transfer-1",
+                job_id="job-1",
+                state=TransferStatusState.COMPLETE,
+                bytes_total=2,
+                bytes_completed=1,
+            )
         with self.assertRaises(ValueError):
             WorkerTransferAuthorizationRequest(
                 transfer_id="transfer-1",

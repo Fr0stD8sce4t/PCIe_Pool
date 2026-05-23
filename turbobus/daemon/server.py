@@ -334,19 +334,22 @@ class TurboBusDaemon:
                 return DaemonResponse(ok=False, error="unknown transfer")
             if state is None and bytes_completed is None and error is None:
                 return DaemonResponse(ok=True, payload={"status": asdict(status)})
-            updated = TransferStatus(
-                transfer_id=status.transfer_id,
-                job_id=status.job_id,
-                state=status.state if state is None else TransferStatusState(state),
-                bytes_total=status.bytes_total,
-                bytes_completed=(
-                    status.bytes_completed
-                    if bytes_completed is None
-                    else int(bytes_completed)
-                ),
-                session_id=status.session_id,
-                error=status.error if error is None else error,
-            )
+            try:
+                updated = TransferStatus(
+                    transfer_id=status.transfer_id,
+                    job_id=status.job_id,
+                    state=status.state if state is None else TransferStatusState(state),
+                    bytes_total=status.bytes_total,
+                    bytes_completed=(
+                        status.bytes_completed
+                        if bytes_completed is None
+                        else int(bytes_completed)
+                    ),
+                    session_id=status.session_id,
+                    error=status.error if error is None else error,
+                )
+            except ValueError as exc:
+                return DaemonResponse(ok=False, error=str(exc))
             self._transfer_statuses[updated.transfer_id] = updated
             return DaemonResponse(ok=True, payload={"status": asdict(updated)})
 

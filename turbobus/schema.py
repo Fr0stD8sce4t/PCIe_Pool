@@ -187,9 +187,12 @@ class TransferStatus:
             raise ValueError("bytes_completed must be non-negative")
         if bytes_completed > bytes_total:
             raise ValueError("bytes_completed cannot exceed bytes_total")
+        state = TransferStatusState(self.state)
+        if state is TransferStatusState.COMPLETE and bytes_completed != bytes_total:
+            raise ValueError("complete transfer must report bytes_total completed")
         object.__setattr__(self, "transfer_id", str(self.transfer_id))
         object.__setattr__(self, "job_id", str(self.job_id))
-        object.__setattr__(self, "state", TransferStatusState(self.state))
+        object.__setattr__(self, "state", state)
         object.__setattr__(self, "bytes_total", bytes_total)
         object.__setattr__(self, "bytes_completed", bytes_completed)
         if self.session_id is not None:

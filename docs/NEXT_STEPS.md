@@ -166,6 +166,9 @@ Completed current code cut:
   registered source or destination buffer sizes before staging allocation, so
   pooled direct-plus-relay plans cannot pass an out-of-bounds direct chunk into
   native CUDA execution.
+- Reject daemon transfer-status updates that try to mark a transfer complete
+  before the full daemon-planned byte count has been reported, so an incomplete
+  worker/helper copy cannot become a daemon-owned successful completion.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -187,6 +190,7 @@ Completed current code cut:
      releasing relay reservations.
    - Validate all daemon-plan chunks against registered buffer sizes before
      worker staging allocation.
+   - Reject incomplete daemon transfer-status completion updates.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor

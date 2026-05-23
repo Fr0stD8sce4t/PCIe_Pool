@@ -1548,6 +1548,39 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(updated.payload["status"]["state"], "running")
         self.assertEqual(updated.payload["status"]["bytes_completed"], 32)
 
+    def test_transfer_status_rejects_incomplete_complete_update(self) -> None:
+        daemon = TurboBusDaemon(relay_gpus=[1])
+        register = daemon.register_session(target_gpu=0, requested_relays=[1])
+        session_id = register.payload["session"]["session_id"]
+
+        planned = daemon.plan_transfer(
+            session_id=session_id,
+            total_bytes=64,
+            chunk_bytes=16,
+            mode="direct",
+            direction="h2d",
+            job_id="job-1",
+        )
+        transfer_id = planned.payload["transfer_id"]
+
+        rejected = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.TRANSFER_STATUS,
+                payload={
+                    "transfer_id": transfer_id,
+                    "state": "complete",
+                    "bytes_completed": 32,
+                },
+            )
+        )
+
+        self.assertFalse(rejected.ok)
+        self.assertIn("bytes_total completed", rejected.error)
+        status = daemon.transfer_status(transfer_id)
+        self.assertTrue(status.ok)
+        self.assertEqual(status.payload["status"]["state"], "submitted")
+        self.assertEqual(status.payload["status"]["bytes_completed"], 0)
+
     def test_plan_transfer_falls_back_direct_when_relay_quota_is_unavailable(self) -> None:
         daemon = TurboBusDaemon(
             relay_gpus=[1],
