@@ -131,6 +131,10 @@ transfer request objects:
 - daemon transfer-status updates now reject `complete` states unless
   `bytes_completed` equals the daemon-owned `bytes_total`, so the daemon cannot
   record an incomplete worker/helper transfer as successful completion;
+- the worker-managed client now treats helper `complete` as insufficient on
+  its own: it requires the daemon-owned final transfer status to be `complete`
+  with the requested byte count, and cleans the relay reservation if the daemon
+  status remains submitted, failed, canceled, or byte-mismatched;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -373,6 +377,8 @@ transfer request objects:
   chunks fail before worker staging allocation.
 - Added schema and daemon-state coverage proving incomplete `complete`
   transfer-status updates are rejected without changing the recorded status.
+- Added worker-managed client coverage proving helper-only completion cannot
+  return success unless daemon-owned completion is also recorded.
 
 ## Immediate Goal
 
@@ -570,6 +576,10 @@ phase:
 62. daemon transfer-status updates now reject incomplete completion. A
     transfer cannot enter daemon-owned `complete` state unless
     `bytes_completed` equals the transfer's `bytes_total`.
+63. worker-managed client calls now require daemon-owned final completion after
+    worker/helper completion. If the helper reports complete but the daemon
+    status is not complete with the expected byte count, the client cleans the
+    relay reservation and raises an error.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

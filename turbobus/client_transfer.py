@@ -217,6 +217,19 @@ class WorkerManagedTransferClient:
                 or final_status.get("error")
                 or "worker-managed transfer did not complete"
             )
+        try:
+            _require_daemon_transfer_complete(
+                final_status,
+                expected_bytes=transfer_request.total_bytes,
+            )
+        except Exception:
+            _cleanup_planned_relay_lease(
+                self.daemon_client,
+                lease_token,
+                reason="daemon_completion_mismatch",
+                strict=False,
+            )
+            raise
         return WorkerManagedTransferResult(
             transfer_id=str(planned.payload["transfer_id"]),
             session_id=session_id,
@@ -346,6 +359,35 @@ def _cleanup_planned_relay_lease(
     )
     if strict:
         _require_ok(response, "daemon reservation cleanup failed")
+
+
+def _require_daemon_transfer_complete(
+    final_status: Mapping[str, object],
+    *,
+    expected_bytes: int,
+) -> None:
+    if not isinstance(final_status, Mapping):
+        raise TypeError("final_status must be a mapping")
+    expected = int(expected_bytes)
+    state = final_status.get("state", "unknown")
+    state_text = str(getattr(state, "value", state))
+    if state_text != "complete":
+        error = final_status.get("error")
+        suffix = f": {error}" if error else ""
+        raise RuntimeError(
+            f"daemon transfer status did not complete: {state_text}{suffix}"
+        )
+    bytes_total = int(final_status.get("bytes_total", expected))
+    if bytes_total != expected:
+        raise RuntimeError(
+            f"daemon transfer byte total mismatch: {bytes_total} != {expected}"
+        )
+    bytes_completed = int(final_status.get("bytes_completed", -1))
+    if bytes_completed != expected:
+        raise RuntimeError(
+            "daemon transfer completed an unexpected byte count: "
+            f"{bytes_completed} != {expected}"
+        )
 
 
 @dataclass(frozen=True)
