@@ -35,21 +35,13 @@ transfer request objects:
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
   adapter modules.
-- worker endpoint observability requests now record a separate event stream
-  with request and response byte counts while keeping the returned snapshot
-  payload stable.
 - `turbobus.worker.transport` now defines a transport protocol and loopback
-  adapter for the in-process worker endpoint without changing request or
-  observability semantics.
+  adapter for the in-process worker endpoint.
 - `turbobus.worker.transport` now also provides a Unix socket transport shell
-  that forwards worker and observability messages through the same endpoint
-  behavior.
+  that forwards worker messages through the same endpoint behavior.
 - `turbobus.worker.process` now provides the worker helper-process entrypoint,
   and `python -m turbobus.worker` can serve the in-process worker endpoint over
   the Unix socket transport.
-- worker process coverage now includes a subprocess smoke path that launches
-  `python -m turbobus.worker` and exercises worker request plus observability
-  round-trips over the Unix socket transport.
 - daemon control plane now exposes backend-neutral relay discovery snapshots
   with per-relay eligibility, quota, active sessions, active reservations, and
   redacted lease bookkeeping across jobs.
@@ -185,31 +177,6 @@ transfer request objects:
 - `WorkerServiceEndpoint` now provides a transport-neutral worker service
   endpoint with a single `handle_message` entry point for future socket or IPC
   transports.
-- `WorkerEndpointEvent` now records request size, response size, ok/error
-  status, final state, and completion presence for each endpoint
-  `handle_message` call.
-- `WorkerServiceEndpoint.describe()` now summarizes recorded endpoint events
-  with total request count, last event, final-state counts, error count, and
-  completion count.
-- `WorkerServiceEndpoint.clear_events()` now returns the current describe
-  snapshot, clears recorded endpoint events, and resets `last_event`.
-- `WorkerServiceEndpoint` now accepts an optional `max_events` history limit so
-  long-running helper processes can bound retained endpoint event records.
-- `WorkerServiceEndpoint.describe()` now reports endpoint configuration fields
-  for `max_events`, retained event count, and whether event history is bounded.
-- `WorkerServiceEndpoint.event_snapshot()` now returns retained endpoint event
-  records as copied dictionaries for future transport observability.
-- `WorkerServiceEndpoint.describe()` now includes retained event records under
-  the stable `events` field for future transport observability clients.
-- `WorkerServiceEndpoint.health_snapshot()` now reports in-process endpoint
-  readiness from retained events, and `describe()` includes it under `health`.
-- `WorkerServiceEndpoint.metrics_snapshot()` now reports retained request and
-  response byte counts, and `describe()` includes it under `metrics`.
-- `WorkerServiceEndpoint.observability_snapshot()` now combines `describe()`,
-  retained events, health, and metrics under one stable in-process payload.
-- `WorkerServiceEndpoint.handle_observability_message()` now records a
-  separate observability event stream and `clear_events()` clears both worker
-  and observability histories.
 - `turbobus.worker.transport` now provides a loopback transport wrapper and a
   transport protocol for the worker service boundary.
 - `turbobus.worker.transport` now also provides a Unix socket transport shell
@@ -217,10 +184,12 @@ transfer request objects:
 - `turbobus.worker.process` now builds the daemon client, worker endpoint, and
   Unix socket transport for a helper-process entrypoint.
 - `test/python/test_worker_process.py` now covers the helper-process builder,
-  CLI argument parsing, bounded request serving, and a subprocess worker socket
-  smoke path.
-- worker endpoint observability snapshots now have JSON-safe encode/decode
-  helpers for future transport observability clients.
+  CLI argument parsing, and bounded request serving.
+- Removed worker endpoint observability/event-history scaffolding from
+  `turbobus.worker.endpoint`, `turbobus.worker.codec`, and
+  `turbobus.worker.transport`; the worker helper boundary is now a single
+  request/response `handle_message` path for daemon-approved transfer
+  execution.
 - `TurboBusDaemon.discover_relays()` now reports cross-job relay occupancy,
   target-specific inventory eligibility, quota availability, active
   reservations, and redacted active lease records without exposing lease
@@ -332,54 +301,24 @@ phase:
 34. a transport-neutral worker service endpoint now wraps the encoded message
     handler behind one `handle_message` entry point without adding sockets or
     IPC.
-35. worker endpoint request/response events now record message sizes, final
-    states, ok/error status, and completion presence while preserving encoded
-    responses.
-36. worker endpoint describe snapshots now summarize recorded message events
-    without changing encoded responses.
-37. worker endpoint event reset now clears recorded events after returning the
-    current snapshot.
-38. worker endpoint event history limits now keep only the newest retained
-    events while preserving `last_event` and encoded responses.
-39. worker endpoint describe snapshots now report `max_events`,
-    `retained_event_count`, and `history_bounded` without changing encoded
-    worker response payloads.
-40. worker endpoint event snapshots now expose retained events as copied
-    dictionaries without giving callers direct access to the mutable event
-    list.
-41. worker endpoint describe snapshots now include retained event records under
-    a stable `events` field without changing encoded worker response payloads.
-42. worker endpoint health snapshots now summarize retained event readiness and
-    surface the same health block through `describe()`.
-43. worker endpoint metrics snapshots now summarize retained request and
-    response byte counts and surface the same metrics block through
-    `describe()`.
-44. worker endpoint observability snapshots now combine `describe()`, retained
-    events, health, and metrics under one stable in-process payload.
-45. worker endpoint observability snapshots now round-trip through JSON-safe
-    encode/decode helpers without changing encoded worker response payloads.
-46. an in-process worker endpoint observability message handler now returns an
-    encoded observability snapshot for future socket or IPC observability
-    requests without changing worker response payloads.
-47. an in-process worker observability request envelope and codec helper now
-    let future transports explicitly trigger the endpoint observability
-    handler without changing worker response payloads.
-48. worker endpoint observability request/response event tracking now records
-    observability message sizes separately from the normal worker event stream
-    while keeping the returned snapshot payload stable.
-49. daemon relay discovery now reports backend-neutral relay eligibility,
+35. worker endpoint observability/event-history scaffolding has been removed
+    from the endpoint, codec, transport, exports, and tests. The worker helper
+    boundary now keeps only the request/response path needed for future real
+    transfer execution.
+36. daemon relay discovery now reports backend-neutral relay eligibility,
     quota availability, cross-job session ownership, active reservations, and
     redacted lease records without changing direct fallback behavior.
-50. make the worker service boundary transport-neutral so future socket or IPC
+37. make the worker service boundary transport-neutral so future socket or IPC
     transports can reuse the in-process helper contract without changing
-    authorization, lifecycle, or observability handling.
+    authorization or lifecycle handling.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
-daemon-managed data movement slice. Before adding the CUDA worker data path,
-remove smoke-only helpers, endpoint observability/event-history plumbing,
-extra socket wrappers, and unsupported-lifecycle serialization that do not
-serve real transfer execution.
+daemon-managed data movement slice. The worker control-plane smoke helper and
+worker endpoint observability/event-history plumbing have been removed. Before
+adding the CUDA worker data path, continue trimming any remaining unused
+socket wrappers or unsupported-lifecycle serialization that do not serve real
+transfer execution.
 
 After that cleanup, the next code should execute daemon-issued transfer plans
 exactly, define the first registered buffer handles, and replace the
@@ -415,8 +354,8 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
 ## Remaining Work
 
 - continue removing non-functional scaffold before the worker data path:
-  endpoint observability, event-history metrics, unused socket wrappers, and
-  unsupported-lifecycle response fields that are not needed by real execution;
+  unused socket wrappers and unsupported-lifecycle response fields that are not
+  needed by real execution;
 - keep the minimum daemon/client/worker spine for job and buffer registration,
   transfer requests, exact plans, leases, lease validation, worker
   authorization, staging ownership, completion, cleanup, and direct fallback;

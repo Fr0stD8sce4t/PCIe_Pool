@@ -7,19 +7,12 @@ from typing import Any
 from typing import Protocol, runtime_checkable
 from threading import Event
 
-from .codec import (
-    WorkerMessageCodecError,
-    decode_worker_observability_request_envelope,
-)
 from .endpoint import WorkerServiceEndpoint
 
 
 @runtime_checkable
 class WorkerServiceTransport(Protocol):
     def handle_message(self, message: str | bytes) -> str:
-        raise NotImplementedError
-
-    def handle_observability_message(self, message: str | bytes) -> str:
         raise NotImplementedError
 
 
@@ -33,9 +26,6 @@ class WorkerServiceLoopbackTransport:
 
     def handle_message(self, message: str | bytes) -> str:
         return self.endpoint.handle_message(message)
-
-    def handle_observability_message(self, message: str | bytes) -> str:
-        return self.endpoint.handle_observability_message(message)
 
 
 @dataclass
@@ -52,9 +42,6 @@ class WorkerServiceUnixSocketTransport:
         self.socket_path = socket_path
 
     def handle_message(self, message: str | bytes) -> str:
-        return self._send(message)
-
-    def handle_observability_message(self, message: str | bytes) -> str:
         return self._send(message)
 
     def serve_forever(
@@ -89,20 +76,13 @@ class WorkerServiceUnixSocketTransport:
                     data = _read_message(conn)
                     if not data:
                         continue
-                    response = self._handle_wire_message(data)
+                    response = self.endpoint.handle_message(data)
                     conn.sendall((response + "\n").encode("utf-8"))
                     request_count += 1
         finally:
             server.close()
             if os.path.exists(self.socket_path):
                 os.unlink(self.socket_path)
-
-    def _handle_wire_message(self, message: bytes) -> str:
-        try:
-            decode_worker_observability_request_envelope(message)
-        except WorkerMessageCodecError:
-            return self.endpoint.handle_message(message)
-        return self.endpoint.handle_observability_message(message)
 
     def _send(self, message: str | bytes) -> str:
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

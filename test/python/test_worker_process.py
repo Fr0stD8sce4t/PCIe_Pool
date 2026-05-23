@@ -12,11 +12,8 @@ from unittest.mock import Mock, patch
 
 from turbobus.worker import (
     WorkerServiceEndpoint,
-    WorkerServiceObservabilityRequestEnvelope,
     WorkerServiceUnixSocketTransport,
-    decode_worker_observability_snapshot,
     decode_worker_response_envelope,
-    encode_worker_observability_request_envelope,
 )
 from turbobus.worker.process import (
     build_worker_helper_transport,
@@ -99,7 +96,7 @@ class WorkerProcessTest(unittest.TestCase):
                     "--socket-path",
                     worker_socket,
                     "--max-requests",
-                    "2",
+                    "1",
                 ],
                 cwd=os.getcwd(),
                 stdout=subprocess.PIPE,
@@ -113,25 +110,6 @@ class WorkerProcessTest(unittest.TestCase):
                 worker_payload = decode_worker_response_envelope(worker_response)
                 self.assertFalse(worker_payload.ok)
                 self.assertEqual(worker_payload.final_state, "parse_failed")
-
-                observability_request = encode_worker_observability_request_envelope(
-                    WorkerServiceObservabilityRequestEnvelope()
-                )
-                observability_response = _send_worker_message(
-                    worker_socket,
-                    observability_request,
-                )
-                observability = decode_worker_observability_snapshot(
-                    observability_response
-                )
-
-                self.assertEqual(observability["describe"]["total_requests"], 1)
-                self.assertEqual(
-                    observability["describe"]["observability_total_requests"],
-                    0,
-                )
-                self.assertEqual(observability["events"][0]["final_state"], "parse_failed")
-                self.assertEqual(observability["health"]["status"], "degraded")
 
                 stdout, stderr = process.communicate(timeout=5)
                 self.assertEqual(process.returncode, 0, stderr)

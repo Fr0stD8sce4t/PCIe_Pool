@@ -388,22 +388,6 @@ class WorkerServiceRequestEnvelope:
 
 
 @dataclass(frozen=True)
-class WorkerServiceObservabilityRequestEnvelope:
-    request_type: str = "observability"
-
-    def __post_init__(self) -> None:
-        request_type = str(self.request_type)
-        if request_type != "observability":
-            raise ValueError("request_type must be observability")
-        object.__setattr__(self, "request_type", request_type)
-
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "request_type": self.request_type,
-        }
-
-
-@dataclass(frozen=True)
 class WorkerServiceResponseEnvelope:
     ok: bool
     lifecycle: Mapping[str, object] | None = None
@@ -951,7 +935,6 @@ __all__ = [
     "WorkerDataPlaneCompletion",
     "WorkerDataPlaneCompletionEnvelope",
     "WorkerDataPlaneRequest",
-    "WorkerServiceObservabilityRequestEnvelope",
     "WorkerServiceRequestEnvelope",
     "WorkerServiceResponseEnvelope",
     "WorkerStatusReportError",

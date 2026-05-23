@@ -2,7 +2,6 @@ from .helper import (
     UnsupportedWorkerExecution,
     WorkerAuthorizationError,
     WorkerCleanupError,
-    WorkerServiceObservabilityRequestEnvelope,
     WorkerServiceRequestEnvelope,
     WorkerServiceResponseEnvelope,
     WorkerStatusReportError,
@@ -23,18 +22,13 @@ from .helper import (
 )
 from .codec import (
     WorkerMessageCodecError,
-    decode_worker_observability_request_envelope,
-    decode_worker_observability_snapshot,
     decode_worker_request_envelope,
     decode_worker_response_envelope,
-    encode_worker_observability_request_envelope,
-    encode_worker_observability_snapshot,
     encode_worker_request_envelope,
     encode_worker_response_envelope,
-    handle_worker_observability_message,
     handle_worker_service_message,
 )
-from .endpoint import WorkerEndpointEvent, WorkerServiceEndpoint
+from .endpoint import WorkerServiceEndpoint
 from .process import (
     build_worker_helper_transport,
     main as worker_process_main,
@@ -55,10 +49,8 @@ __all__ = [
     "UnsupportedWorkerExecution",
     "WorkerAuthorizationError",
     "WorkerCleanupError",
-    "WorkerServiceObservabilityRequestEnvelope",
     "WorkerServiceRequestEnvelope",
     "WorkerServiceResponseEnvelope",
-    "WorkerEndpointEvent",
     "WorkerServiceEndpoint",
     "WorkerServiceLoopbackTransport",
     "WorkerStatusReportError",
@@ -84,15 +76,10 @@ __all__ = [
     "WorkerServiceTransport",
     "WorkerServiceUnixSocketTransport",
     "WorkerMessageCodecError",
-    "decode_worker_observability_request_envelope",
-    "decode_worker_observability_snapshot",
     "decode_worker_request_envelope",
     "decode_worker_response_envelope",
-    "encode_worker_observability_request_envelope",
-    "encode_worker_observability_snapshot",
     "encode_worker_request_envelope",
     "encode_worker_response_envelope",
-    "handle_worker_observability_message",
     "handle_worker_service_message",
     "parse_worker_authorization_request_payload",
 ]

@@ -3,8 +3,10 @@
 ## Current Direction
 
 Stop extending the control-plane skeleton as the main line of work. The daemon,
-worker service boundary, socket shell, request envelopes, staging-pool records,
-and observability helpers are enough scaffolding for now.
+worker service boundary, socket shell, request envelopes, and staging-pool
+records are enough scaffolding for now. Worker endpoint observability and event
+history have been removed and should not be rebuilt before real data movement
+needs them.
 
 The next phase is to make TurboBus work as a whole PCIe-pooling system, even if
 the first version is narrow. The priority is real data movement through a
@@ -36,6 +38,7 @@ Delete or fold down code that only supports the old unsupported path:
 - standalone smoke helpers and smoke-only tests; done for the worker
   control-plane smoke helper;
 - endpoint observability snapshots, metrics, event history, and reset plumbing;
+  done for the worker endpoint, codec, transport, and process path;
 - extra socket/transport wrappers that do not carry real transfer execution;
 - response envelope fields that only serialize unsupported lifecycle details;
 - protocol fields that are not consumed by daemon planning, lease validation,
