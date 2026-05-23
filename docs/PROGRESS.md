@@ -97,6 +97,9 @@ transfer request objects:
 - daemon plan responses now include a `planning` block with the profile key,
   requested relays, eligible relays, and filtered relays with inventory-derived
   reasons.
+- daemon profile/describe payloads now include `system_cleanup_events` for
+  stale sessions, closed sessions, and canceled reservations, and planned
+  transfers canceled by session cleanup are marked `canceled`.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -150,12 +153,15 @@ phase:
 16. daemon plan responses now surface inventory-derived planning metadata, so
     clients and tests can see which relays were eligible or filtered without
     changing transfer execution.
+17. daemon-generated cleanup outcomes are now visible through
+    `system_cleanup_events`, including stale session cleanup and reservation
+    cancellation caused by session cleanup.
 
-The next immediate goal is to add daemon-side lease and transfer cleanup
-observability for stale sessions and canceled reservations, so future
-worker/helper failures have visible control-plane outcomes. This should remain
-daemon state/reporting only and should not add worker execution, CUDA IPC, or
-hardware discovery.
+The next immediate goal is to add a small daemon client helper and socket
+coverage for the daemon profile/describe path so cleanup observability is
+available through the same control-plane client used by workers and runtimes.
+This should remain reporting only and should not add worker execution, CUDA IPC,
+or hardware discovery.
 
 ## Verification
 
@@ -193,7 +199,9 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
   direct fallback behavior; done as the first scheduling-input cut;
 - surface inventory-derived planning metadata in daemon responses; done as the
   first observability cut;
-- add daemon cleanup observability for stale sessions and canceled reservations;
+- add daemon cleanup observability for stale sessions and canceled
+  reservations; done through `system_cleanup_events`;
+- add a daemon client helper for profile/describe reporting;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

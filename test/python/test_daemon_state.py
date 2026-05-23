@@ -591,6 +591,7 @@ class DaemonStateTest(unittest.TestCase):
         session_id = register.payload["session"]["session_id"]
         reserved = daemon.reserve_transfer(session_id, relay_gpu=1, chunks=4)
         self.assertTrue(reserved.ok)
+        reservation_id = reserved.payload["reservation"]["reservation_id"]
 
         daemon._sessions[session_id].last_seen = time.time() - 10.0
         expired = daemon.reap_stale_sessions(now=time.time())
@@ -600,6 +601,24 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(profile["relay_quotas"][1]["active_chunks"], 0)
         self.assertEqual(profile["relay_quotas"][1]["sessions"], [])
         self.assertEqual(profile["sessions"], {})
+        self.assertIn(
+            {
+                "target_kind": "session",
+                "target_id": session_id,
+                "reason": "stale_session_timeout",
+                "force": True,
+            },
+            profile["system_cleanup_events"],
+        )
+        self.assertIn(
+            {
+                "target_kind": "reservation",
+                "target_id": reservation_id,
+                "reason": "stale_session_timeout",
+                "force": True,
+            },
+            profile["system_cleanup_events"],
+        )
 
         reopened = daemon.register_session(target_gpu=0, requested_relays=[1], max_inflight_chunks=4)
         self.assertTrue(reopened.ok)
@@ -614,12 +633,31 @@ class DaemonStateTest(unittest.TestCase):
         session_id = register.payload["session"]["session_id"]
         reserved = daemon.reserve_transfer(session_id, relay_gpu=1, chunks=4)
         self.assertTrue(reserved.ok)
+        reservation_id = reserved.payload["reservation"]["reservation_id"]
 
         closed = daemon.close_session(session_id)
         self.assertTrue(closed.ok)
 
         profile = daemon.describe()
         self.assertEqual(profile.payload["relay_quotas"][1]["active_chunks"], 0)
+        self.assertIn(
+            {
+                "target_kind": "session",
+                "target_id": session_id,
+                "reason": "session_closed",
+                "force": True,
+            },
+            profile.payload["system_cleanup_events"],
+        )
+        self.assertIn(
+            {
+                "target_kind": "reservation",
+                "target_id": reservation_id,
+                "reason": "session_closed",
+                "force": True,
+            },
+            profile.payload["system_cleanup_events"],
+        )
 
     def test_transfer_reservation_uses_session_chunk_quota(self) -> None:
         daemon = TurboBusDaemon(
@@ -1152,6 +1190,77 @@ class DaemonStateTest(unittest.TestCase):
         self.assertTrue(completed.ok)
         self.assertEqual(completed.payload["status"]["state"], "complete")
         self.assertEqual(completed.payload["status"]["bytes_completed"], 64)
+
+    def test_close_session_marks_planned_transfer_canceled_and_reports_cleanup(self) -> None:
+        daemon = TurboBusDaemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=1,
+            max_inflight_chunks_per_relay=8,
+        )
+        register = daemon.register_session(
+            target_gpu=0,
+            requested_relays=[1],
+            max_inflight_chunks=8,
+        )
+        session_id = register.payload["session"]["session_id"]
+        daemon.put_profile(
+            target_gpu=0,
+            relay_gpus=[1],
+            profile={
+                "target_device": 0,
+                "direct_h2d_bw_gbps": 7.5,
+                "direct_d2h_bw_gbps": 6.5,
+                "relays": [
+                    {
+                        "relay_device": 1,
+                        "target_device": 0,
+                        "h2d_bw_gbps": 7.5,
+                        "d2h_bw_gbps": 6.5,
+                        "p2p_bw_gbps": 40.0,
+                        "effective_bw_gbps": 7.5,
+                        "effective_d2h_bw_gbps": 6.5,
+                        "p2p_enabled": True,
+                    }
+                ],
+            },
+        )
+        planned = daemon.plan_transfer(
+            session_id=session_id,
+            total_bytes=64,
+            chunk_bytes=16,
+            mode="pool",
+            direction="h2d",
+            job_id="job-1",
+        )
+        transfer_id = planned.payload["transfer_id"]
+        reservation_id = planned.payload["reservations"][0]["reservation_id"]
+
+        closed = daemon.close_session(session_id)
+
+        self.assertTrue(closed.ok)
+        status = daemon.transfer_status(transfer_id)
+        self.assertTrue(status.ok)
+        self.assertEqual(status.payload["status"]["state"], "canceled")
+        self.assertEqual(status.payload["status"]["bytes_completed"], 0)
+        cleanup_events = daemon.describe().payload["system_cleanup_events"]
+        self.assertIn(
+            {
+                "target_kind": "session",
+                "target_id": session_id,
+                "reason": "session_closed",
+                "force": True,
+            },
+            cleanup_events,
+        )
+        self.assertIn(
+            {
+                "target_kind": "reservation",
+                "target_id": reservation_id,
+                "reason": "session_closed",
+                "force": True,
+            },
+            cleanup_events,
+        )
 
     def test_transfer_status_can_be_updated_explicitly(self) -> None:
         daemon = TurboBusDaemon(relay_gpus=[1])

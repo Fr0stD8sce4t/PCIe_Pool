@@ -56,6 +56,7 @@ class TurboBusDaemon:
         self._lease_tokens: dict[str, LeaseToken] = {}
         self._transfer_statuses: dict[str, TransferStatus] = {}
         self._cleanup_events: list[CleanupRequest] = []
+        self._system_cleanup_events: list[CleanupRequest] = []
         self._profile_cache: dict[str, dict] = {}
         self._scheduler = DaemonScheduler()
         self._topology_provider = topology_provider or StaticTopologyProvider.from_relay_gpus(
@@ -188,7 +189,10 @@ class TurboBusDaemon:
                     return DaemonResponse(ok=False, error="unknown buffer")
                 removed["buffers"] = 1
             elif cleanup.target_kind == "session":
-                session = self._close_session_locked(cleanup.target_id)
+                session = self._close_session_locked(
+                    cleanup.target_id,
+                    reason=cleanup.reason,
+                )
                 if session is None:
                     return DaemonResponse(ok=False, error="unknown session")
                 removed["sessions"] = 1
@@ -211,7 +215,7 @@ class TurboBusDaemon:
     def close_session(self, session_id: str) -> DaemonResponse:
         with self._lock:
             self._reap_stale_sessions_locked(time.time())
-            session = self._close_session_locked(session_id)
+            session = self._close_session_locked(session_id, reason="session_closed")
             if session is None:
                 return DaemonResponse(ok=False, error="unknown session")
             return DaemonResponse(ok=True, payload={"session_id": session_id})
@@ -554,6 +558,7 @@ class TurboBusDaemon:
         self,
         reservation_id: str,
         final_state: TransferStatusState = TransferStatusState.COMPLETE,
+        cleanup_reason: str | None = None,
     ) -> TransferReservation | None:
         reservation = self._reservations.pop(reservation_id, None)
         if reservation is None:
@@ -568,6 +573,15 @@ class TurboBusDaemon:
             quota.active_chunks = max(0, quota.active_chunks - reservation.chunks)
         if transfer_id is not None:
             self._mark_transfer_terminal_if_unblocked_locked(transfer_id, final_state)
+        if final_state is TransferStatusState.CANCELED and cleanup_reason is not None:
+            self._system_cleanup_events.append(
+                CleanupRequest(
+                    target_kind="reservation",
+                    target_id=reservation_id,
+                    reason=cleanup_reason,
+                    force=True,
+                )
+            )
         return reservation
 
     def _commit_scheduler_leases_locked(
@@ -689,17 +703,30 @@ class TurboBusDaemon:
             error=status.error,
         )
 
-    def _close_session_locked(self, session_id: str) -> Session | None:
+    def _close_session_locked(
+        self,
+        session_id: str,
+        reason: str = "session_closed",
+    ) -> Session | None:
         session = self._sessions.pop(session_id, None)
         if session is None:
             return None
         session.active = False
         session.closed_at = time.time()
+        self._system_cleanup_events.append(
+            CleanupRequest(
+                target_kind="session",
+                target_id=session_id,
+                reason=reason,
+                force=True,
+            )
+        )
         for reservation_id, reservation in list(self._reservations.items()):
             if reservation.session_id == session_id:
                 self._release_reservation_locked(
                     reservation_id,
                     final_state=TransferStatusState.CANCELED,
+                    cleanup_reason=reason,
                 )
         for gpu in session.relay_gpus:
             quota = self._relay_quotas.get(gpu)
@@ -722,7 +749,7 @@ class TurboBusDaemon:
             if session.active and session.last_seen > 0.0 and now - session.last_seen > self._session_timeout_seconds
         ]
         for session_id in expired:
-            self._close_session_locked(session_id)
+            self._close_session_locked(session_id, reason="stale_session_timeout")
         return expired
 
     def _purge_stale_profiles_locked(self, now: float) -> list[str]:
@@ -755,6 +782,9 @@ class TurboBusDaemon:
                         key: asdict(value) for key, value in self._transfer_statuses.items()
                     },
                     "cleanup_events": [asdict(item) for item in self._cleanup_events],
+                    "system_cleanup_events": [
+                        asdict(item) for item in self._system_cleanup_events
+                    ],
                     "relay_quotas": {
                         key: {
                             "relay_gpu": quota.relay_gpu,

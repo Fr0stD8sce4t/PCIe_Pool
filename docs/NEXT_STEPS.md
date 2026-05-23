@@ -91,14 +91,17 @@ Current status:
 - daemon plan responses now include inventory-derived planning metadata,
   including requested relay ids, eligible relays, filtered relays with reasons,
   and the profile key used for planning.
+- daemon state now reports system cleanup outcomes for stale sessions, closed
+  sessions, and canceled reservations through `system_cleanup_events` in the
+  daemon profile/describe payload.
 
 Next code cut:
 
-- add daemon-side lease and transfer cleanup observability for stale sessions
-  and canceled reservations, so future worker/helper failures have visible
-  control-plane outcomes;
-- keep this as daemon state/reporting only, without adding worker execution,
-  CUDA IPC, or hardware discovery;
+- add a small daemon client helper and socket coverage for the daemon
+  profile/describe path so cleanup observability is available through the same
+  control-plane client used by workers and runtimes;
+- keep this as reporting only, without adding worker execution, CUDA IPC, or
+  hardware discovery;
 - preserve existing lease release, direct fallback, and cached profile behavior.
 
 ## Upcoming
