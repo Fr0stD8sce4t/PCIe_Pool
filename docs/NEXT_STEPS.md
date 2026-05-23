@@ -2,9 +2,10 @@
 
 ## Current
 
-Start the next phase after the worker boundary split: add the first concrete
-worker transport shell on top of the in-process endpoint, likely a Unix socket
-or IPC adapter, without changing authorization, lifecycle, or observability
+Start the next phase after the worker transport shell: add a real worker
+helper-process entrypoint that runs the in-process endpoint over the Unix
+socket transport, so another process can serve and call the same worker service
+boundary without changing authorization, lifecycle, or observability
 semantics.
 
 Completed in the refactor layer:
@@ -210,18 +211,18 @@ Current status:
   reads.
 - explicit expired-lease reaping now reaches the daemon through
   `TurboBusDaemonClient.reap_expired_leases()` and the socket control path.
-- `turbobus.worker.transport` now defines a transport protocol and loopback
-  adapter that forwards worker and observability messages without changing
-  endpoint behavior.
+- `turbobus.worker.transport` now defines a transport protocol, loopback
+  adapter, and Unix socket transport shell that forward worker and
+  observability messages without changing endpoint behavior.
 
 Next code cut:
 
-- add the first concrete worker transport shell on top of the in-process
-  endpoint;
+- add a helper-process entrypoint that serves the in-process worker endpoint
+  over the Unix socket transport;
 - keep request parsing, authorization, lifecycle, and observability wiring on
   the same worker service contract;
-- add focused tests that the new transport forwards worker request and
-  observability messages without changing endpoint behavior.
+- add focused tests that the helper-process entrypoint forwards worker request
+  and observability messages without changing endpoint behavior.
 
 ## Upcoming
 
