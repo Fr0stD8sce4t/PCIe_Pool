@@ -531,6 +531,24 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(staging_pool.describe(), {"active_slots": {}})
         self.assertEqual(daemon_client.cleanup_requests[0]["target_id"], "lease-1")
 
+    def test_worker_client_rejects_out_of_bounds_authorization_before_staging(
+        self,
+    ) -> None:
+        payload = authorization_payload()
+        payload["authorization"]["src_buffer"]["size_bytes"] = 8
+        daemon_client = FakeDaemonClient(DaemonResponse(ok=True, payload=payload))
+        staging_pool = WorkerStagingPool()
+        client = WorkerTransferClient(daemon_client, staging_pool=staging_pool)
+
+        lifecycle = client.submit_report_cleanup_lifecycle(authorization_request())
+
+        self.assertEqual(lifecycle.final_state, "authorization_failed")
+        self.assertIn("src buffer size", lifecycle.error)
+        self.assertIsNone(lifecycle.worker_request)
+        self.assertIsNone(lifecycle.staging_slot)
+        self.assertEqual(staging_pool.describe(), {"active_slots": {}})
+        self.assertEqual(daemon_client.cleanup_requests[0]["target_id"], "lease-1")
+
     def test_worker_client_submit_keeps_execution_unsupported(self) -> None:
         daemon_client = FakeDaemonClient(
             DaemonResponse(ok=True, payload=authorization_payload())

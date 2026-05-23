@@ -447,6 +447,64 @@ class SchemaTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "relay_gpu is required"):
             WorkerDataPlaneRequest.from_authorization(authorization)
 
+    def test_worker_data_plane_request_rejects_ranges_outside_registered_buffers(self) -> None:
+        src = BufferRegistration(
+            buffer_id="cpu-buffer",
+            job_id="job-1",
+            kind="cpu_pinned",
+            size_bytes=8,
+            pinned=True,
+        )
+        dst = BufferRegistration(
+            buffer_id="gpu-buffer",
+            job_id="job-1",
+            kind="gpu",
+            size_bytes=64,
+            device_index=0,
+        )
+
+        with self.assertRaisesRegex(ValueError, "src buffer size"):
+            WorkerDataPlaneRequest.from_authorization(
+                WorkerTransferAuthorization(
+                    transfer_id="transfer-1",
+                    lease_id="lease-1",
+                    session_id="session-1",
+                    job_id="job-1",
+                    src_buffer=src,
+                    dst_buffer=dst,
+                    direction="h2d",
+                    ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
+                    relay_gpu=1,
+                )
+            )
+
+        with self.assertRaisesRegex(ValueError, "dst buffer size"):
+            WorkerDataPlaneRequest.from_authorization(
+                WorkerTransferAuthorization(
+                    transfer_id="transfer-1",
+                    lease_id="lease-1",
+                    session_id="session-1",
+                    job_id="job-1",
+                    src_buffer=BufferRegistration(
+                        buffer_id="cpu-buffer",
+                        job_id="job-1",
+                        kind="cpu_pinned",
+                        size_bytes=64,
+                        pinned=True,
+                    ),
+                    dst_buffer=BufferRegistration(
+                        buffer_id="gpu-buffer",
+                        job_id="job-1",
+                        kind="gpu",
+                        size_bytes=8,
+                        device_index=0,
+                    ),
+                    direction="h2d",
+                    ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
+                    relay_gpu=1,
+                )
+            )
+
     def test_daemon_resource_inventory_is_serializable(self) -> None:
         inventory = DaemonResourceInventory(
             gpus=(

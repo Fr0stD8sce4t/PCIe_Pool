@@ -501,6 +501,11 @@ class WorkerDataPlaneRequest:
             raise ValueError("dst handle job does not match request job")
         if self.staging.relay_gpu != relay_gpu:
             raise ValueError("staging relay does not match request relay")
+        _validate_worker_range_bounds(
+            ranges,
+            src_size_bytes=self.src_handle.size_bytes,
+            dst_size_bytes=self.dst_handle.size_bytes,
+        )
         object.__setattr__(self, "transfer_id", str(self.transfer_id))
         object.__setattr__(self, "lease_id", str(self.lease_id))
         object.__setattr__(self, "session_id", str(self.session_id))
@@ -563,6 +568,21 @@ def _normalize_worker_ranges(ranges: tuple[dict[str, int], ...]) -> tuple[dict[s
             }
         )
     return tuple(normalized_ranges)
+
+
+def _validate_worker_range_bounds(
+    ranges: tuple[dict[str, int], ...],
+    *,
+    src_size_bytes: int,
+    dst_size_bytes: int,
+) -> None:
+    src_size = int(src_size_bytes)
+    dst_size = int(dst_size_bytes)
+    for item in ranges:
+        if item["src_offset"] + item["bytes"] > src_size:
+            raise ValueError("worker range exceeds src buffer size")
+        if item["dst_offset"] + item["bytes"] > dst_size:
+            raise ValueError("worker range exceeds dst buffer size")
 
 
 def _normalize_buffer_handle_metadata(

@@ -152,6 +152,9 @@ Completed current code cut:
   authorization now rejects responses without a matching relay plan before the
   worker touches relay staging resources, and the failure path cleans up the
   daemon reservation.
+- Reject worker-authorized ranges that exceed registered buffer sizes before
+  staging allocation or resource binding, so a bad daemon/helper request cannot
+  reach native CUDA copy with out-of-bounds source or destination offsets.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -165,6 +168,8 @@ Completed current code cut:
 2. Add cleanup and isolation only where the real path needs it.
    - Validate lease tokens before touching relay resources; done for daemon
      worker authorization and exact-plan presence before staging allocation.
+   - Validate authorized ranges against registered source and destination
+     buffer sizes before worker staging allocation.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor

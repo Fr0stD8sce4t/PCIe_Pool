@@ -112,6 +112,10 @@ transfer request objects:
   allocation. If a daemon authorization response lacks a matching relay plan,
   worker helper code reports authorization failure, avoids allocating relay
   staging, and cleans up the daemon reservation;
+- worker data-plane requests now reject authorized ranges that exceed the
+  registered source or destination buffer sizes before worker staging
+  allocation or resource binding, preventing out-of-bounds native copy inputs
+  from reaching the CUDA executor;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -342,6 +346,9 @@ transfer request objects:
 - Added worker-helper coverage proving a daemon authorization response without
   an exact plan fails before staging allocation and still cleans up the daemon
   reservation.
+- Added schema and worker-helper coverage proving worker-authorized ranges
+  cannot exceed registered source or destination buffer sizes and that these
+  failures occur before staging allocation.
 
 ## Immediate Goal
 
@@ -520,6 +527,10 @@ phase:
     matching exact transfer plan before allocating relay staging. This keeps
     relay staging resources behind both daemon lease validation and daemon
     plan authority.
+58. worker data-plane requests now reject authorized ranges that exceed the
+    registered source or destination buffer size before staging allocation or
+    resource binding, so native CUDA execution only sees in-bounds buffer
+    spans.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
