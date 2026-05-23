@@ -16,13 +16,14 @@ class FakeNativeModule:
 
 
 class FakeHostRegisterNativeModule:
-    def __init__(self) -> None:
+    def __init__(self, exported_ipc_handle: bytes = b"i" * 64) -> None:
         self.set_device_calls = []
         self.register_host_memory_calls = []
         self.unregister_host_memory_calls = []
         self.export_device_ipc_handle_calls = []
         self.open_device_ipc_handle_calls = []
         self.close_device_ipc_handle_calls = []
+        self.exported_ipc_handle = bytes(exported_ipc_handle)
 
     def set_device(self, device_index):
         self.set_device_calls.append(device_index)
@@ -35,7 +36,7 @@ class FakeHostRegisterNativeModule:
 
     def export_device_ipc_handle(self, device_ptr):
         self.export_device_ipc_handle_calls.append(device_ptr)
-        return b"i" * 64
+        return self.exported_ipc_handle
 
     def open_device_ipc_handle(self, cuda_ipc_handle):
         self.open_device_ipc_handle_calls.append(cuda_ipc_handle)
@@ -271,6 +272,30 @@ class CudaNativeBackendTest(unittest.TestCase):
         self.assertEqual(native.export_device_ipc_handle_calls, [100])
         self.assertEqual(native.open_device_ipc_handle_calls, [b"i" * 64])
         self.assertEqual(native.close_device_ipc_handle_calls, [200])
+
+    def test_backend_rejects_malformed_cuda_ipc_handles_before_native_open(self) -> None:
+        engine = FakeRuntimeEngine()
+        native = FakeHostRegisterNativeModule()
+        engine._turbobus = native
+        backend = CudaNativeBackend(engine)
+
+        with self.assertRaisesRegex(ValueError, "hex encoded"):
+            backend.open_device_ipc_handle("not-hex")
+        with self.assertRaisesRegex(ValueError, "64 bytes"):
+            backend.open_device_ipc_handle(b"short")
+
+        self.assertEqual(native.open_device_ipc_handle_calls, [])
+
+    def test_backend_rejects_malformed_exported_cuda_ipc_handles(self) -> None:
+        engine = FakeRuntimeEngine()
+        native = FakeHostRegisterNativeModule(exported_ipc_handle=b"short")
+        engine._turbobus = native
+        backend = CudaNativeBackend(engine)
+
+        with self.assertRaisesRegex(ValueError, "64 bytes"):
+            backend.export_device_ipc_handle(100)
+
+        self.assertEqual(native.export_device_ipc_handle_calls, [100])
 
     def test_backend_rejects_missing_cuda_ipc_support(self) -> None:
         engine = FakeRuntimeEngine()

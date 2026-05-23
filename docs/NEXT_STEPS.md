@@ -235,6 +235,10 @@ Completed current code cut:
   `BufferRegistration` and `WorkerBufferHandle` now require
   `cuda_ipc_device` handles to carry a 64-byte hex-encoded CUDA IPC memory
   handle, preventing bad device handles from reaching native CUDA IPC open.
+- Validate CUDA IPC handle size at the CUDA backend native boundary.
+  `CudaNativeBackend` now rejects malformed exported or opened IPC handles
+  unless they are exactly 64 bytes, so direct backend calls cannot bypass the
+  daemon/worker metadata checks and pass bad handles into native CUDA IPC.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -277,6 +281,8 @@ Completed current code cut:
      registration and worker-handle construction time.
    - Reject malformed CUDA IPC handle metadata at buffer registration and
      worker-handle construction time.
+   - Reject malformed CUDA IPC handles again at backend export/open time before
+     native CUDA IPC calls.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor

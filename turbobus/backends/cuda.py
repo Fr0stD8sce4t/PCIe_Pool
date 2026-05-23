@@ -100,7 +100,7 @@ class CudaNativeBackend:
         )
         if not callable(exporter):
             raise RuntimeError("native runtime does not support CUDA IPC handles")
-        return bytes(exporter(ptr))
+        return _require_cuda_ipc_handle_size(bytes(exporter(ptr)))
 
     def open_device_ipc_handle(self, cuda_ipc_handle: bytes | bytearray | str) -> int:
         handle = _coerce_cuda_ipc_handle(cuda_ipc_handle)
@@ -178,10 +178,17 @@ default_cuda_backend = CudaNativeBackend()
 def _coerce_cuda_ipc_handle(handle: bytes | bytearray | str) -> bytes:
     if isinstance(handle, str):
         try:
-            return bytes.fromhex(handle)
+            raw_handle = bytes.fromhex(handle)
         except ValueError as exc:
             raise ValueError("cuda_ipc_handle string must be hex encoded") from exc
-    return bytes(handle)
+        return _require_cuda_ipc_handle_size(raw_handle)
+    return _require_cuda_ipc_handle_size(bytes(handle))
+
+
+def _require_cuda_ipc_handle_size(handle: bytes) -> bytes:
+    if len(handle) != 64:
+        raise ValueError("cuda_ipc_handle must be 64 bytes")
+    return handle
 
 
 __all__ = ["CudaNativeBackend", "default_cuda_backend"]

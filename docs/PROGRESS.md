@@ -197,6 +197,9 @@ transfer request objects:
   handle construction time unless it is a 64-byte hex-encoded CUDA IPC memory
   handle, preventing malformed device handles from reaching native CUDA IPC
   open;
+- CUDA IPC handles are now checked again at the CUDA backend native boundary:
+  `CudaNativeBackend` rejects exported or opened IPC handles unless they are
+  exactly 64 bytes before passing them to native CUDA IPC calls;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -709,6 +712,10 @@ phase:
     `WorkerBufferHandle` reject `cuda_ipc_device` handles unless
     `cuda_ipc_handle` is a 64-byte hex string, so malformed GPU handles cannot
     reach worker resource binding or native CUDA IPC open.
+78. CUDA backend IPC export/open now enforces the native handle size. The
+    backend rejects CUDA IPC handles unless they are exactly 64 bytes before
+    opening them through native CUDA, and rejects malformed handles returned by
+    native export before they can enter daemon registration metadata.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
