@@ -8,7 +8,9 @@ from .schema import BufferRegistration, DaemonResponse, WorkerTransferAuthorizat
 from .transfer import TransferRange, TransferRequest
 from .worker import (
     CudaWorkerExecutor,
+    WorkerDataPlaneCompletionEnvelope,
     WorkerDataPlaneResourceBinder,
+    WorkerServiceRequestEnvelope,
     WorkerTransferClient,
     WorkerTransferLifecycleRecord,
 )
@@ -24,8 +26,9 @@ class WorkerManagedTransferResult:
     plan: Mapping[str, object]
     lease_token: Mapping[str, object]
     authorization_request: WorkerTransferAuthorizationRequest
-    worker_lifecycle: WorkerTransferLifecycleRecord
+    worker_lifecycle: WorkerTransferLifecycleRecord | None
     final_status: Mapping[str, object]
+    worker_completion: WorkerDataPlaneCompletionEnvelope | None = None
 
     @property
     def bytes_completed(self) -> int:
@@ -40,7 +43,7 @@ class WorkerManagedTransferResult:
 @dataclass
 class WorkerManagedTransferClient:
     daemon_client: object
-    worker_client: WorkerTransferClient
+    worker_client: object
     target_gpu: int
     relay_gpus: Iterable[int]
     max_inflight_chunks: int = 8
@@ -132,18 +135,18 @@ class WorkerManagedTransferClient:
             ranges=tuple(item.as_dict() for item in transfer_request.ranges),
             relay_gpu=int(lease_token["relay_gpu"]),
         )
-        lifecycle = self.worker_client.submit_report_cleanup_lifecycle(
+        worker_execution = _submit_worker_execution(
+            self.worker_client,
             authorization_request,
-            cleanup_target_kind="reservation",
         )
         status = self.daemon_client.transfer_status(
             str(planned.payload["transfer_id"])
         )
         _require_ok(status, "daemon transfer status query failed")
         final_status = dict(status.payload["status"])
-        if lifecycle.final_state != "complete":
+        if worker_execution.final_state != "complete":
             raise RuntimeError(
-                lifecycle.error
+                worker_execution.error
                 or final_status.get("error")
                 or "worker-managed transfer did not complete"
             )
@@ -156,7 +159,8 @@ class WorkerManagedTransferClient:
             plan=planned.payload,
             lease_token=lease_token,
             authorization_request=authorization_request,
-            worker_lifecycle=lifecycle,
+            worker_lifecycle=worker_execution.lifecycle,
+            worker_completion=worker_execution.completion,
             final_status=final_status,
         )
 
@@ -217,6 +221,55 @@ def _single_lease_token(response: DaemonResponse) -> Mapping[str, object]:
     return dict(lease_tokens[0])
 
 
+@dataclass(frozen=True)
+class _WorkerExecutionResult:
+    final_state: str | None
+    error: str | None
+    lifecycle: WorkerTransferLifecycleRecord | None
+    completion: WorkerDataPlaneCompletionEnvelope | None
+
+
+def _submit_worker_execution(
+    worker_client,
+    request: WorkerTransferAuthorizationRequest,
+) -> _WorkerExecutionResult:
+    lifecycle_submitter = getattr(worker_client, "submit_report_cleanup_lifecycle", None)
+    if callable(lifecycle_submitter):
+        lifecycle = lifecycle_submitter(request, cleanup_target_kind="reservation")
+        return _WorkerExecutionResult(
+            final_state=lifecycle.final_state,
+            error=lifecycle.error,
+            lifecycle=lifecycle,
+            completion=lifecycle.completion_envelope(),
+        )
+    envelope_submitter = getattr(worker_client, "submit_envelope", None)
+    if callable(envelope_submitter):
+        completion = envelope_submitter(
+            WorkerServiceRequestEnvelope(
+                payload={
+                    "transfer_id": request.transfer_id,
+                    "lease_id": request.lease_id,
+                    "token": request.token,
+                    "session_id": request.session_id,
+                    "job_id": request.job_id,
+                    "src_buffer_id": request.src_buffer_id,
+                    "dst_buffer_id": request.dst_buffer_id,
+                    "direction": request.direction,
+                    "ranges": list(request.ranges),
+                    "relay_gpu": request.relay_gpu,
+                },
+                cleanup_target_kind="reservation",
+            )
+        )
+        return _WorkerExecutionResult(
+            final_state=completion.final_state,
+            error=completion.error,
+            lifecycle=None,
+            completion=completion,
+        )
+    raise TypeError("worker_client must submit worker-managed transfers")
+
+
 def _require_ok(response: DaemonResponse, message: str) -> None:
     if not isinstance(response, DaemonResponse):
         raise TypeError("daemon response must be a DaemonResponse")
@@ -229,7 +282,7 @@ def make_worker_managed_transfer_client(
     *,
     target_gpu: int,
     relay_gpus: Iterable[int],
-    worker_client: WorkerTransferClient | None = None,
+    worker_client: object | None = None,
     max_inflight_chunks: int = 8,
 ) -> WorkerManagedTransferClient:
     return WorkerManagedTransferClient(

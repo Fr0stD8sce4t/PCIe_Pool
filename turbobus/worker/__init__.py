@@ -36,6 +36,7 @@ from .codec import (
     handle_worker_service_message,
 )
 from .endpoint import WorkerServiceEndpoint
+from .socket_client import WorkerServiceSocketClient
 from .process import (
     build_worker_helper_transport,
     main as worker_process_main,
@@ -57,6 +58,7 @@ __all__ = [
     "WorkerServiceRequestEnvelope",
     "WorkerServiceResponseEnvelope",
     "WorkerServiceEndpoint",
+    "WorkerServiceSocketClient",
     "WorkerStatusReportError",
     "build_worker_helper_transport",
     "WorkerDataPlaneCompletion",

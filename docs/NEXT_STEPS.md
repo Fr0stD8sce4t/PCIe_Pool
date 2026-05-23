@@ -97,11 +97,17 @@ Completed current code cut:
   requests a daemon plan and relay lease, submits the worker authorization
   request, lets the worker report completion, releases the completed relay
   reservation, and returns the daemon-owned final transfer status.
+- Carry the same worker-managed call across the helper-process request
+  boundary. `WorkerManagedTransferClient` can now submit worker authorization
+  through a completion-only worker service envelope, and
+  `WorkerServiceSocketClient` can send that envelope to the Unix socket helper
+  path without requiring an in-process lifecycle record.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
    - Allocate a real shared pinned CPU source and CUDA IPC target buffer.
-   - Run the worker-managed client path through the CUDA worker executor.
+   - Run the worker-managed client path through the worker helper socket and
+     CUDA worker executor.
    - Verify bytes land on the target GPU and the daemon releases the relay
      reservation.
 

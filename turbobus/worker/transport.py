@@ -54,7 +54,7 @@ class WorkerServiceUnixSocketTransport:
                 except socket.timeout:
                     continue
                 with conn:
-                    data = _read_message(conn)
+                    data = read_worker_socket_message(conn)
                     if not data:
                         continue
                     response = self.endpoint.handle_message(data)
@@ -70,7 +70,7 @@ class WorkerServiceUnixSocketTransport:
         try:
             client.connect(self.socket_path)
             client.sendall(_ensure_bytes(message) + b"\n")
-            data = _read_message(client)
+            data = read_worker_socket_message(client)
         finally:
             client.close()
         return data.decode("utf-8")
@@ -78,6 +78,7 @@ class WorkerServiceUnixSocketTransport:
 
 __all__ = [
     "WorkerServiceUnixSocketTransport",
+    "read_worker_socket_message",
 ]
 
 
@@ -89,7 +90,7 @@ def _ensure_bytes(message: str | bytes) -> bytes:
     raise TypeError("message must be str or bytes")
 
 
-def _read_message(conn: Any) -> bytes:
+def read_worker_socket_message(conn: Any) -> bytes:
     data = b""
     while True:
         chunk = conn.recv(65536)
