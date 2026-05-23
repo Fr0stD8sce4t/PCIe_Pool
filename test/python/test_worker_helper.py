@@ -40,8 +40,10 @@ from turbobus.worker import (
     WorkerTransferState,
     WorkerTransferStatusReporter,
     WorkerTransferUnsupportedExecutor,
+    decode_worker_observability_snapshot,
     decode_worker_request_envelope,
     decode_worker_response_envelope,
+    encode_worker_observability_snapshot,
     encode_worker_request_envelope,
     encode_worker_response_envelope,
     handle_worker_service_message,
@@ -1210,6 +1212,60 @@ class WorkerHelperTest(unittest.TestCase):
     def test_worker_response_message_codec_rejects_bad_json(self) -> None:
         with self.assertRaises(WorkerMessageCodecError):
             decode_worker_response_envelope("[]")
+
+    def test_worker_observability_codec_round_trips_empty_snapshot(self) -> None:
+        endpoint = WorkerServiceEndpoint(
+            daemon_client=FakeDaemonClient(
+                DaemonResponse(ok=True, payload=authorization_payload())
+            )
+        )
+        snapshot = endpoint.observability_snapshot()
+
+        message = encode_worker_observability_snapshot(snapshot)
+        decoded = decode_worker_observability_snapshot(message)
+
+        self.assertIsInstance(message, str)
+        self.assertEqual(decoded["events"], [])
+        self.assertEqual(decoded["describe"]["events"], [])
+        self.assertEqual(decoded["describe"]["retained_event_count"], 0)
+        self.assertEqual(decoded["health"]["status"], "ready")
+        self.assertEqual(decoded["metrics"]["request_bytes_total"], 0)
+
+    def test_worker_observability_codec_round_trips_populated_snapshot(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        endpoint = WorkerServiceEndpoint(daemon_client=daemon_client)
+        request_message = encode_worker_request_envelope(
+            WorkerServiceRequestEnvelope(payload=authorization_request_payload())
+        )
+
+        response_message = endpoint.handle_message(request_message)
+        snapshot = endpoint.observability_snapshot()
+        decoded = decode_worker_observability_snapshot(
+            encode_worker_observability_snapshot(snapshot).encode("utf-8")
+        )
+        response = decode_worker_response_envelope(response_message).as_dict()
+
+        self.assertEqual(response["final_state"], "unsupported")
+        self.assertEqual(decoded["describe"]["retained_event_count"], 1)
+        self.assertEqual(decoded["events"][0]["final_state"], "unsupported")
+        self.assertEqual(decoded["health"]["status"], "ready")
+        self.assertEqual(decoded["metrics"]["retained_event_count"], 1)
+        self.assertEqual(
+            decoded["metrics"]["request_bytes_total"],
+            len(request_message.encode("utf-8")),
+        )
+
+    def test_worker_observability_codec_rejects_missing_fields(self) -> None:
+        with self.assertRaisesRegex(WorkerMessageCodecError, "describe"):
+            decode_worker_observability_snapshot('{"events":[]}')
+
+    def test_worker_observability_codec_rejects_non_list_events(self) -> None:
+        with self.assertRaisesRegex(WorkerMessageCodecError, "events"):
+            decode_worker_observability_snapshot(
+                '{"describe":{},"events":{},"health":{},"metrics":{}}'
+            )
 
     def test_worker_service_message_handler_returns_encoded_success_response(self) -> None:
         daemon_client = FakeDaemonClient(

@@ -187,6 +187,8 @@ transfer request objects:
   response byte counts, and `describe()` includes it under `metrics`.
 - `WorkerServiceEndpoint.observability_snapshot()` now combines `describe()`,
   retained events, health, and metrics under one stable in-process payload.
+- worker endpoint observability snapshots now have JSON-safe encode/decode
+  helpers for future transport observability clients.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -313,10 +315,13 @@ phase:
     `describe()`.
 44. worker endpoint observability snapshots now combine `describe()`, retained
     events, health, and metrics under one stable in-process payload.
+45. worker endpoint observability snapshots now round-trip through JSON-safe
+    encode/decode helpers without changing encoded worker response payloads.
 
-The next immediate goal is to add a JSON-safe worker endpoint observability
-payload encoder/decoder for future socket or IPC observability clients while
-keeping encoded worker response payloads unchanged.
+The next immediate goal is to add an in-process worker endpoint observability
+message handler that returns an encoded observability snapshot for future socket
+or IPC observability requests while keeping encoded worker response payloads
+unchanged.
 
 ## Verification
 
@@ -417,6 +422,10 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
   observability clients; done through
   `WorkerServiceEndpoint.observability_snapshot()`;
 - add a JSON-safe worker endpoint observability payload codec for future
+  transport observability clients; done through
+  `encode_worker_observability_snapshot` and
+  `decode_worker_observability_snapshot`;
+- add an in-process worker endpoint observability message handler for future
   transport observability clients;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;

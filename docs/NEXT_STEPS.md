@@ -190,16 +190,18 @@ Current status:
 - worker endpoint observability snapshots now combine `describe()`, retained
   events, health, and metrics under one stable in-process payload for future
   transports.
+- worker endpoint observability snapshots now have JSON-safe encoder/decoder
+  helpers for future transports.
 
 Next code cut:
 
-- add a JSON-safe worker endpoint observability payload encoder/decoder for
-  future socket or IPC observability clients, reusing the existing in-process
-  snapshot shape;
+- add an in-process worker endpoint observability message handler that returns
+  an encoded observability snapshot for future socket or IPC observability
+  requests;
 - keep it in process only, with no CUDA IPC, sockets, real data movement, or
   hardware discovery yet;
-- add focused tests that empty and populated observability snapshots round-trip
-  through the codec while encoded worker response payloads stay unchanged.
+- add focused tests that the handler returns encoded empty and populated
+  snapshots while encoded worker response payloads stay unchanged.
 
 ## Upcoming
 

@@ -23,8 +23,10 @@ from .helper import (
 )
 from .codec import (
     WorkerMessageCodecError,
+    decode_worker_observability_snapshot,
     decode_worker_request_envelope,
     decode_worker_response_envelope,
+    encode_worker_observability_snapshot,
     encode_worker_request_envelope,
     encode_worker_response_envelope,
     handle_worker_service_message,
@@ -62,8 +64,10 @@ __all__ = [
     "WorkerStagingPoolError",
     "WorkerStagingSlot",
     "WorkerMessageCodecError",
+    "decode_worker_observability_snapshot",
     "decode_worker_request_envelope",
     "decode_worker_response_envelope",
+    "encode_worker_observability_snapshot",
     "encode_worker_request_envelope",
     "encode_worker_response_envelope",
     "handle_worker_service_message",

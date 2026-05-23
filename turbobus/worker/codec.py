@@ -69,6 +69,27 @@ def handle_worker_service_message(
     return encode_worker_response_envelope(response)
 
 
+def encode_worker_observability_snapshot(
+    snapshot: Mapping[str, object],
+) -> str:
+    if not isinstance(snapshot, Mapping):
+        raise TypeError("snapshot must be a mapping")
+    return _encode_json(snapshot)
+
+
+def decode_worker_observability_snapshot(
+    message: str | bytes,
+) -> Mapping[str, object]:
+    payload = _decode_json_mapping(message)
+    _required_mapping(payload, "describe")
+    events = payload.get("events")
+    if not isinstance(events, list):
+        raise WorkerMessageCodecError("events must be a list")
+    _required_mapping(payload, "health")
+    _required_mapping(payload, "metrics")
+    return dict(payload)
+
+
 def _encode_json(payload: Mapping[str, object]) -> str:
     try:
         return json.dumps(dict(payload), sort_keys=True, separators=(",", ":"))
@@ -114,8 +135,10 @@ def _optional_mapping(
 
 __all__ = [
     "WorkerMessageCodecError",
+    "decode_worker_observability_snapshot",
     "decode_worker_request_envelope",
     "decode_worker_response_envelope",
+    "encode_worker_observability_snapshot",
     "encode_worker_request_envelope",
     "encode_worker_response_envelope",
     "handle_worker_service_message",
