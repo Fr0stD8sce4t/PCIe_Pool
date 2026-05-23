@@ -137,6 +137,11 @@ transfer request objects:
 - `WorkerTransferRequest` now derives its data-plane request from the daemon
   worker authorization result and rejects mismatched transfer, lease, relay,
   direction, buffer, or range authority.
+- `WorkerStagingPool` and `WorkerStagingSlot` now provide an in-memory worker
+  staging-pool skeleton for daemon-approved relay staging slots. The pool can
+  allocate, describe, validate, and release slots from `WorkerDataPlaneRequest`
+  records while rejecting double-release and mismatched transfer, lease,
+  session, job, or relay use.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -215,11 +220,14 @@ phase:
 26. worker data-plane request records now capture daemon-approved relay
     execution inputs and completion reports without adding CUDA IPC, sockets,
     real data movement, or hardware discovery.
+27. the worker layer now has an in-memory staging-pool skeleton for relay
+    staging slots, with validation and release checks but no CUDA IPC, sockets,
+    real data movement, or hardware discovery.
 
-The next immediate goal is to add an in-memory worker staging-pool skeleton for
-relay staging slots. It should allocate, describe, and release slots from a
-`WorkerDataPlaneRequest`, reject mismatched relay or transfer use, and should
-not add CUDA IPC, sockets, real data movement, or hardware discovery yet.
+The next immediate goal is to wire the in-memory staging pool into the worker
+service lifecycle. A daemon-authorized worker request should reserve a staging
+slot before unsupported execution and release it during cleanup, still without
+adding CUDA IPC, sockets, real data movement, or hardware discovery.
 
 ## Verification
 
@@ -278,7 +286,9 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
 - define the first worker data-plane request shape for daemon-approved relay
   execution; done through `WorkerDataPlaneRequest` and related worker schema
   records;
-- add an in-memory worker staging-pool skeleton for relay staging slots;
+- add an in-memory worker staging-pool skeleton for relay staging slots; done
+  through `WorkerStagingPool`;
+- wire the in-memory staging pool into the worker service lifecycle;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

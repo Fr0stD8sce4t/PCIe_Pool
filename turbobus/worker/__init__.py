@@ -20,6 +20,11 @@ from .helper import (
     parse_worker_authorization_request_payload,
     run_worker_service_control_plane_smoke,
 )
+from .staging_pool import (
+    WorkerStagingPool,
+    WorkerStagingPoolError,
+    WorkerStagingSlot,
+)
 
 __all__ = [
     "UnsupportedWorkerExecution",
@@ -40,6 +45,9 @@ __all__ = [
     "WorkerTransferState",
     "WorkerTransferStatusReporter",
     "WorkerTransferUnsupportedExecutor",
+    "WorkerStagingPool",
+    "WorkerStagingPoolError",
+    "WorkerStagingSlot",
     "parse_worker_authorization_request_payload",
     "run_worker_service_control_plane_smoke",
 ]

@@ -132,16 +132,19 @@ Current status:
   fields.
 - worker helper requests now derive that data-plane shape from daemon
   authorization results and reject mismatched local data-plane authority.
+- an in-memory worker staging pool now allocates, describes, validates, and
+  releases relay staging slots from daemon-approved `WorkerDataPlaneRequest`
+  records without CUDA IPC, sockets, real data movement, or hardware discovery.
 
 Next code cut:
 
-- add a worker staging-pool skeleton that can allocate, describe, and release
-  relay staging slots from a `WorkerDataPlaneRequest`;
-- keep it in memory only, with no CUDA IPC, sockets, real data movement, or
-  hardware discovery yet;
-- add focused tests for slot sizing, relay ownership, release, double-release,
-  and rejection when a request tries to use a staging slot for the wrong relay
-  or transfer.
+- wire the in-memory staging pool into the worker service lifecycle so a
+  daemon-authorized worker request can reserve a staging slot before unsupported
+  execution and release it during cleanup;
+- keep the lifecycle in process only, with no CUDA IPC, sockets, real data
+  movement, or hardware discovery yet;
+- add focused tests that unsupported execution releases the staging slot, and
+  that authorization/status failures do not leak allocated staging slots.
 
 ## Upcoming
 
