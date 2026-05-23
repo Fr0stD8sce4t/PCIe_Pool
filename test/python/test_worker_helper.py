@@ -78,6 +78,7 @@ class FakeCudaBackend:
 
 
 def authorization_payload() -> dict:
+    ranges = ({"src_offset": 0, "dst_offset": 0, "bytes": 16},)
     authorization = WorkerTransferAuthorization(
         transfer_id="transfer-1",
         lease_id="lease-1",
@@ -106,8 +107,9 @@ def authorization_payload() -> dict:
             metadata={"cuda_ipc_handle": (b"t" * 64).hex()},
         ),
         direction="h2d",
-        ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
+        ranges=ranges,
         relay_gpu=1,
+        plan=daemon_worker_plan(direction="h2d", ranges=ranges),
     )
     return WorkerTransferRequest(authorization=authorization).as_dict()
 
@@ -115,6 +117,7 @@ def authorization_payload() -> dict:
 def authorization_payload_for_shared_cpu(
     source_buffer: SharedPinnedCpuBuffer,
 ) -> dict:
+    ranges = ({"src_offset": 0, "dst_offset": 0, "bytes": 16},)
     authorization = WorkerTransferAuthorization(
         transfer_id="transfer-1",
         lease_id="lease-1",
@@ -131,8 +134,9 @@ def authorization_payload_for_shared_cpu(
             metadata={"cuda_ipc_handle": (b"t" * 64).hex()},
         ),
         direction="h2d",
-        ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
+        ranges=ranges,
         relay_gpu=1,
+        plan=daemon_worker_plan(direction="h2d", ranges=ranges),
     )
     return WorkerTransferRequest(authorization=authorization).as_dict()
 
@@ -140,6 +144,7 @@ def authorization_payload_for_shared_cpu(
 def d2h_authorization_payload_for_shared_cpu(
     destination_buffer: SharedPinnedCpuBuffer,
 ) -> dict:
+    ranges = ({"src_offset": 0, "dst_offset": 0, "bytes": 16},)
     authorization = WorkerTransferAuthorization(
         transfer_id="transfer-1",
         lease_id="lease-1",
@@ -156,10 +161,38 @@ def d2h_authorization_payload_for_shared_cpu(
         ),
         dst_buffer=destination_buffer.buffer_registration(),
         direction="d2h",
-        ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
+        ranges=ranges,
         relay_gpu=1,
+        plan=daemon_worker_plan(direction="d2h", ranges=ranges),
     )
     return WorkerTransferRequest(authorization=authorization).as_dict()
+
+
+def daemon_worker_plan(
+    *,
+    direction: str,
+    ranges: tuple[dict[str, int], ...],
+    relay_gpu: int = 1,
+) -> dict[str, object]:
+    total_bytes = sum(int(item["bytes"]) for item in ranges)
+    return {
+        "total_bytes": total_bytes,
+        "chunk_bytes": max(int(item["bytes"]) for item in ranges),
+        "assignments": [
+            {
+                "path": {
+                    "kind": "relay",
+                    "direction": direction,
+                    "target_device": 0,
+                    "relay_device": relay_gpu,
+                    "enabled": True,
+                },
+                "chunks": list(ranges),
+                "bytes": total_bytes,
+                "chunk_count": len(ranges),
+            }
+        ],
+    }
 
 
 def authorization_request() -> WorkerTransferAuthorizationRequest:
@@ -372,6 +405,7 @@ class WorkerHelperTest(unittest.TestCase):
             dst_handle=request.data_plane.dst_handle,
             staging=request.data_plane.staging,
             ranges=request.data_plane.ranges,
+            plan=request.data_plane.plan,
         )
 
         with self.assertRaisesRegex(ValueError, "transfer id"):
@@ -393,6 +427,7 @@ class WorkerHelperTest(unittest.TestCase):
             dst_handle=request.data_plane.dst_handle,
             staging=request.data_plane.staging,
             ranges=request.data_plane.ranges,
+            plan=request.data_plane.plan,
         )
 
         with self.assertRaisesRegex(ValueError, "src handle"):
@@ -476,6 +511,25 @@ class WorkerHelperTest(unittest.TestCase):
 
         with self.assertRaisesRegex(WorkerAuthorizationError, "denied"):
             authorizer.authorize(authorization_request())
+
+    def test_worker_client_rejects_authorization_without_daemon_plan_before_staging(
+        self,
+    ) -> None:
+        payload = authorization_payload()
+        payload["authorization"]["plan"] = {}
+        daemon_client = FakeDaemonClient(DaemonResponse(ok=True, payload=payload))
+        staging_pool = WorkerStagingPool()
+        client = WorkerTransferClient(daemon_client, staging_pool=staging_pool)
+
+        lifecycle = client.submit_report_cleanup_lifecycle(authorization_request())
+
+        self.assertEqual(lifecycle.final_state, "authorization_failed")
+        self.assertIn("transfer plan", lifecycle.error)
+        self.assertIsNone(lifecycle.worker_request)
+        self.assertIsNone(lifecycle.staging_slot)
+        self.assertIsNone(lifecycle.staging_release)
+        self.assertEqual(staging_pool.describe(), {"active_slots": {}})
+        self.assertEqual(daemon_client.cleanup_requests[0]["target_id"], "lease-1")
 
     def test_worker_client_submit_keeps_execution_unsupported(self) -> None:
         daemon_client = FakeDaemonClient(

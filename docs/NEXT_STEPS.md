@@ -148,6 +148,10 @@ Completed current code cut:
   `failed` transfer status with staging release and reservation cleanup, and
   client-side worker boundary exceptions perform best-effort reservation
   cleanup before surfacing the original error.
+- Require a daemon-issued exact plan before worker staging allocation. Worker
+  authorization now rejects responses without a matching relay plan before the
+  worker touches relay staging resources, and the failure path cleans up the
+  daemon reservation.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -159,7 +163,8 @@ Completed current code cut:
      and the daemon releases the relay reservation on the CUDA server.
 
 2. Add cleanup and isolation only where the real path needs it.
-   - Validate lease tokens before touching relay resources.
+   - Validate lease tokens before touching relay resources; done for daemon
+     worker authorization and exact-plan presence before staging allocation.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor

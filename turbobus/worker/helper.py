@@ -493,7 +493,11 @@ class WorkerTransferAuthorizer:
                 response.error or "worker transfer authorization failed"
             )
         try:
-            return WorkerTransferRequest.from_authorization_payload(response.payload)
+            worker_request = WorkerTransferRequest.from_authorization_payload(
+                response.payload
+            )
+            _require_daemon_worker_plan(worker_request)
+            return worker_request
         except (KeyError, TypeError, ValueError) as exc:
             raise WorkerAuthorizationError(
                 f"invalid worker authorization response: {exc}"
@@ -915,6 +919,48 @@ def _daemon_status_update_for_result(result: WorkerTransferResult) -> dict[str, 
         "bytes_completed": result.bytes_completed,
         "error": error,
     }
+
+
+def _require_daemon_worker_plan(request: WorkerTransferRequest) -> None:
+    plan = request.data_plane.plan
+    if not plan:
+        raise ValueError("daemon worker authorization did not include a transfer plan")
+    assignments = plan.get("assignments")
+    if not assignments:
+        raise ValueError("daemon worker authorization plan has no assignments")
+
+    relay_gpu = int(request.data_plane.relay_gpu)
+    direction = request.data_plane.direction
+    relay_ranges: list[dict[str, int]] = []
+    for assignment in assignments:
+        if not isinstance(assignment, Mapping):
+            raise ValueError("daemon plan assignment must be an object")
+        path = assignment.get("path")
+        if not isinstance(path, Mapping):
+            raise ValueError("daemon plan assignment path must be an object")
+        path_kind = str(path.get("kind", "")).lower()
+        if path_kind not in {"direct", "relay"}:
+            raise ValueError("daemon plan path must be direct or relay")
+        if str(path.get("direction", "")).lower() != direction:
+            raise ValueError("daemon plan direction does not match worker request")
+        if path_kind == "direct":
+            continue
+        if int(path.get("relay_device", -1)) != relay_gpu:
+            raise ValueError("daemon plan relay does not match worker lease")
+        for chunk in assignment.get("chunks", ()) or ():
+            if not isinstance(chunk, Mapping):
+                raise ValueError("daemon plan chunk must be an object")
+            relay_ranges.append(
+                {
+                    "src_offset": int(chunk["src_offset"]),
+                    "dst_offset": int(chunk["dst_offset"]),
+                    "bytes": int(chunk["bytes"]),
+                }
+            )
+    if not relay_ranges:
+        raise ValueError("daemon plan has no authorized relay chunks")
+    if tuple(relay_ranges) != request.data_plane.ranges:
+        raise ValueError("authorized ranges do not match daemon plan")
 
 
 def _failed_worker_result_from_exception(

@@ -108,6 +108,10 @@ transfer request objects:
   failed transfer status, staging slots are released, relay reservations are
   cleaned up, and client-side worker boundary exceptions do best-effort
   reservation cleanup before returning the original error;
+- worker authorization now requires a daemon-issued exact plan before staging
+  allocation. If a daemon authorization response lacks a matching relay plan,
+  worker helper code reports authorization failure, avoids allocating relay
+  staging, and cleans up the daemon reservation;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -335,6 +339,9 @@ transfer request objects:
   destination verification.
 - Added verification daemon coverage showing the seeded server profile can
   issue H2D and D2H pool plans with both direct and relay assignments.
+- Added worker-helper coverage proving a daemon authorization response without
+  an exact plan fails before staging allocation and still cleans up the daemon
+  reservation.
 
 ## Immediate Goal
 
@@ -509,6 +516,10 @@ phase:
     release and relay reservation cleanup, and client-side worker-boundary
     exceptions release the daemon reservation without hiding the original
     worker error.
+57. worker authorization now refuses daemon responses that do not carry a
+    matching exact transfer plan before allocating relay staging. This keeps
+    relay staging resources behind both daemon lease validation and daemon
+    plan authority.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
