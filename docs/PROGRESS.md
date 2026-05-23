@@ -75,6 +75,9 @@ transfer request objects:
 - Worker-facing authorization messages now exist in the daemon protocol, and
   `AUTHORIZE_WORKER_TRANSFER` returns a checked transfer context with source
   and destination buffer registrations, direction, relay GPU, and ranges.
+- `turbobus.worker` now has a helper skeleton that parses daemon authorization
+  payloads into worker transfer requests and reports unsupported execution
+  without pretending data movement happened.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -113,11 +116,13 @@ phase:
     job ownership, and session ownership.
 11. worker/helper authorization can be requested without adding worker
     execution, so the next data-plane layer has a daemon-approved input shape.
+12. worker/helper code now has a package boundary and a no-op unsupported
+    executor for daemon-authorized transfer contexts.
 
-The next immediate goal is to add a worker/helper module skeleton that consumes
-authorized transfer messages and reports unsupported execution cleanly. This
-continues the privileged-daemon work, but does not add CUDA IPC or real data
-movement yet.
+The next immediate goal is to connect the worker helper skeleton to
+daemon-authorized transfer requests through a small client-side helper. This
+continues the privileged-daemon work, but still does not add CUDA IPC or real
+data movement yet.
 
 ## Verification
 
@@ -148,7 +153,8 @@ $env:PYTHONPATH='.'; python test/python/test_vllm_kv_connector_sweep.py
 
 - define daemon protocol records for job identity, buffer registration,
   lease tokens, and worker-facing cleanup;
-- add a worker/helper module skeleton for future helper execution;
+- connect worker/helper request creation to daemon-authorized transfers while
+  keeping execution unsupported;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

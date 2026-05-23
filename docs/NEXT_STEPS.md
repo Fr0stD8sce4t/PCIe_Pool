@@ -72,12 +72,15 @@ Current status:
 - worker-facing transfer authorization messages now exist, and the daemon can
   authorize a future helper transfer by checking transfer id, lease token,
   job/session ownership, relay id, buffer ids, direction, and ranges.
+- a `turbobus.worker` helper package now consumes daemon-authorized transfer
+  contexts and reports unsupported execution explicitly, without CUDA IPC or
+  real data movement.
 
 Next code cut:
 
-- add a worker/helper module skeleton that consumes authorized transfer
-  messages and reports unsupported execution cleanly, without adding CUDA IPC or
-  real data movement yet;
+- connect the worker helper skeleton to daemon-authorized transfer requests
+  through a small client-side helper, still returning unsupported execution
+  until IPC-backed movement exists;
 - keep the daemon as the owner of planning/control decisions;
 - do not add worker execution yet, but shape the protocol so worker/helper
   execution can consume the same `TransferRequest` and lease records later.
