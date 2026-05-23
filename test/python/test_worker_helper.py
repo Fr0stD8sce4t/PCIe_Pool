@@ -1261,7 +1261,7 @@ class WorkerHelperTest(unittest.TestCase):
                 return WorkerTransferResult(
                     transfer_id=request.transfer_id,
                     state=WorkerTransferState.COMPLETE,
-                    bytes_completed=64,
+                    bytes_completed=16,
                 )
 
         daemon_client = FakeDaemonClient(
@@ -1278,8 +1278,44 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(daemon_client.cleanup_requests, [])
         self.assertEqual(daemon_client.release_requests, ["lease-1"])
         self.assertEqual(lifecycle.status_update["state"], "complete")
-        self.assertEqual(lifecycle.status_update["bytes_completed"], 64)
+        self.assertEqual(lifecycle.status_update["bytes_completed"], 16)
         self.assertEqual(daemon_client.status_updates[0]["state"], "complete")
+
+    def test_worker_client_rejects_partial_complete_before_release(self) -> None:
+        class PartialCompleteExecutor:
+            def execute(
+                self,
+                request: WorkerTransferRequest,
+                staging_slot: WorkerStagingSlot,
+            ) -> WorkerTransferResult:
+                return WorkerTransferResult(
+                    transfer_id=request.transfer_id,
+                    state=WorkerTransferState.COMPLETE,
+                    bytes_completed=8,
+                )
+
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        staging_pool = WorkerStagingPool()
+        client = WorkerTransferClient(
+            daemon_client,
+            executor=PartialCompleteExecutor(),
+            staging_pool=staging_pool,
+        )
+
+        lifecycle = client.submit_report_cleanup_lifecycle(authorization_request())
+
+        self.assertEqual(lifecycle.final_state, "failed")
+        self.assertEqual(lifecycle.result.state, WorkerTransferState.FAILED)
+        self.assertIn("daemon-planned bytes", lifecycle.error)
+        self.assertEqual(lifecycle.status_update["state"], "failed")
+        self.assertEqual(lifecycle.status_update["bytes_completed"], 8)
+        self.assertEqual(daemon_client.status_updates[0]["state"], "failed")
+        self.assertEqual(daemon_client.cleanup_requests[0]["target_id"], "lease-1")
+        self.assertEqual(daemon_client.release_requests, [])
+        self.assertFalse(lifecycle.staging_release.active)
+        self.assertEqual(staging_pool.describe(), {"active_slots": {}})
 
     def test_worker_client_lifecycle_records_authorization_failure_cleanup(self) -> None:
         daemon_client = FakeDaemonClient(DaemonResponse(ok=False, error="denied"))

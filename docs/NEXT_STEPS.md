@@ -159,6 +159,9 @@ Completed current code cut:
   transfer direction before staging allocation: H2D must bind shared pinned CPU
   to CUDA IPC device memory, and D2H must bind CUDA IPC device memory to shared
   pinned CPU.
+- Reject worker `complete` results whose byte count does not match the
+  daemon-issued plan before reporting completion or releasing the relay
+  reservation, so partial CUDA copies cannot be masked as successful transfers.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -176,6 +179,8 @@ Completed current code cut:
      buffer sizes before worker staging allocation.
    - Validate direction-specific worker handle types before worker staging
      allocation.
+   - Validate completed byte counts against the daemon-issued plan before
+     releasing relay reservations.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor

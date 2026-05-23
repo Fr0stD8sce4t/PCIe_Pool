@@ -48,7 +48,7 @@ class CompleteExecutor:
         return WorkerTransferResult(
             transfer_id=request.transfer_id,
             state=WorkerTransferState.COMPLETE,
-            bytes_completed=sum(item["bytes"] for item in request.data_plane.ranges),
+            bytes_completed=planned_bytes(request),
             metadata={"staging_slot_id": staging_slot.slot_id},
         )
 
@@ -56,6 +56,14 @@ class CompleteExecutor:
 class FakeCudaBackend:
     def export_device_ipc_handle(self, device_ptr: int) -> bytes:
         return b"g" * 64
+
+
+def planned_bytes(request: WorkerTransferRequest) -> int:
+    return sum(
+        int(chunk["bytes"])
+        for assignment in request.data_plane.plan.get("assignments", ()) or ()
+        for chunk in assignment.get("chunks", ()) or ()
+    )
 
 
 class EnvelopeWorkerClient:
@@ -481,6 +489,50 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(RuntimeError, "copy failed"):
+                transfer_client.fetch_shared_cpu_to_cuda_ipc(
+                    source,
+                    target,
+                    ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
+                    chunk_bytes=16,
+                    mode="relay",
+                )
+
+        profile = daemon.describe().payload
+        self.assertEqual(profile["reservations"], {})
+        self.assertEqual(profile["relay_quotas"][1]["active_chunks"], 0)
+
+    def test_worker_managed_transfer_rejects_partial_complete_result(self) -> None:
+        class PartialCompleteExecutor:
+            def execute(self, request, staging_slot):
+                return WorkerTransferResult(
+                    transfer_id=request.transfer_id,
+                    state=WorkerTransferState.COMPLETE,
+                    bytes_completed=8,
+                )
+
+        daemon = daemon_with_relay_path()
+        transfer_client = make_worker_managed_transfer_client(
+            daemon,
+            target_gpu=0,
+            relay_gpus=[1],
+            worker_client=WorkerTransferClient(
+                daemon,
+                executor=PartialCompleteExecutor(),
+            ),
+        )
+        allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-client-worker-test")
+
+        with allocator.allocate("cpu-buffer", "job-1", 64) as source:
+            target = CudaIpcDeviceBuffer.from_device_pointer(
+                buffer_id="gpu-buffer",
+                job_id="job-1",
+                device_index=0,
+                size_bytes=64,
+                device_ptr=4096,
+                backend=FakeCudaBackend(),
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "daemon-planned bytes"):
                 transfer_client.fetch_shared_cpu_to_cuda_ipc(
                     source,
                     target,

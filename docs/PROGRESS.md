@@ -120,6 +120,10 @@ transfer request objects:
   types before worker staging allocation: H2D requires shared pinned CPU to
   CUDA IPC device memory, and D2H requires CUDA IPC device memory to shared
   pinned CPU;
+- worker completion handling now checks `complete` results against the
+  daemon-issued plan byte count before daemon status reporting and relay
+  reservation release, so a partial worker copy is converted into a failed
+  transfer instead of being masked by reservation release;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -356,6 +360,8 @@ transfer request objects:
 - Added schema, worker-helper, and staging-pool coverage for direction-specific
   worker buffer handle types, with the staging tests using real shared pinned
   CPU and CUDA IPC handle metadata.
+- Added worker-helper and worker-managed client coverage proving partial
+  `complete` results fail before relay reservation release.
 
 ## Immediate Goal
 
@@ -542,6 +548,10 @@ phase:
     staging allocation. H2D requests must use shared pinned CPU source handles
     and CUDA IPC destination handles; D2H requests must use CUDA IPC source
     handles and shared pinned CPU destination handles.
+60. worker completion handling now rejects `complete` results whose byte count
+    does not match the daemon-issued plan. Partial worker copies are reported
+    as failed transfers and clean up the relay reservation instead of releasing
+    it as a successful completion.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

@@ -636,7 +636,10 @@ class WorkerTransferClient:
         worker_request = self.authorize(request)
         staging_slot = self.staging_pool.allocate(worker_request.data_plane)
         try:
-            return self._execute(worker_request, staging_slot)
+            return _validate_worker_completion_bytes(
+                worker_request,
+                self._execute(worker_request, staging_slot),
+            )
         finally:
             self.staging_pool.release(staging_slot.slot_id, worker_request.data_plane)
 
@@ -707,7 +710,10 @@ class WorkerTransferClient:
             )
         staging_slot = self.staging_pool.allocate(worker_request.data_plane)
         try:
-            result = self._execute(worker_request, staging_slot)
+            result = _validate_worker_completion_bytes(
+                worker_request,
+                self._execute(worker_request, staging_slot),
+            )
         except Exception as exc:
             result = _failed_worker_result_from_exception(
                 worker_request,
@@ -919,6 +925,55 @@ def _daemon_status_update_for_result(result: WorkerTransferResult) -> dict[str, 
         "bytes_completed": result.bytes_completed,
         "error": error,
     }
+
+
+def _validate_worker_completion_bytes(
+    request: WorkerTransferRequest,
+    result: WorkerTransferResult,
+) -> WorkerTransferResult:
+    if not isinstance(request, WorkerTransferRequest):
+        raise TypeError("request must be a WorkerTransferRequest")
+    if not isinstance(result, WorkerTransferResult):
+        raise TypeError("result must be a WorkerTransferResult")
+    if result.state != WorkerTransferState.COMPLETE:
+        return result
+    expected_bytes = _expected_worker_completion_bytes(request)
+    if result.bytes_completed == expected_bytes:
+        return result
+    reported_bytes = int(result.bytes_completed)
+    safe_completed = min(reported_bytes, expected_bytes)
+    return WorkerTransferResult(
+        transfer_id=result.transfer_id,
+        state=WorkerTransferState.FAILED,
+        error=(
+            "worker completed "
+            f"{reported_bytes} of {expected_bytes} daemon-planned bytes"
+        ),
+        bytes_completed=safe_completed,
+        metadata={
+            **dict(result.metadata),
+            "completion_validation": "planned_bytes_mismatch",
+            "expected_bytes": expected_bytes,
+            "reported_bytes": reported_bytes,
+        },
+    )
+
+
+def _expected_worker_completion_bytes(request: WorkerTransferRequest) -> int:
+    plan = request.data_plane.plan
+    total_bytes = 0
+    for assignment in plan.get("assignments", ()) or ():
+        if not isinstance(assignment, Mapping):
+            raise ValueError("daemon plan assignment must be an object")
+        for chunk in assignment.get("chunks", ()) or ():
+            if not isinstance(chunk, Mapping):
+                raise ValueError("daemon plan chunk must be an object")
+            total_bytes += int(chunk["bytes"])
+    if total_bytes <= 0:
+        total_bytes = sum(int(item["bytes"]) for item in request.data_plane.ranges)
+    if total_bytes <= 0:
+        raise ValueError("daemon worker plan has no bytes to complete")
+    return total_bytes
 
 
 def _require_daemon_worker_plan(request: WorkerTransferRequest) -> None:
