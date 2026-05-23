@@ -34,6 +34,8 @@ transfer request objects:
 - `turbobus.schema` now also defines the daemon protocol baseline message
   shapes for job identity, buffer registration, lease tokens, transfer status,
   and cleanup requests;
+- buffer registration now carries worker-visible handle metadata for shared
+  pinned CPU buffers and CUDA IPC target GPU buffers;
 - `turbobus.adapters` owns the framework-facing implementations for inference
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
@@ -214,6 +216,8 @@ transfer request objects:
   fallback, backend facade construction, and request-shaped daemon planning.
 - Added exact-plan runtime/backend coverage showing that daemon plans are
   submitted directly instead of falling back to native runtime replanning.
+- Added schema, daemon, and worker coverage for carrying shared pinned CPU and
+  CUDA IPC buffer-handle metadata into worker data-plane requests.
 
 ## Immediate Goal
 
@@ -322,14 +326,18 @@ phase:
     runtime stores the daemon plan payload, the CUDA backend converts it to a
     native `TransferPlan`, and native runtime submits that exact plan directly
     to the existing CUDA executor.
+40. daemon buffer registration, worker authorization, and worker data-plane
+    request construction now preserve concrete buffer-handle metadata for
+    `shared_pinned_cpu` source buffers and `cuda_ipc_device` target buffers.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
 daemon-managed data movement slice. The worker control-plane smoke helper,
 worker endpoint observability/event-history plumbing, loopback transport
 wrapper, and full worker response lifecycle serialization have been removed.
-The next code should define the first registered buffer handles and shared
-pinned CPU buffer strategy for worker/helper execution.
+The next code should implement the first TurboBus-owned shared pinned CPU
+buffer allocator and the CUDA IPC target-buffer producer/consumer path for
+worker/helper execution.
 
 ## Verification
 
@@ -364,8 +372,6 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
   authorization, staging ownership, completion, cleanup, and direct fallback;
 - rebuild the native extension on a CUDA server and verify that daemon-issued
   direct, relay, and pooled plans execute through the exact-plan entry point;
-- define the first real registered-buffer handle format for client CPU source
-  memory and target GPU destination memory;
 - choose and implement the first cross-process CPU pinned buffer strategy;
 - add CUDA IPC or an equivalent target device-buffer handle path for worker
   access;

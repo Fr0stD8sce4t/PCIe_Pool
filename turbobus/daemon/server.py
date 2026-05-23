@@ -171,6 +171,8 @@ class TurboBusDaemon:
         device_index: int | None = None,
         address: int | None = None,
         pinned: bool = False,
+        handle_type: str = "registered_buffer",
+        metadata: dict[str, object] | None = None,
     ) -> DaemonResponse:
         buffer = BufferRegistration(
             buffer_id=buffer_id,
@@ -180,6 +182,8 @@ class TurboBusDaemon:
             device_index=device_index,
             address=address,
             pinned=pinned,
+            handle_type=handle_type,
+            metadata={} if metadata is None else metadata,
         )
         with self._lock:
             if buffer.job_id not in self._jobs:
@@ -891,6 +895,8 @@ class TurboBusDaemon:
                 device_index=payload.get("device_index"),
                 address=payload.get("address"),
                 pinned=bool(payload.get("pinned", False)),
+                handle_type=str(payload.get("handle_type", "registered_buffer")),
+                metadata=payload.get("metadata") or {},
             )
         if request.request_type == RequestType.GET_INVENTORY:
             return self.get_inventory()

@@ -72,12 +72,14 @@ Completed current code cut:
   and submitted through exact-plan methods instead of local relay replanning.
 - Remaining server verification: rebuild the native extension on a CUDA
   machine and run a direct/relay/pool transfer against a daemon-issued plan.
+- Define the first registered buffer-handle metadata shape. Buffer registration
+  can now carry shared pinned CPU handles and CUDA IPC device handles through
+  daemon authorization into worker data-plane requests.
 
 1. Define the first registered buffer handles.
-   - Decide how a client-owned CPU source buffer becomes visible to the worker.
-   - Prefer a TurboBus-owned shared pinned allocator or shared-memory buffer
-     registered for CUDA access.
-   - Add target GPU device-buffer handle metadata needed by the worker.
+   - Implement a TurboBus-owned shared-memory CPU buffer allocator.
+   - Register that shared memory for CUDA access in the backend or worker path.
+   - Add the first target GPU CUDA IPC handle producer/consumer path.
 
 2. Implement a CUDA worker executor.
    - Replace the default unsupported executor for one narrow path.

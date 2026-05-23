@@ -98,6 +98,8 @@ class TurboBusDaemonClient:
         device_index: int | None = None,
         address: int | None = None,
         pinned: bool = False,
+        handle_type: str = "registered_buffer",
+        metadata: dict[str, object] | None = None,
     ) -> DaemonResponse:
         payload: dict[str, object] = {
             "buffer_id": str(buffer_id),
@@ -105,11 +107,14 @@ class TurboBusDaemonClient:
             "kind": str(kind),
             "size_bytes": int(size_bytes),
             "pinned": bool(pinned),
+            "handle_type": str(handle_type),
         }
         if device_index is not None:
             payload["device_index"] = int(device_index)
         if address is not None:
             payload["address"] = int(address)
+        if metadata is not None:
+            payload["metadata"] = dict(metadata)
         return self.send(
             DaemonRequest(
                 request_type=RequestType.REGISTER_BUFFER,

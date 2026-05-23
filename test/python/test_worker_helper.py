@@ -60,6 +60,12 @@ def authorization_payload() -> dict:
             kind="cpu_pinned",
             size_bytes=64,
             pinned=True,
+            handle_type="shared_pinned_cpu",
+            metadata={
+                "shared_memory_name": "tb-job-1-src",
+                "offset_bytes": 0,
+                "shared_memory_size_bytes": 64,
+            },
         ),
         dst_buffer=BufferRegistration(
             buffer_id="gpu-buffer",
@@ -67,6 +73,8 @@ def authorization_payload() -> dict:
             kind="gpu",
             size_bytes=64,
             device_index=0,
+            handle_type="cuda_ipc_device",
+            metadata={"cuda_ipc_handle": "ipc-target"},
         ),
         direction="h2d",
         ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
@@ -249,8 +257,18 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(request.data_plane.direction, "h2d")
         self.assertEqual(request.data_plane.src_handle.buffer_id, "cpu-buffer")
         self.assertEqual(request.data_plane.src_handle.access, "read")
+        self.assertEqual(request.data_plane.src_handle.handle_type, "shared_pinned_cpu")
+        self.assertEqual(
+            request.data_plane.src_handle.metadata["shared_memory_name"],
+            "tb-job-1-src",
+        )
         self.assertEqual(request.data_plane.dst_handle.buffer_id, "gpu-buffer")
         self.assertEqual(request.data_plane.dst_handle.access, "write")
+        self.assertEqual(request.data_plane.dst_handle.handle_type, "cuda_ipc_device")
+        self.assertEqual(
+            request.data_plane.dst_handle.metadata["cuda_ipc_handle"],
+            "ipc-target",
+        )
         self.assertEqual(request.data_plane.staging.relay_gpu, 1)
         self.assertEqual(request.data_plane.staging.total_bytes, 16)
         self.assertEqual(request.as_dict()["data_plane"]["staging"]["chunk_count"], 1)

@@ -247,6 +247,12 @@ class DaemonStateTest(unittest.TestCase):
             kind="cpu_pinned",
             size_bytes=64,
             pinned=True,
+            handle_type="shared_pinned_cpu",
+            metadata={
+                "shared_memory_name": "tb-job-1-src",
+                "offset_bytes": 0,
+                "shared_memory_size_bytes": 64,
+            },
         )
         daemon.register_buffer(
             buffer_id="gpu-buffer",
@@ -254,6 +260,8 @@ class DaemonStateTest(unittest.TestCase):
             kind="gpu",
             size_bytes=64,
             device_index=0,
+            handle_type="cuda_ipc_device",
+            metadata={"cuda_ipc_handle": "ipc-target"},
         )
         daemon.put_profile(
             target_gpu=0,
@@ -1217,6 +1225,12 @@ class DaemonStateTest(unittest.TestCase):
             kind="cpu_pinned",
             size_bytes=64,
             pinned=True,
+            handle_type="shared_pinned_cpu",
+            metadata={
+                "shared_memory_name": "tb-job-1-src",
+                "offset_bytes": 0,
+                "shared_memory_size_bytes": 64,
+            },
         )
         daemon.register_buffer(
             buffer_id="gpu-buffer",
@@ -1224,6 +1238,8 @@ class DaemonStateTest(unittest.TestCase):
             kind="gpu",
             size_bytes=64,
             device_index=0,
+            handle_type="cuda_ipc_device",
+            metadata={"cuda_ipc_handle": "ipc-target"},
         )
         daemon.put_profile(
             target_gpu=0,
@@ -1284,6 +1300,16 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(authorization["transfer_id"], transfer_id)
         self.assertEqual(authorization["src_buffer"]["buffer_id"], "cpu-buffer")
         self.assertEqual(authorization["dst_buffer"]["buffer_id"], "gpu-buffer")
+        self.assertEqual(authorization["src_buffer"]["handle_type"], "shared_pinned_cpu")
+        self.assertEqual(
+            authorization["src_buffer"]["metadata"]["shared_memory_name"],
+            "tb-job-1-src",
+        )
+        self.assertEqual(authorization["dst_buffer"]["handle_type"], "cuda_ipc_device")
+        self.assertEqual(
+            authorization["dst_buffer"]["metadata"]["cuda_ipc_handle"],
+            "ipc-target",
+        )
         self.assertEqual(authorization["ranges"][0]["bytes"], 16)
         self.assertEqual(authorization["relay_gpu"], 1)
 

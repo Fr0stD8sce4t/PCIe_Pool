@@ -87,6 +87,8 @@ class BufferRegistration:
     device_index: int | None = None
     address: int | None = None
     pinned: bool = False
+    handle_type: str = "registered_buffer"
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not str(self.buffer_id).strip():
@@ -102,10 +104,21 @@ class BufferRegistration:
             raise ValueError("address must be non-negative")
         if not str(self.kind).strip():
             raise ValueError("kind must be non-empty")
+        handle_type = str(self.handle_type).lower()
+        metadata = _normalize_buffer_handle_metadata(
+            kind=str(self.kind),
+            pinned=bool(self.pinned),
+            device_index=self.device_index,
+            size_bytes=size_bytes,
+            handle_type=handle_type,
+            metadata=self.metadata,
+        )
         object.__setattr__(self, "buffer_id", str(self.buffer_id))
         object.__setattr__(self, "job_id", str(self.job_id))
         object.__setattr__(self, "kind", str(self.kind))
         object.__setattr__(self, "size_bytes", size_bytes)
+        object.__setattr__(self, "handle_type", handle_type)
+        object.__setattr__(self, "metadata", metadata)
         if self.device_index is not None:
             object.__setattr__(self, "device_index", int(self.device_index))
         if self.address is not None:
@@ -303,6 +316,8 @@ class WorkerBufferHandle:
             device_index=buffer.device_index,
             address=buffer.address,
             pinned=buffer.pinned,
+            handle_type=buffer.handle_type,
+            metadata=buffer.metadata,
         )
 
     def __post_init__(self) -> None:
@@ -318,20 +333,28 @@ class WorkerBufferHandle:
         access = str(self.access).lower()
         if access not in {"read", "write", "read_write"}:
             raise ValueError("access must be read, write, or read_write")
-        handle_type = str(self.handle_type)
+        handle_type = str(self.handle_type).lower()
         if not handle_type.strip():
             raise ValueError("handle_type must be non-empty")
         if self.device_index is not None and int(self.device_index) < 0:
             raise ValueError("device_index must be non-negative")
         if self.address is not None and int(self.address) < 0:
             raise ValueError("address must be non-negative")
+        metadata = _normalize_buffer_handle_metadata(
+            kind=str(self.kind),
+            pinned=bool(self.pinned),
+            device_index=self.device_index,
+            size_bytes=size_bytes,
+            handle_type=handle_type,
+            metadata=self.metadata,
+        )
         object.__setattr__(self, "buffer_id", str(self.buffer_id))
         object.__setattr__(self, "job_id", str(self.job_id))
         object.__setattr__(self, "kind", str(self.kind))
         object.__setattr__(self, "size_bytes", size_bytes)
         object.__setattr__(self, "access", access)
         object.__setattr__(self, "handle_type", handle_type)
-        object.__setattr__(self, "metadata", dict(self.metadata))
+        object.__setattr__(self, "metadata", metadata)
         if self.device_index is not None:
             object.__setattr__(self, "device_index", int(self.device_index))
         if self.address is not None:
@@ -531,6 +554,51 @@ def _normalize_worker_ranges(ranges: tuple[dict[str, int], ...]) -> tuple[dict[s
             }
         )
     return tuple(normalized_ranges)
+
+
+def _normalize_buffer_handle_metadata(
+    *,
+    kind: str,
+    pinned: bool,
+    device_index: int | None,
+    size_bytes: int,
+    handle_type: str,
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    if not handle_type.strip():
+        raise ValueError("handle_type must be non-empty")
+    if handle_type == "shared_pinned_cpu":
+        if kind != "cpu_pinned":
+            raise ValueError("shared_pinned_cpu handles require cpu_pinned buffers")
+        if not pinned:
+            raise ValueError("shared_pinned_cpu handles require pinned buffers")
+        if not isinstance(metadata, dict):
+            raise TypeError("metadata must be a dict")
+        required = ("shared_memory_name", "offset_bytes")
+        for field_name in required:
+            if field_name not in metadata:
+                raise ValueError(f"shared_pinned_cpu metadata requires {field_name}")
+        if int(metadata["offset_bytes"]) < 0:
+            raise ValueError("shared_pinned_cpu offset_bytes must be non-negative")
+        span = int(metadata["offset_bytes"]) + int(size_bytes)
+        if "shared_memory_size_bytes" in metadata:
+            shared_size = int(metadata["shared_memory_size_bytes"])
+            if shared_size < span:
+                raise ValueError(
+                    "shared_pinned_cpu shared_memory_size_bytes is smaller than buffer span"
+                )
+    elif handle_type == "cuda_ipc_device":
+        if kind != "gpu":
+            raise ValueError("cuda_ipc_device handles require gpu buffers")
+        if device_index is None:
+            raise ValueError("cuda_ipc_device handles require device_index")
+        if not isinstance(metadata, dict):
+            raise TypeError("metadata must be a dict")
+        if "cuda_ipc_handle" not in metadata:
+            raise ValueError("cuda_ipc_device metadata requires cuda_ipc_handle")
+    elif not isinstance(metadata, dict):
+        raise TypeError("metadata must be a dict")
+    return dict(metadata)
 
 
 @dataclass(frozen=True)

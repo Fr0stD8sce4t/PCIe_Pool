@@ -850,6 +850,8 @@ def _buffer_from_payload(payload: object) -> BufferRegistration:
         device_index=payload.get("device_index"),
         address=payload.get("address"),
         pinned=bool(payload.get("pinned", False)),
+        handle_type=str(payload.get("handle_type", "registered_buffer")),
+        metadata=dict(payload.get("metadata") or {}),
     )
 
 

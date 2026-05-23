@@ -136,6 +136,12 @@ class SchemaTest(unittest.TestCase):
             device_index=0,
             address=1024,
             pinned=True,
+            handle_type="shared_pinned_cpu",
+            metadata={
+                "shared_memory_name": "tb-job-1-src",
+                "offset_bytes": 0,
+                "shared_memory_size_bytes": 4096,
+            },
         )
         lease = LeaseToken(
             lease_id="lease-1",
@@ -185,6 +191,8 @@ class SchemaTest(unittest.TestCase):
                 kind="gpu",
                 size_bytes=4096,
                 device_index=0,
+                handle_type="cuda_ipc_device",
+                metadata={"cuda_ipc_handle": "ipc-target"},
             ),
             direction="h2d",
             relay_gpu=1,
@@ -218,6 +226,11 @@ class SchemaTest(unittest.TestCase):
 
         self.assertEqual(payload["job"]["process_id"], 42)
         self.assertEqual(payload["buffer_registration"]["kind"], "cpu_pinned")
+        self.assertEqual(payload["buffer_registration"]["handle_type"], "shared_pinned_cpu")
+        self.assertEqual(
+            payload["buffer_registration"]["metadata"]["shared_memory_name"],
+            "tb-job-1-src",
+        )
         self.assertEqual(payload["lease"]["relay_gpu"], 1)
         self.assertEqual(payload["lease"]["token"], "token-1")
         self.assertEqual(payload["lease"]["buffer_ids"], ["cpu-buffer", "gpu-buffer"])
@@ -234,8 +247,24 @@ class SchemaTest(unittest.TestCase):
             "read",
         )
         self.assertEqual(
+            payload["data_plane_request"]["src_handle"]["handle_type"],
+            "shared_pinned_cpu",
+        )
+        self.assertEqual(
+            payload["data_plane_request"]["src_handle"]["metadata"]["offset_bytes"],
+            0,
+        )
+        self.assertEqual(
             payload["data_plane_request"]["dst_handle"]["access"],
             "write",
+        )
+        self.assertEqual(
+            payload["data_plane_request"]["dst_handle"]["handle_type"],
+            "cuda_ipc_device",
+        )
+        self.assertEqual(
+            payload["data_plane_request"]["dst_handle"]["metadata"]["cuda_ipc_handle"],
+            "ipc-target",
         )
         self.assertEqual(
             payload["data_plane_request"]["staging"]["total_bytes"],
@@ -252,6 +281,25 @@ class SchemaTest(unittest.TestCase):
                 job_id="job-1",
                 kind="",
                 size_bytes=1,
+            )
+        with self.assertRaisesRegex(ValueError, "shared_pinned_cpu metadata"):
+            BufferRegistration(
+                buffer_id="buffer-1",
+                job_id="job-1",
+                kind="cpu_pinned",
+                size_bytes=1,
+                pinned=True,
+                handle_type="shared_pinned_cpu",
+            )
+        with self.assertRaisesRegex(ValueError, "cuda_ipc_handle"):
+            WorkerBufferHandle(
+                buffer_id="buffer-1",
+                job_id="job-1",
+                kind="gpu",
+                size_bytes=1,
+                device_index=0,
+                access="write",
+                handle_type="cuda_ipc_device",
             )
         with self.assertRaises(ValueError):
             LeaseToken(
