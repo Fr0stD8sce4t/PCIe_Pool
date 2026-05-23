@@ -4,28 +4,9 @@ import os
 import socket
 from dataclasses import dataclass
 from typing import Any
-from typing import Protocol, runtime_checkable
 from threading import Event
 
 from .endpoint import WorkerServiceEndpoint
-
-
-@runtime_checkable
-class WorkerServiceTransport(Protocol):
-    def handle_message(self, message: str | bytes) -> str:
-        raise NotImplementedError
-
-
-@dataclass
-class WorkerServiceLoopbackTransport:
-    endpoint: WorkerServiceTransport
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.endpoint, WorkerServiceTransport):
-            raise TypeError("endpoint must be a WorkerServiceTransport")
-
-    def handle_message(self, message: str | bytes) -> str:
-        return self.endpoint.handle_message(message)
 
 
 @dataclass
@@ -96,8 +77,6 @@ class WorkerServiceUnixSocketTransport:
 
 
 __all__ = [
-    "WorkerServiceLoopbackTransport",
-    "WorkerServiceTransport",
     "WorkerServiceUnixSocketTransport",
 ]
 

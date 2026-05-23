@@ -35,8 +35,6 @@ from .process import (
     run_worker_helper_process,
 )
 from .transport import (
-    WorkerServiceLoopbackTransport,
-    WorkerServiceTransport,
     WorkerServiceUnixSocketTransport,
 )
 from .staging_pool import (
@@ -52,7 +50,6 @@ __all__ = [
     "WorkerServiceRequestEnvelope",
     "WorkerServiceResponseEnvelope",
     "WorkerServiceEndpoint",
-    "WorkerServiceLoopbackTransport",
     "WorkerStatusReportError",
     "build_worker_helper_transport",
     "WorkerDataPlaneCompletion",
@@ -73,7 +70,6 @@ __all__ = [
     "WorkerStagingSlot",
     "worker_process_main",
     "run_worker_helper_process",
-    "WorkerServiceTransport",
     "WorkerServiceUnixSocketTransport",
     "WorkerMessageCodecError",
     "decode_worker_request_envelope",

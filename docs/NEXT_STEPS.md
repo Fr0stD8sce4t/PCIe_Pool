@@ -40,6 +40,9 @@ Delete or fold down code that only supports the old unsupported path:
 - endpoint observability snapshots, metrics, event history, and reset plumbing;
   done for the worker endpoint, codec, transport, and process path;
 - extra socket/transport wrappers that do not carry real transfer execution;
+  done for the worker loopback transport and transport protocol wrapper; keep
+  the Unix socket helper path because it can carry the real helper-process
+  request boundary;
 - response envelope fields that only serialize unsupported lifecycle details;
 - protocol fields that are not consumed by daemon planning, lease validation,
   worker authorization, execution, completion, or cleanup.

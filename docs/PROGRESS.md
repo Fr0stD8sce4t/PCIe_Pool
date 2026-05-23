@@ -35,10 +35,8 @@ transfer request objects:
   slots, vLLM, vLLM connector entry points, model loading, and training offload;
 - old root-level framework modules remain as compatibility aliases to the
   adapter modules.
-- `turbobus.worker.transport` now defines a transport protocol and loopback
-  adapter for the in-process worker endpoint.
-- `turbobus.worker.transport` now also provides a Unix socket transport shell
-  that forwards worker messages through the same endpoint behavior.
+- `turbobus.worker.transport` now keeps only the Unix socket helper path that
+  forwards worker messages through the endpoint behavior.
 - `turbobus.worker.process` now provides the worker helper-process entrypoint,
   and `python -m turbobus.worker` can serve the in-process worker endpoint over
   the Unix socket transport.
@@ -177,10 +175,8 @@ transfer request objects:
 - `WorkerServiceEndpoint` now provides a transport-neutral worker service
   endpoint with a single `handle_message` entry point for future socket or IPC
   transports.
-- `turbobus.worker.transport` now provides a loopback transport wrapper and a
-  transport protocol for the worker service boundary.
-- `turbobus.worker.transport` now also provides a Unix socket transport shell
-  for the worker service boundary.
+- `turbobus.worker.transport` now provides the Unix socket helper-process
+  transport for the worker service boundary.
 - `turbobus.worker.process` now builds the daemon client, worker endpoint, and
   Unix socket transport for a helper-process entrypoint.
 - `test/python/test_worker_process.py` now covers the helper-process builder,
@@ -190,6 +186,9 @@ transfer request objects:
   `turbobus.worker.transport`; the worker helper boundary is now a single
   request/response `handle_message` path for daemon-approved transfer
   execution.
+- Removed the worker loopback transport and transport protocol wrapper so
+  `turbobus.worker.transport` no longer carries an extra in-process transport
+  abstraction that is not needed for the real helper-process data path.
 - `TurboBusDaemon.discover_relays()` now reports cross-job relay occupancy,
   target-specific inventory eligibility, quota availability, active
   reservations, and redacted active lease records without exposing lease
@@ -308,17 +307,17 @@ phase:
 36. daemon relay discovery now reports backend-neutral relay eligibility,
     quota availability, cross-job session ownership, active reservations, and
     redacted lease records without changing direct fallback behavior.
-37. make the worker service boundary transport-neutral so future socket or IPC
-    transports can reuse the in-process helper contract without changing
-    authorization or lifecycle handling.
+37. worker loopback transport and transport protocol wrapper have been removed;
+    the remaining worker transport is the Unix socket helper-process boundary
+    needed for future daemon-approved execution.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
 daemon-managed data movement slice. The worker control-plane smoke helper and
 worker endpoint observability/event-history plumbing have been removed. Before
-adding the CUDA worker data path, continue trimming any remaining unused
-socket wrappers or unsupported-lifecycle serialization that do not serve real
-transfer execution.
+adding the CUDA worker data path, continue trimming any remaining
+unsupported-lifecycle serialization that does not serve real transfer
+execution.
 
 After that cleanup, the next code should execute daemon-issued transfer plans
 exactly, define the first registered buffer handles, and replace the
@@ -354,8 +353,7 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
 ## Remaining Work
 
 - continue removing non-functional scaffold before the worker data path:
-  unused socket wrappers and unsupported-lifecycle response fields that are not
-  needed by real execution;
+  unsupported-lifecycle response fields that are not needed by real execution;
 - keep the minimum daemon/client/worker spine for job and buffer registration,
   transfer requests, exact plans, leases, lease validation, worker
   authorization, staging ownership, completion, cleanup, and direct fallback;
