@@ -184,6 +184,71 @@ class WorkerTransferLifecycleRecord:
         }
 
 
+@dataclass(frozen=True)
+class WorkerServiceRequestEnvelope:
+    payload: Mapping[str, object]
+    cleanup_target_kind: str = "reservation"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.payload, Mapping):
+            raise ValueError("worker service payload must be a mapping")
+        cleanup_target_kind = str(self.cleanup_target_kind)
+        if cleanup_target_kind not in {"reservation", "session"}:
+            raise ValueError("cleanup_target_kind must be reservation or session")
+        object.__setattr__(self, "payload", dict(self.payload))
+        object.__setattr__(self, "cleanup_target_kind", cleanup_target_kind)
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "payload": dict(self.payload),
+            "cleanup_target_kind": self.cleanup_target_kind,
+        }
+
+
+@dataclass(frozen=True)
+class WorkerServiceResponseEnvelope:
+    ok: bool
+    lifecycle: Mapping[str, object] | None = None
+    error: str | None = None
+    final_state: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.lifecycle is not None and not isinstance(self.lifecycle, Mapping):
+            raise TypeError("lifecycle must be a mapping")
+        object.__setattr__(self, "ok", bool(self.ok))
+        if self.lifecycle is not None:
+            object.__setattr__(self, "lifecycle", dict(self.lifecycle))
+        if self.error is not None:
+            object.__setattr__(self, "error", str(self.error))
+        if self.final_state is not None:
+            object.__setattr__(self, "final_state", str(self.final_state))
+
+    @classmethod
+    def from_lifecycle(
+        cls,
+        lifecycle: WorkerTransferLifecycleRecord,
+    ) -> "WorkerServiceResponseEnvelope":
+        payload = lifecycle.as_dict()
+        return cls(
+            ok=True,
+            lifecycle=payload,
+            final_state=str(payload["final_state"]),
+            error=payload.get("error"),
+        )
+
+    @classmethod
+    def from_error(cls, error: str) -> "WorkerServiceResponseEnvelope":
+        return cls(ok=False, error=str(error), final_state="parse_failed")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "ok": self.ok,
+            "lifecycle": dict(self.lifecycle) if self.lifecycle is not None else None,
+            "error": self.error,
+            "final_state": self.final_state,
+        }
+
+
 class WorkerTransferUnsupportedExecutor:
     def execute(self, request: WorkerTransferRequest) -> WorkerTransferResult:
         if not isinstance(request, WorkerTransferRequest):
@@ -512,6 +577,35 @@ class WorkerTransferService:
             self.parse_authorization_request(payload),
             cleanup_target_kind=cleanup_target_kind,
         )
+
+    def handle_envelope(
+        self,
+        envelope: WorkerServiceRequestEnvelope | Mapping[str, object],
+    ) -> WorkerServiceResponseEnvelope:
+        try:
+            request_envelope = (
+                envelope
+                if isinstance(envelope, WorkerServiceRequestEnvelope)
+                else WorkerServiceRequestEnvelope(
+                    payload=envelope.get("payload", envelope),
+                    cleanup_target_kind=str(
+                        envelope.get("cleanup_target_kind", "reservation")
+                    ),
+                )
+            )
+            lifecycle = self.handle_lifecycle(
+                self.parse_authorization_request(request_envelope.payload),
+                cleanup_target_kind=request_envelope.cleanup_target_kind,
+            )
+            return WorkerServiceResponseEnvelope.from_lifecycle(lifecycle)
+        except (KeyError, TypeError, ValueError) as exc:
+            return WorkerServiceResponseEnvelope.from_error(str(exc))
+
+    def handle_envelope_payload(
+        self,
+        envelope: WorkerServiceRequestEnvelope | Mapping[str, object],
+    ) -> dict[str, object]:
+        return self.handle_envelope(envelope).as_dict()
 
 
 def parse_worker_authorization_request_payload(

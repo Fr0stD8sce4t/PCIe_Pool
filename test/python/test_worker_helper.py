@@ -20,6 +20,8 @@ from turbobus.worker import (
     UnsupportedWorkerExecution,
     WorkerAuthorizationError,
     WorkerCleanupError,
+    WorkerServiceRequestEnvelope,
+    WorkerServiceResponseEnvelope,
     WorkerStatusReportError,
     WorkerTransferAuthorizer,
     WorkerTransferClient,
@@ -727,6 +729,93 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(payload["final_state"], "unsupported")
         self.assertEqual(payload["status_update"]["state"], "failed")
         self.assertEqual(payload["cleanup_target"]["target_id"], "lease-1")
+
+    def test_worker_service_request_envelope_serializes_payload(self) -> None:
+        envelope = WorkerServiceRequestEnvelope(
+            payload=authorization_request_payload(),
+            cleanup_target_kind="session",
+        )
+
+        payload = envelope.as_dict()
+
+        self.assertEqual(payload["cleanup_target_kind"], "session")
+        self.assertEqual(payload["payload"]["transfer_id"], "transfer-1")
+
+    def test_worker_service_request_envelope_rejects_invalid_cleanup_target(self) -> None:
+        with self.assertRaisesRegex(ValueError, "cleanup_target_kind"):
+            WorkerServiceRequestEnvelope(
+                payload=authorization_request_payload(),
+                cleanup_target_kind="job",
+            )
+
+    def test_worker_service_response_envelope_serializes_error(self) -> None:
+        response = WorkerServiceResponseEnvelope.from_error("bad payload")
+
+        payload = response.as_dict()
+
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"], "bad payload")
+        self.assertEqual(payload["final_state"], "parse_failed")
+        self.assertIsNone(payload["lifecycle"])
+
+    def test_worker_service_returns_success_envelope_payload(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        service = WorkerTransferService(daemon_client)
+
+        response = service.handle_envelope_payload(
+            WorkerServiceRequestEnvelope(payload=authorization_request_payload())
+        )
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["final_state"], "unsupported")
+        self.assertEqual(response["lifecycle"]["result"]["state"], "unsupported")
+        self.assertEqual(response["lifecycle"]["cleanup_target"]["target_id"], "lease-1")
+
+    def test_worker_service_returns_malformed_payload_envelope(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        service = WorkerTransferService(daemon_client)
+        payload = authorization_request_payload()
+        payload.pop("token")
+
+        response = service.handle_envelope_payload(payload)
+
+        self.assertFalse(response["ok"])
+        self.assertEqual(response["final_state"], "parse_failed")
+        self.assertIn("missing worker authorization field: token", response["error"])
+        self.assertIsNone(response["lifecycle"])
+        self.assertEqual(daemon_client.requests, [])
+
+    def test_worker_service_returns_status_failure_envelope(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload()),
+            status_response=DaemonResponse(ok=False, error="unknown transfer"),
+        )
+        service = WorkerTransferService(daemon_client)
+
+        response = service.handle_envelope_payload(authorization_request_payload())
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["final_state"], "status_failed")
+        self.assertIn("unknown transfer", response["error"])
+        self.assertEqual(response["lifecycle"]["status_update"]["state"], "failed")
+
+    def test_worker_service_returns_cleanup_failure_envelope(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload()),
+            cleanup_response=DaemonResponse(ok=False, error="unknown reservation"),
+        )
+        service = WorkerTransferService(daemon_client)
+
+        response = service.handle_envelope_payload(authorization_request_payload())
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["final_state"], "cleanup_failed")
+        self.assertIn("unknown reservation", response["error"])
+        self.assertEqual(response["lifecycle"]["cleanup_target"]["target_id"], "lease-1")
 
 
 if __name__ == "__main__":

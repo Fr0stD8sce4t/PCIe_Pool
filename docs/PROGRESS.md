@@ -122,6 +122,9 @@ transfer request objects:
 - worker service payload parsing helpers now convert plain daemon JSON
   dictionaries into `WorkerTransferAuthorizationRequest` objects and preserve
   serialized lifecycle output from parsed payloads.
+- `WorkerServiceRequestEnvelope` and `WorkerServiceResponseEnvelope` now wrap
+  successful lifecycle payloads, malformed payload errors, status failures, and
+  cleanup failures in one stable in-process response shape.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -191,12 +194,14 @@ phase:
     lifecycle records without adding sockets, IPC, or real data movement.
 23. worker service payload parsing now validates plain dictionaries into
     worker authorization requests before they enter the service path.
+24. worker service request/response envelopes now provide a stable shape for
+    future helper process boundaries without adding sockets or IPC.
 
-The next immediate goal is to add worker service request/response envelope
-records so a future helper process can wrap payload parsing errors and lifecycle
-payloads in one stable response shape. This should stay inside in-process
-response shaping and should not add CUDA IPC, sockets, real data movement, or
-hardware discovery.
+The next immediate goal is to add a worker service control-plane smoke helper
+that wires a daemon-owned planned transfer, worker service envelope handling,
+daemon status reporting, and daemon reservation cleanup together without a
+socket. This should stay in-process and should not add CUDA IPC, sockets, real
+data movement, or hardware discovery.
 
 ## Verification
 
@@ -248,7 +253,10 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
   records; done through `WorkerTransferService`;
 - add worker service payload parsing helpers for future worker process
   boundaries; done through `parse_worker_authorization_request_payload`;
-- add worker service request/response envelope records;
+- add worker service request/response envelope records; done through
+  `WorkerServiceRequestEnvelope` and `WorkerServiceResponseEnvelope`;
+- add worker service control-plane smoke coverage for daemon-owned planned
+  transfers;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper

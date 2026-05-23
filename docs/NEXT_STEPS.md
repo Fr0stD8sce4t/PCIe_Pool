@@ -119,16 +119,20 @@ Current status:
   dictionaries, validate them into `WorkerTransferAuthorizationRequest`
   objects, and feed parsed payloads through the same serialized lifecycle
   output path.
+- `WorkerServiceRequestEnvelope` and `WorkerServiceResponseEnvelope` now give
+  future helper process boundaries one stable in-process shape for parsed
+  lifecycle payloads, malformed payload errors, status failures, and cleanup
+  failures.
 
 Next code cut:
 
-- add worker service request/response envelope records so a future helper
-  process can wrap payload parsing errors and lifecycle payloads in one stable
-  response shape;
-- add focused tests for successful envelope responses, malformed payload
-  responses, and daemon lifecycle failure responses;
-- keep this as in-process response shaping only, without adding CUDA IPC,
-  sockets, real data movement, or hardware discovery.
+- add a worker service control-plane smoke helper that wires a daemon-owned
+  planned transfer, worker service envelope handling, daemon status reporting,
+  and daemon reservation cleanup together without a socket;
+- add focused tests that the smoke helper proves the service envelope path can
+  reclaim a daemon reservation and report failed unsupported execution;
+- keep this as in-process control-plane smoke coverage only, without adding
+  CUDA IPC, sockets, real data movement, or hardware discovery.
 
 ## Upcoming
 
