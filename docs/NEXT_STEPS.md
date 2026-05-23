@@ -166,16 +166,18 @@ Current status:
 - worker endpoint request/response events now record message size, response
   size, ok/error status, final state, and whether completion data was present
   for each `handle_message` call without changing the encoded response payload.
+- worker endpoint `describe()` snapshots now summarize recorded message events,
+  including total request count, last event, final-state counts, error count,
+  and completion count while staying in process.
 
 Next code cut:
 
-- add a worker endpoint `describe()` snapshot that summarizes recorded
-  `handle_message` events, including total requests, last event, final-state
-  counts, error count, and completion count;
+- add a worker endpoint `clear_events()` helper that resets recorded
+  request/response events and `last_event` after a snapshot has been collected;
 - keep it in process only, with no CUDA IPC, sockets, real data movement, or
   hardware discovery yet;
-- add focused tests that success, parse-error, and status-failure endpoint calls
-  produce the expected snapshot without changing encoded response payloads.
+- add focused tests that event snapshots remain accurate before reset and that
+  reset does not change future encoded response payloads.
 
 ## Upcoming
 

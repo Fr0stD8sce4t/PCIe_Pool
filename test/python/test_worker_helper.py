@@ -1310,6 +1310,20 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertTrue(event.has_completion)
         self.assertEqual(event.as_dict()["final_state"], "unsupported")
 
+    def test_worker_service_endpoint_describes_empty_event_history(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        endpoint = WorkerServiceEndpoint(daemon_client=daemon_client)
+
+        snapshot = endpoint.describe()
+
+        self.assertEqual(snapshot["total_requests"], 0)
+        self.assertIsNone(snapshot["last_event"])
+        self.assertEqual(snapshot["final_state_counts"], {})
+        self.assertEqual(snapshot["error_count"], 0)
+        self.assertEqual(snapshot["completion_count"], 0)
+
     def test_worker_service_endpoint_matches_message_handler_parse_error(self) -> None:
         daemon_client = FakeDaemonClient(
             DaemonResponse(ok=True, payload=authorization_payload())
@@ -1392,6 +1406,46 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(event.final_state, "status_failed")
         self.assertIn("unknown transfer", event.error)
         self.assertTrue(event.has_completion)
+
+    def test_worker_service_endpoint_describes_recorded_events(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
+        endpoint = WorkerServiceEndpoint(daemon_client=daemon_client)
+        request_message = encode_worker_request_envelope(
+            WorkerServiceRequestEnvelope(payload=authorization_request_payload())
+        )
+
+        success_response = endpoint.handle_message(request_message)
+        parse_error_response = endpoint.handle_message("{not-json")
+        daemon_client.status_response = DaemonResponse(
+            ok=False,
+            error="unknown transfer",
+        )
+        status_response = endpoint.handle_message(request_message)
+
+        snapshot = endpoint.describe()
+
+        self.assertEqual(snapshot["total_requests"], 3)
+        self.assertEqual(
+            snapshot["final_state_counts"],
+            {"unsupported": 1, "parse_failed": 1, "status_failed": 1},
+        )
+        self.assertEqual(snapshot["error_count"], 3)
+        self.assertEqual(snapshot["completion_count"], 2)
+        self.assertEqual(snapshot["last_event"]["final_state"], "status_failed")
+        self.assertEqual(
+            snapshot["last_event"]["response_bytes"],
+            len(status_response.encode("utf-8")),
+        )
+        self.assertEqual(
+            decode_worker_response_envelope(success_response).as_dict()["final_state"],
+            "unsupported",
+        )
+        self.assertEqual(
+            decode_worker_response_envelope(parse_error_response).as_dict()["final_state"],
+            "parse_failed",
+        )
 
     def test_worker_service_endpoint_requires_service_or_daemon_client(self) -> None:
         with self.assertRaisesRegex(ValueError, "daemon_client"):

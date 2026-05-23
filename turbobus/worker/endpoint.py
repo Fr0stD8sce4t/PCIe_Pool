@@ -51,6 +51,27 @@ class WorkerServiceEndpoint:
         self.events.append(event)
         return response_message
 
+    def describe(self) -> dict[str, object]:
+        final_state_counts: dict[str, int] = {}
+        error_count = 0
+        completion_count = 0
+        for event in self.events:
+            final_state = event.final_state or "unknown"
+            final_state_counts[final_state] = final_state_counts.get(final_state, 0) + 1
+            if event.error is not None:
+                error_count += 1
+            if event.has_completion:
+                completion_count += 1
+        return {
+            "total_requests": len(self.events),
+            "last_event": (
+                self.last_event.as_dict() if self.last_event is not None else None
+            ),
+            "final_state_counts": final_state_counts,
+            "error_count": error_count,
+            "completion_count": completion_count,
+        }
+
 
 def _message_size(message: str | bytes) -> int:
     if isinstance(message, bytes):

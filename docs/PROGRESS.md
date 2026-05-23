@@ -168,6 +168,9 @@ transfer request objects:
 - `WorkerEndpointEvent` now records request size, response size, ok/error
   status, final state, and completion presence for each endpoint
   `handle_message` call.
+- `WorkerServiceEndpoint.describe()` now summarizes recorded endpoint events
+  with total request count, last event, final-state counts, error count, and
+  completion count.
 - `turbobus/adapters/*.py` now owns framework-facing implementation code.
 - `turbobus/inference.py`, `turbobus/vllm.py`, `turbobus/vllm_connector.py`,
   `turbobus/vllm_integration.py`, `turbobus/vllm_kv_connector.py`,
@@ -273,11 +276,13 @@ phase:
 35. worker endpoint request/response events now record message sizes, final
     states, ok/error status, and completion presence while preserving encoded
     responses.
+36. worker endpoint describe snapshots now summarize recorded message events
+    without changing encoded responses.
 
-The next immediate goal is to add a worker endpoint `describe()` snapshot that
-summarizes recorded `handle_message` events. It should report total requests,
-the last event, final-state counts, error count, and completion count while
-staying in process.
+The next immediate goal is to add a worker endpoint `clear_events()` helper
+that resets recorded request/response events and `last_event` after a snapshot
+has been collected. This should stay in process and leave future encoded
+responses unchanged.
 
 ## Verification
 
@@ -356,7 +361,9 @@ $env:PYTHONPATH='.'; python test/python/test_worker_helper.py
   IPC transports; done through `WorkerServiceEndpoint`;
 - add worker endpoint request/response event records for observability around
   encoded message handling; done through `WorkerEndpointEvent`;
-- add a worker endpoint describe snapshot for recorded message events;
+- add a worker endpoint describe snapshot for recorded message events; done
+  through `WorkerServiceEndpoint.describe()`;
+- add a worker endpoint event reset helper;
 - keep the daemon plan path as the control-plane entry point for future worker
   execution;
 - split the current native CUDA execution path further only when worker/helper
