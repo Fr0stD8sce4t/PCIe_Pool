@@ -136,7 +136,7 @@ eligibility, filtered reasons, and per-relay path capabilities.
 
 Current phase: Phase 2, privileged daemon control plane.
 
-Current item: Phase 2 Cut 2, buffer ownership checks.
+Current item: Phase 2 Cut 3, lifecycle cleanup for stale resources.
 
 ## Phase 0 Code Cuts
 
@@ -477,7 +477,7 @@ Phase 1 is complete.
 
 ## Phase 2 Current Work
 
-Current item: Phase 2 Cut 2, buffer ownership checks.
+Current item: Phase 2 Cut 3, lifecycle cleanup for stale resources.
 
 Cut 1: peer identity and socket credential foundation.
 
@@ -502,7 +502,7 @@ Expected output:
 
 Cut 2: buffer ownership checks.
 
-Status: current.
+Status: complete.
 
 - Bind registered buffers to the job owner identity recorded in Cut 1.
 - Reject buffer registration when the authenticated peer does not own the job.
@@ -519,6 +519,29 @@ Expected output:
   responses;
 - ExecutionTicket and TransferIntent paths continue to use daemon-side
   ownership checks instead of adapter-side path policy.
+
+Cut 3: lifecycle cleanup for stale resources.
+
+Status: current.
+
+- Make session close, timeout, socket disconnect, worker failure, and detected
+  mismatch release all related leases, reservations, transfer state, staging
+  records, and buffers owned by the affected job or session.
+- Keep cleanup decisions inside the daemon; clients and adapters must not own
+  cleanup policy or physical path choices.
+- Make repeated cleanup idempotent for already terminal transfers and already
+  released reservations.
+- Add focused tests for socket disconnect cleanup, timeout cleanup, worker
+  failure cleanup, and mismatched owner cleanup.
+- Preserve existing explicit cleanup APIs while making daemon-triggered cleanup
+  visible through machine-readable response and profile state.
+
+Expected output:
+
+- stale sessions and failed workers release reservations and staging resources;
+- transfer state reaches complete, failed, or canceled deterministically;
+- cleanup records identify the owner, resource ids, reason, and released
+  resource counts.
 
 ## After Phase 0
 

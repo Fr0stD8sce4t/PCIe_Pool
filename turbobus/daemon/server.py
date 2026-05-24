@@ -269,6 +269,7 @@ class TurboBusDaemon:
         pinned: bool = False,
         handle_type: str = "registered_buffer",
         metadata: dict[str, object] | None = None,
+        peer_identity: PeerIdentity | None = None,
     ) -> DaemonResponse:
         buffer = BufferRegistration(
             buffer_id=buffer_id,
@@ -287,6 +288,13 @@ class TurboBusDaemon:
             self._reap_expired_leases_locked(now)
             if buffer.job_id not in self._jobs:
                 return DaemonResponse(ok=False, error="unknown job")
+            try:
+                self._validate_peer_owns_job_locked(
+                    job_id=buffer.job_id,
+                    peer_identity=peer_identity,
+                )
+            except ValueError as exc:
+                return DaemonResponse(ok=False, error=str(exc))
             if self._active_buffer_lease_ids_locked(buffer.buffer_id):
                 return DaemonResponse(ok=False, error="buffer has active lease")
             self._buffers[buffer.buffer_id] = buffer
@@ -480,7 +488,11 @@ class TurboBusDaemon:
             self._transfer_statuses[updated.transfer_id] = updated
             return DaemonResponse(ok=True, payload={"status": asdict(updated)})
 
-    def submit_transfer_intent(self, intent: TransferIntent) -> DaemonResponse:
+    def submit_transfer_intent(
+        self,
+        intent: TransferIntent,
+        peer_identity: PeerIdentity | None = None,
+    ) -> DaemonResponse:
         if not isinstance(intent, TransferIntent):
             return DaemonResponse(ok=False, error="intent must be a TransferIntent")
         try:
@@ -496,6 +508,15 @@ class TurboBusDaemon:
                         ok=False,
                         error="intent_id already belongs to a different transfer intent",
                     )
+                try:
+                    self._validate_transfer_buffers_locked(
+                        (intent.source_buffer_id, intent.destination_buffer_id),
+                        job_id=intent.job_id,
+                        session_id=intent.session_id,
+                        peer_identity=peer_identity,
+                    )
+                except ValueError as exc:
+                    return DaemonResponse(ok=False, error=str(exc))
                 try:
                     receipt = self._receipt_for_intent_locked(intent.intent_id)
                 except ValueError as exc:
@@ -524,6 +545,7 @@ class TurboBusDaemon:
             buffer_ids=[intent.source_buffer_id, intent.destination_buffer_id],
             ranges=intent.ranges,
             intent_id=intent.intent_id,
+            peer_identity=peer_identity,
         )
         if not planned.ok:
             return planned
@@ -585,6 +607,7 @@ class TurboBusDaemon:
         job_id: str | None = None,
         buffer_ids: Iterable[str] | None = None,
         now: float | None = None,
+        peer_identity: PeerIdentity | None = None,
     ) -> DaemonResponse:
         checked_at = time.time() if now is None else float(now)
         with self._lock:
@@ -600,6 +623,15 @@ class TurboBusDaemon:
                 return DaemonResponse(ok=False, error="lease relay mismatch")
             if job_id is not None and lease.job_id != str(job_id):
                 return DaemonResponse(ok=False, error="lease job mismatch")
+            owner_job_id = lease.job_id if lease.job_id is not None else job_id
+            if owner_job_id is not None:
+                try:
+                    self._validate_peer_owns_job_locked(
+                        job_id=str(owner_job_id),
+                        peer_identity=peer_identity,
+                    )
+                except ValueError as exc:
+                    return DaemonResponse(ok=False, error=str(exc))
             if buffer_ids is not None:
                 requested_buffers = tuple(str(buffer_id) for buffer_id in buffer_ids)
                 if requested_buffers != lease.buffer_ids:
@@ -610,6 +642,13 @@ class TurboBusDaemon:
                         return DaemonResponse(ok=False, error="unknown buffer")
                     if lease.job_id is not None and buffer.job_id != lease.job_id:
                         return DaemonResponse(ok=False, error="lease buffer owner mismatch")
+                    try:
+                        self._validate_peer_owns_buffer_locked(
+                            buffer_id=buffer_id,
+                            peer_identity=peer_identity,
+                        )
+                    except ValueError as exc:
+                        return DaemonResponse(ok=False, error=str(exc))
             if lease.expires_at and checked_at > lease.expires_at:
                 self._release_expired_lease_locked(lease.lease_id)
                 return DaemonResponse(ok=False, error="lease expired")
@@ -625,6 +664,7 @@ class TurboBusDaemon:
     def authorize_worker_transfer(
         self,
         request: WorkerTransferAuthorizationRequest,
+        peer_identity: PeerIdentity | None = None,
     ) -> DaemonResponse:
         now = time.time()
         with self._lock:
@@ -636,6 +676,13 @@ class TurboBusDaemon:
                 return DaemonResponse(ok=False, error="transfer session mismatch")
             if status.job_id != request.job_id:
                 return DaemonResponse(ok=False, error="transfer job mismatch")
+            try:
+                self._validate_peer_owns_job_locked(
+                    job_id=request.job_id,
+                    peer_identity=peer_identity,
+                )
+            except ValueError as exc:
+                return DaemonResponse(ok=False, error=str(exc))
             if status.state in _TERMINAL_TRANSFER_STATES:
                 return DaemonResponse(ok=False, error="transfer is terminal")
             lease = self._lease_tokens.get(request.lease_id)
@@ -680,6 +727,17 @@ class TurboBusDaemon:
             dst_buffer = self._buffers.get(request.dst_buffer_id)
             if src_buffer is None or dst_buffer is None:
                 return DaemonResponse(ok=False, error="unknown buffer")
+            try:
+                self._validate_peer_owns_buffer_locked(
+                    buffer_id=src_buffer.buffer_id,
+                    peer_identity=peer_identity,
+                )
+                self._validate_peer_owns_buffer_locked(
+                    buffer_id=dst_buffer.buffer_id,
+                    peer_identity=peer_identity,
+                )
+            except ValueError as exc:
+                return DaemonResponse(ok=False, error=str(exc))
             authorization = WorkerTransferAuthorization(
                 transfer_id=request.transfer_id,
                 lease_id=request.lease_id,
@@ -725,6 +783,7 @@ class TurboBusDaemon:
         ranges: Iterable[dict[str, int]] | None = None,
         intent_id: str | None = None,
         topology_snapshot_id: str | None = None,
+        peer_identity: PeerIdentity | None = None,
     ) -> DaemonResponse:
         now = time.time()
         try:
@@ -745,11 +804,20 @@ class TurboBusDaemon:
             session = self._sessions.get(session_id)
             if session is None or not session.active:
                 return DaemonResponse(ok=False, error="unknown session")
-            buffer_ids_tuple, owner_job_id = self._validate_transfer_buffers_locked(
-                buffer_ids,
-                job_id=job_id,
-                session_id=session.session_id,
-            )
+            try:
+                buffer_ids_tuple, owner_job_id = self._validate_transfer_buffers_locked(
+                    buffer_ids,
+                    job_id=job_id,
+                    session_id=session.session_id,
+                    peer_identity=peer_identity,
+                )
+                if buffer_ids_tuple == () and job_id is not None:
+                    self._validate_peer_owns_job_locked(
+                        job_id=str(job_id),
+                        peer_identity=peer_identity,
+                    )
+            except ValueError as exc:
+                return DaemonResponse(ok=False, error=str(exc))
             if self._topology_provider is None:
                 return _topology_unavailable_response()
             snapshot_id = topology_snapshot_id or self._topology_snapshot_id_locked()
@@ -1116,11 +1184,54 @@ class TurboBusDaemon:
             if lease_id in self._reservations and normalized in lease.buffer_ids
         )
 
+    def _validate_peer_owns_job_locked(
+        self,
+        *,
+        job_id: str,
+        peer_identity: PeerIdentity | None,
+    ) -> None:
+        if peer_identity is None or not peer_identity.authenticated:
+            return
+        job_key = str(job_id)
+        job = self._jobs.get(job_key)
+        if job is None:
+            raise ValueError("unknown job")
+        job_peer = self._job_peer_identities.get(job_key)
+        if job_peer is None:
+            raise ValueError("job owner identity is unavailable")
+        _validate_peer_owner_match(
+            expected=job_peer,
+            actual=peer_identity,
+            owner_name="job",
+        )
+
+    def _validate_peer_owns_buffer_locked(
+        self,
+        *,
+        buffer_id: str,
+        peer_identity: PeerIdentity | None,
+    ) -> None:
+        if peer_identity is None or not peer_identity.authenticated:
+            return
+        buffer = self._buffers.get(str(buffer_id))
+        if buffer is None:
+            raise ValueError("unknown buffer")
+        try:
+            self._validate_peer_owns_job_locked(
+                job_id=buffer.job_id,
+                peer_identity=peer_identity,
+            )
+        except ValueError as exc:
+            if str(exc) == "job owner does not match authenticated peer":
+                raise ValueError("buffer owner does not match authenticated peer") from exc
+            raise
+
     def _validate_transfer_buffers_locked(
         self,
         buffer_ids: Iterable[str] | None,
         job_id: str | None,
         session_id: str,
+        peer_identity: PeerIdentity | None = None,
     ) -> tuple[tuple[str, ...], str | None]:
         if buffer_ids is None:
             return (), None
@@ -1140,6 +1251,10 @@ class TurboBusDaemon:
                 owner_job_id = buffer.job_id
             if buffer.job_id != str(owner_job_id):
                 raise ValueError("buffer owner does not match job")
+            self._validate_peer_owns_buffer_locked(
+                buffer_id=buffer_id,
+                peer_identity=peer_identity,
+            )
         if owner_job_id is None:
             raise ValueError("job_id is required when buffer_ids are provided")
         job = self._jobs.get(str(owner_job_id))
@@ -1147,6 +1262,10 @@ class TurboBusDaemon:
             raise ValueError("unknown job")
         if job.session_id != session_id:
             raise ValueError("job session does not match transfer session")
+        self._validate_peer_owns_job_locked(
+            job_id=str(owner_job_id),
+            peer_identity=peer_identity,
+        )
         return normalized, str(owner_job_id)
 
     def _mark_transfer_terminal_if_unblocked_locked(
@@ -1355,6 +1474,7 @@ class TurboBusDaemon:
                 pinned=bool(payload.get("pinned", False)),
                 handle_type=str(payload.get("handle_type", "registered_buffer")),
                 metadata=payload.get("metadata") or {},
+                peer_identity=request.peer_identity,
             )
         if request.request_type == RequestType.GET_INVENTORY:
             return self.get_inventory()
@@ -1414,13 +1534,17 @@ class TurboBusDaemon:
                 ranges=payload.get("ranges"),
                 intent_id=payload.get("intent_id"),
                 topology_snapshot_id=payload.get("topology_snapshot_id"),
+                peer_identity=request.peer_identity,
             )
         if request.request_type == RequestType.SUBMIT_TRANSFER_INTENT:
             payload = request.payload
             intent_payload = payload.get("intent")
             if not isinstance(intent_payload, dict):
                 return DaemonResponse(ok=False, error="intent is required")
-            return self.submit_transfer_intent(TransferIntent(**intent_payload))
+            return self.submit_transfer_intent(
+                TransferIntent(**intent_payload),
+                peer_identity=request.peer_identity,
+            )
         if request.request_type == RequestType.WAIT_TRANSFER_RECEIPT:
             payload = request.payload
             return self.wait_transfer_receipt(
@@ -1450,10 +1574,12 @@ class TurboBusDaemon:
                 relay_gpu=payload.get("relay_gpu"),
                 job_id=payload.get("job_id"),
                 buffer_ids=payload.get("buffer_ids"),
+                peer_identity=request.peer_identity,
             )
         if request.request_type == RequestType.AUTHORIZE_WORKER_TRANSFER:
             return self.authorize_worker_transfer(
-                WorkerTransferAuthorizationRequest(**request.payload)
+                WorkerTransferAuthorizationRequest(**request.payload),
+                peer_identity=request.peer_identity,
             )
         if request.request_type == RequestType.CLEANUP:
             payload = request.payload

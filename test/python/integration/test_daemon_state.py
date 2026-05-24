@@ -319,6 +319,69 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(registered.payload["job"]["user_id"], "declared-user")
         self.assertFalse(registered.payload["peer_identity"]["authenticated"])
 
+    def test_register_buffer_requires_authenticated_job_owner(self) -> None:
+        daemon = _daemon(relay_gpus=[1])
+        owner = PeerIdentity(
+            authenticated=True,
+            source="test",
+            user_id="1000",
+            process_id=42,
+        )
+        other = PeerIdentity(
+            authenticated=True,
+            source="test",
+            user_id="2000",
+            process_id=84,
+        )
+        session = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.REGISTER_SESSION,
+                payload={"target_gpu": 0, "relay_gpus": [1]},
+                peer_identity=owner,
+            )
+        )
+        session_id = session.payload["session"]["session_id"]
+        self.assertTrue(
+            daemon.handle_request(
+                DaemonRequest(
+                    request_type=RequestType.REGISTER_JOB,
+                    payload={"job_id": "job-1", "session_id": session_id},
+                    peer_identity=owner,
+                )
+            ).ok
+        )
+
+        registered = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.REGISTER_BUFFER,
+                payload={
+                    "buffer_id": "cpu-buffer",
+                    "job_id": "job-1",
+                    "kind": "cpu_pinned",
+                    "size_bytes": 64,
+                    "pinned": True,
+                },
+                peer_identity=owner,
+            )
+        )
+        cross_owner = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.REGISTER_BUFFER,
+                payload={
+                    "buffer_id": "other-buffer",
+                    "job_id": "job-1",
+                    "kind": "cpu_pinned",
+                    "size_bytes": 64,
+                    "pinned": True,
+                },
+                peer_identity=other,
+            )
+        )
+
+        self.assertTrue(registered.ok)
+        self.assertFalse(cross_owner.ok)
+        self.assertIn("job owner", cross_owner.error)
+
     def test_cleanup_session_reports_removed_jobs_and_buffers(self) -> None:
         daemon = _daemon(relay_gpus=[1])
         session = daemon.register_session(target_gpu=0, requested_relays=[1])
@@ -1689,6 +1752,397 @@ class DaemonStateTest(unittest.TestCase):
         )
         self.assertTrue(authorized.ok)
         self.assertEqual(authorized.payload["authorization"]["job_id"], "job-1")
+
+    def test_authenticated_peer_cannot_plan_transfer_with_other_job_buffers(self) -> None:
+        daemon = _daemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=1,
+            max_inflight_chunks_per_relay=8,
+        )
+        owner = PeerIdentity(
+            authenticated=True,
+            source="test",
+            user_id="1000",
+            process_id=42,
+        )
+        other = PeerIdentity(
+            authenticated=True,
+            source="test",
+            user_id="2000",
+            process_id=84,
+        )
+        session = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.REGISTER_SESSION,
+                payload={
+                    "target_gpu": 0,
+                    "relay_gpus": [1],
+                    "max_inflight_chunks": 8,
+                },
+                peer_identity=owner,
+            )
+        )
+        session_id = session.payload["session"]["session_id"]
+        self.assertTrue(
+            daemon.handle_request(
+                DaemonRequest(
+                    request_type=RequestType.REGISTER_JOB,
+                    payload={"job_id": "job-1", "session_id": session_id},
+                    peer_identity=owner,
+                )
+            ).ok
+        )
+        self.assertTrue(
+            daemon.handle_request(
+                DaemonRequest(
+                    request_type=RequestType.REGISTER_BUFFER,
+                    payload={
+                        "buffer_id": "cpu-buffer",
+                        "job_id": "job-1",
+                        "kind": "cpu_pinned",
+                        "size_bytes": 64,
+                        "pinned": True,
+                    },
+                    peer_identity=owner,
+                )
+            ).ok
+        )
+        self.assertTrue(
+            daemon.handle_request(
+                DaemonRequest(
+                    request_type=RequestType.REGISTER_BUFFER,
+                    payload={
+                        "buffer_id": "gpu-buffer",
+                        "job_id": "job-1",
+                        "kind": "gpu",
+                        "size_bytes": 64,
+                        "device_index": 0,
+                    },
+                    peer_identity=owner,
+                )
+            ).ok
+        )
+        daemon.put_profile(
+            target_gpu=0,
+            relay_gpus=[1],
+            profile={
+                "target_device": 0,
+                "direct_h2d_bw_gbps": 7.5,
+                "direct_d2h_bw_gbps": 6.5,
+                "relays": [
+                    {
+                        "relay_device": 1,
+                        "target_device": 0,
+                        "h2d_bw_gbps": 7.5,
+                        "d2h_bw_gbps": 6.5,
+                        "p2p_bw_gbps": 40.0,
+                        "effective_bw_gbps": 7.5,
+                        "effective_d2h_bw_gbps": 6.5,
+                        "p2p_enabled": True,
+                    }
+                ],
+            },
+        )
+
+        planned = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.PLAN_TRANSFER,
+                session_id=session_id,
+                payload={
+                    "total_bytes": 64,
+                    "chunk_bytes": 16,
+                    "mode": "pool",
+                    "direction": "h2d",
+                    "job_id": "job-1",
+                    "buffer_ids": ["cpu-buffer", "gpu-buffer"],
+                },
+                peer_identity=other,
+            )
+        )
+
+        self.assertFalse(planned.ok)
+        self.assertIn("buffer owner", planned.error)
+
+    def test_authenticated_peer_cannot_submit_intent_with_other_job_buffers(self) -> None:
+        daemon = _daemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=1,
+            max_inflight_chunks_per_relay=8,
+        )
+        owner = PeerIdentity(
+            authenticated=True,
+            source="test",
+            user_id="1000",
+            process_id=42,
+        )
+        other = PeerIdentity(
+            authenticated=True,
+            source="test",
+            user_id="2000",
+            process_id=84,
+        )
+        session = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.REGISTER_SESSION,
+                payload={
+                    "target_gpu": 0,
+                    "relay_gpus": [1],
+                    "max_inflight_chunks": 8,
+                },
+                peer_identity=owner,
+            )
+        )
+        session_id = session.payload["session"]["session_id"]
+        self.assertTrue(
+            daemon.handle_request(
+                DaemonRequest(
+                    request_type=RequestType.REGISTER_JOB,
+                    payload={"job_id": "job-1", "session_id": session_id},
+                    peer_identity=owner,
+                )
+            ).ok
+        )
+        self.assertTrue(
+            daemon.handle_request(
+                DaemonRequest(
+                    request_type=RequestType.REGISTER_BUFFER,
+                    payload={
+                        "buffer_id": "cpu-buffer",
+                        "job_id": "job-1",
+                        "kind": "cpu_pinned",
+                        "size_bytes": 64,
+                        "pinned": True,
+                    },
+                    peer_identity=owner,
+                )
+            ).ok
+        )
+        self.assertTrue(
+            daemon.handle_request(
+                DaemonRequest(
+                    request_type=RequestType.REGISTER_BUFFER,
+                    payload={
+                        "buffer_id": "gpu-buffer",
+                        "job_id": "job-1",
+                        "kind": "gpu",
+                        "size_bytes": 64,
+                        "device_index": 0,
+                    },
+                    peer_identity=owner,
+                )
+            ).ok
+        )
+        daemon.put_profile(
+            target_gpu=0,
+            relay_gpus=[1],
+            profile={
+                "target_device": 0,
+                "direct_h2d_bw_gbps": 7.5,
+                "direct_d2h_bw_gbps": 6.5,
+                "relays": [
+                    {
+                        "relay_device": 1,
+                        "target_device": 0,
+                        "h2d_bw_gbps": 7.5,
+                        "d2h_bw_gbps": 6.5,
+                        "p2p_bw_gbps": 40.0,
+                        "effective_bw_gbps": 7.5,
+                        "effective_d2h_bw_gbps": 6.5,
+                        "p2p_enabled": True,
+                    }
+                ],
+            },
+        )
+        intent = TransferIntent(
+            intent_id="intent-1",
+            job_id="job-1",
+            session_id=session_id,
+            source_buffer_id="cpu-buffer",
+            destination_buffer_id="gpu-buffer",
+            direction="h2d",
+            total_bytes=64,
+            ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 64},),
+            workload_kind=WorkloadKind.MODEL_WEIGHTS,
+            metadata={"chunk_bytes": 16},
+        )
+
+        submitted = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.SUBMIT_TRANSFER_INTENT,
+                session_id=session_id,
+                payload={"intent": intent.__dict__},
+                peer_identity=other,
+            )
+        )
+
+        self.assertFalse(submitted.ok)
+        self.assertIn("buffer owner", submitted.error)
+
+    def test_authenticated_peer_cannot_validate_lease_or_authorize_worker_for_other_job(
+        self,
+    ) -> None:
+        daemon = _daemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=1,
+            max_inflight_chunks_per_relay=8,
+        )
+        owner = PeerIdentity(
+            authenticated=True,
+            source="test",
+            user_id="1000",
+            process_id=42,
+        )
+        other = PeerIdentity(
+            authenticated=True,
+            source="test",
+            user_id="2000",
+            process_id=84,
+        )
+        session = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.REGISTER_SESSION,
+                payload={
+                    "target_gpu": 0,
+                    "relay_gpus": [1],
+                    "max_inflight_chunks": 8,
+                },
+                peer_identity=owner,
+            )
+        )
+        session_id = session.payload["session"]["session_id"]
+        self.assertTrue(
+            daemon.handle_request(
+                DaemonRequest(
+                    request_type=RequestType.REGISTER_JOB,
+                    payload={"job_id": "job-1", "session_id": session_id},
+                    peer_identity=owner,
+                )
+            ).ok
+        )
+        self.assertTrue(
+            daemon.handle_request(
+                DaemonRequest(
+                    request_type=RequestType.REGISTER_BUFFER,
+                    payload={
+                        "buffer_id": "cpu-buffer",
+                        "job_id": "job-1",
+                        "kind": "cpu_pinned",
+                        "size_bytes": 64,
+                        "pinned": True,
+                        "handle_type": "shared_pinned_cpu",
+                        "metadata": {
+                            "shared_memory_name": "tb-job-1-src",
+                            "offset_bytes": 0,
+                            "shared_memory_size_bytes": 64,
+                        },
+                    },
+                    peer_identity=owner,
+                )
+            ).ok
+        )
+        self.assertTrue(
+            daemon.handle_request(
+                DaemonRequest(
+                    request_type=RequestType.REGISTER_BUFFER,
+                    payload={
+                        "buffer_id": "gpu-buffer",
+                        "job_id": "job-1",
+                        "kind": "gpu",
+                        "size_bytes": 64,
+                        "device_index": 0,
+                        "handle_type": "cuda_ipc_device",
+                        "metadata": {"cuda_ipc_handle": CUDA_IPC_TARGET_HANDLE},
+                    },
+                    peer_identity=owner,
+                )
+            ).ok
+        )
+        daemon.put_profile(
+            target_gpu=0,
+            relay_gpus=[1],
+            profile={
+                "target_device": 0,
+                "direct_h2d_bw_gbps": 7.5,
+                "direct_d2h_bw_gbps": 6.5,
+                "relays": [
+                    {
+                        "relay_device": 1,
+                        "target_device": 0,
+                        "h2d_bw_gbps": 7.5,
+                        "d2h_bw_gbps": 6.5,
+                        "p2p_bw_gbps": 40.0,
+                        "effective_bw_gbps": 7.5,
+                        "effective_d2h_bw_gbps": 6.5,
+                        "p2p_enabled": True,
+                    }
+                ],
+            },
+        )
+        planned = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.PLAN_TRANSFER,
+                session_id=session_id,
+                payload={
+                    "total_bytes": 64,
+                    "chunk_bytes": 16,
+                    "mode": "pool",
+                    "direction": "h2d",
+                    "job_id": "job-1",
+                    "buffer_ids": ["cpu-buffer", "gpu-buffer"],
+                },
+                peer_identity=owner,
+            )
+        )
+        self.assertTrue(planned.ok)
+        transfer_id = planned.payload["transfer_id"]
+        lease_token = planned.payload["lease_tokens"][0]
+
+        valid_owner = daemon.validate_lease(
+            lease_id=lease_token["lease_id"],
+            token=lease_token["token"],
+            session_id=session_id,
+            relay_gpu=1,
+            job_id="job-1",
+            buffer_ids=["cpu-buffer", "gpu-buffer"],
+            peer_identity=owner,
+        )
+        cross_owner_lease = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.VALIDATE_LEASE,
+                payload={
+                    "lease_id": lease_token["lease_id"],
+                    "token": lease_token["token"],
+                    "session_id": session_id,
+                    "relay_gpu": 1,
+                    "job_id": "job-1",
+                    "buffer_ids": ["cpu-buffer", "gpu-buffer"],
+                },
+                peer_identity=other,
+            )
+        )
+        cross_owner_worker = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.AUTHORIZE_WORKER_TRANSFER,
+                payload={
+                    "transfer_id": transfer_id,
+                    "lease_id": lease_token["lease_id"],
+                    "token": lease_token["token"],
+                    "session_id": session_id,
+                    "job_id": "job-1",
+                    "src_buffer_id": "cpu-buffer",
+                    "dst_buffer_id": "gpu-buffer",
+                    "direction": "h2d",
+                    "relay_gpu": 1,
+                },
+                peer_identity=other,
+            )
+        )
+
+        self.assertTrue(valid_owner.ok)
+        self.assertFalse(cross_owner_lease.ok)
+        self.assertIn("job owner", cross_owner_lease.error)
+        self.assertFalse(cross_owner_worker.ok)
+        self.assertIn("job owner", cross_owner_worker.error)
 
     def test_register_buffer_rejects_overwrite_while_buffer_has_active_lease(self) -> None:
         daemon = _daemon(

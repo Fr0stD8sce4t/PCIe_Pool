@@ -258,6 +258,67 @@ class DaemonSocketTest(unittest.TestCase):
             self.assertEqual(daemon.describe().payload["jobs"], {})
 
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
+    def test_socket_register_buffer_uses_daemon_peer_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            socket_path = os.path.join(tmpdir, "turbobusd.sock")
+            daemon = TurboBusDaemon(relay_gpus=[1], max_sessions_per_relay=1)
+            owner = PeerIdentity(
+                authenticated=True,
+                source="test_socket",
+                user_id="1000",
+                process_id=42,
+            )
+            other = PeerIdentity(
+                authenticated=True,
+                source="test_socket",
+                user_id="2000",
+                process_id=84,
+            )
+            with mock.patch(
+                "turbobus.daemon.server._peer_identity_from_socket",
+                side_effect=(owner, owner, owner, other),
+            ):
+                thread = threading.Thread(
+                    target=daemon.serve_forever,
+                    args=(socket_path,),
+                    daemon=True,
+                )
+                thread.start()
+
+                for _ in range(100):
+                    if os.path.exists(socket_path):
+                        break
+                    time.sleep(0.01)
+                self.assertTrue(os.path.exists(socket_path))
+
+                client = TurboBusDaemonClient(socket_path)
+                session = client.register_session(target_gpu=0, relay_gpus=[1])
+                self.assertTrue(session.ok)
+                session_id = session.payload["session"]["session_id"]
+                job = client.register_job(job_id="job-1", session_id=session_id)
+                self.assertTrue(job.ok)
+                owner_buffer = client.register_buffer(
+                    buffer_id="cpu-buffer",
+                    job_id="job-1",
+                    kind="cpu_pinned",
+                    size_bytes=64,
+                    pinned=True,
+                )
+                cross_owner_buffer = client.register_buffer(
+                    buffer_id="other-buffer",
+                    job_id="job-1",
+                    kind="cpu_pinned",
+                    size_bytes=64,
+                    pinned=True,
+                )
+
+            self.assertTrue(owner_buffer.ok)
+            self.assertFalse(cross_owner_buffer.ok)
+            self.assertIn("job owner", cross_owner_buffer.error)
+            self.assertIn("cpu-buffer", daemon.describe().payload["buffers"])
+            self.assertNotIn("other-buffer", daemon.describe().payload["buffers"])
+
+    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
     def test_socket_session_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             socket_path = os.path.join(tmpdir, "turbobusd.sock")

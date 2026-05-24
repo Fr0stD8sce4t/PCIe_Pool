@@ -141,6 +141,11 @@ The active target architecture is:
   registration now record peer identity, bind authenticated user/process
   fields to the daemon-observed peer, and reject spoofed user ids or
   cross-peer session ownership.
+- Phase 2 Cut 2 is complete. Buffer registration, transfer planning,
+  `TransferIntent` submission, lease validation, and worker transfer
+  authorization now enforce daemon-side authenticated job ownership. Cross-peer
+  attempts to register or use another job's buffers are rejected before
+  scheduling, lease use, or worker ticket construction.
 
 ## Active Phase
 
@@ -165,7 +170,7 @@ Phase 2 covers:
 
 ## Next Work Items
 
-Current item: Phase 2 Cut 2, buffer ownership checks.
+Current item: Phase 2 Cut 3, lifecycle cleanup for stale resources.
 
 1. Shared schema layer.
    - Status: complete.
@@ -254,10 +259,11 @@ Current item: Phase 2 Cut 2, buffer ownership checks.
 10. Privileged daemon control plane.
    - Status: current.
    - Cut 1 complete: add peer identity and socket credential foundation.
-   - Cut 2 current: enforce buffer ownership for registration and transfer
-     paths.
-   - Later Phase 2 work: clean stale resources after disconnects and worker
-     failures, and emit audit records.
+   - Cut 2 complete: enforce buffer ownership for registration, transfer,
+     lease, and worker authorization paths.
+   - Cut 3 current: clean stale resources after disconnects, timeouts, worker
+     failures, and detected mismatches.
+   - Later Phase 2 work: emit audit records.
 
 ## Phase 0 Acceptance Criteria
 
@@ -275,7 +281,7 @@ Phase 0 is complete:
 
 ## Latest Validation
 
-Phase 2 Cut 1 validation:
+Phase 2 Cut 2 validation:
 
 - `python -m unittest test.python.unit.test_schema test.python.integration.test_daemon_state test.python.integration.test_daemon_socket`
 - `python -m compileall -q turbobus\schema.py turbobus\daemon test\python\unit\test_schema.py test\python\integration\test_daemon_state.py test\python\integration\test_daemon_socket.py`
@@ -286,8 +292,9 @@ Remaining risk:
 - Phase 1 implementation is complete, but production topology behavior still
   needs to be exercised on a real multi-GPU CUDA server with `nvidia-smi topo
   -m` available.
-- Phase 2 has peer identity and job/session ownership foundation, but buffer
-  registration and transfer paths still need full owner enforcement in Cut 2.
+- Phase 2 now rejects cross-peer buffer registration and transfer use, but
+  daemon-triggered cleanup still needs to be extended for socket disconnects,
+  worker failures, and mismatch handling in Cut 3.
 
 ## Upcoming Phases
 
