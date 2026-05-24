@@ -233,6 +233,9 @@ Completed current code cut:
   daemon-requested byte count before reporting daemon completion. Partial
   direct native completion is marked failed instead of being promoted to a
   successful daemon status update.
+- Reject daemon-issued direct fallback plans whose declared total byte count
+  does not match assigned chunks before host registration or native exact-plan
+  submission.
 - Require worker-opened shared pinned CPU handles to carry explicit logical
   backing size metadata. `SharedPinnedCpuBuffer.open_from_registration` now
   rejects daemon-authorized shared CPU handles that omit
@@ -440,6 +443,8 @@ Completed current code cut:
      source or destination buffers before local native execution.
    - Reject direct fallback completion when native execution statistics report
      fewer bytes than the daemon-requested transfer.
+   - Reject daemon-issued direct fallback plan total-byte mismatches before
+     local native execution.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor

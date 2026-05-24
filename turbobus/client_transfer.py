@@ -447,7 +447,6 @@ def _execute_direct_plan(
             device_bytes=target.size_bytes,
             direction=direction,
         )
-        return
     if not isinstance(source, CudaIpcDeviceBuffer):
         raise TypeError("direct d2h source must be a CudaIpcDeviceBuffer")
     if not isinstance(target, SharedPinnedCpuBuffer):
@@ -554,6 +553,7 @@ def _require_direct_plan_matches_target(
         src_size = int(device_bytes)
         dst_size = int(host_bytes)
     found_chunks = False
+    chunk_total = 0
     for assignment in assignments:
         if not isinstance(assignment, Mapping):
             raise RuntimeError("daemon direct plan assignment must be a mapping")
@@ -584,9 +584,15 @@ def _require_direct_plan_matches_target(
                 raise RuntimeError("daemon direct plan chunk exceeds source buffer")
             if dst_offset + bytes_count > dst_size:
                 raise RuntimeError("daemon direct plan chunk exceeds destination buffer")
+            chunk_total += bytes_count
             found_chunks = True
     if not found_chunks:
         raise RuntimeError("daemon direct plan has no chunk assignments")
+    declared_total = int(plan_payload.get("total_bytes", chunk_total))
+    if declared_total != chunk_total:
+        raise RuntimeError(
+            "daemon direct plan total bytes do not match assigned chunks"
+        )
 
 
 def _require_device_pointer(buffer: CudaIpcDeviceBuffer) -> None:

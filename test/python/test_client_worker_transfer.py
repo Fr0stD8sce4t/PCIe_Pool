@@ -785,6 +785,67 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
         self.assertEqual(failed_status["state"], "failed")
         self.assertEqual(failed_status["bytes_completed"], 0)
 
+    def test_worker_managed_direct_fallback_rejects_plan_total_mismatch(
+        self,
+    ) -> None:
+        class MismatchedTotalPlanDaemonClient:
+            def __init__(self, daemon):
+                self.daemon = daemon
+
+            def __getattr__(self, name):
+                return getattr(self.daemon, name)
+
+            def plan_transfer(self, *args, **kwargs):
+                response = self.daemon.plan_transfer(*args, **kwargs)
+                if response.ok:
+                    payload = dict(response.payload)
+                    plan = dict(payload["plan"])
+                    plan["total_bytes"] = 128
+                    payload["plan"] = plan
+                    return DaemonResponse(ok=True, payload=payload)
+                return response
+
+        daemon = daemon_with_relay_path(max_inflight_chunks_per_relay=1)
+        direct_backend = FakeDirectBackend()
+        transfer_client = make_worker_managed_transfer_client(
+            MismatchedTotalPlanDaemonClient(daemon),
+            target_gpu=0,
+            relay_gpus=[1],
+            backend=direct_backend,
+        )
+        allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-client-worker-test")
+
+        with allocator.allocate("cpu-buffer", "job-1", 64) as source:
+            target = CudaIpcDeviceBuffer.from_device_pointer(
+                buffer_id="gpu-buffer",
+                job_id="job-1",
+                device_index=0,
+                size_bytes=64,
+                device_ptr=4096,
+                backend=FakeCudaBackend(),
+            )
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "daemon direct plan total bytes do not match assigned chunks",
+            ):
+                transfer_client.fetch_shared_cpu_to_cuda_ipc(
+                    source,
+                    target,
+                    ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 64},),
+                    chunk_bytes=16,
+                    mode="pool",
+                )
+
+        self.assertEqual(direct_backend.initialized, [])
+        self.assertEqual(direct_backend.registered, [])
+        self.assertEqual(direct_backend.fetches, [])
+        status_payloads = daemon.describe().payload["transfer_statuses"]
+        self.assertEqual(len(status_payloads), 1)
+        failed_status = next(iter(status_payloads.values()))
+        self.assertEqual(failed_status["state"], "failed")
+        self.assertEqual(failed_status["bytes_completed"], 0)
+
     def test_worker_managed_direct_fallback_rejects_partial_native_completion(
         self,
     ) -> None:

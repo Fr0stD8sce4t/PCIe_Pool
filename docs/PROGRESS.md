@@ -206,6 +206,10 @@ transfer request objects:
   reporting daemon completion. If the backend reports fewer completed bytes
   than the daemon-requested transfer, the direct fallback transfer is marked
   failed instead of being promoted to daemon `complete`;
+- worker-managed direct fallback now rejects daemon-issued direct plans whose
+  declared total byte count does not match assigned chunks before local native
+  execution. A malformed direct-only plan is marked failed before host
+  registration or exact-plan submission;
 - worker-opened shared pinned CPU handles now require explicit
   `shared_memory_size_bytes` metadata before the worker can reopen the shared
   memory mapping, host-register it with CUDA, or pass it into the executor;
@@ -940,6 +944,10 @@ phase:
      worker-local relay staging allocation. A daemon-issued path marked
      unavailable now cleans the reservation through the authorization-failure
      path instead of reaching resource binding or CUDA execution.
+109. worker-managed direct fallback now validates daemon plan byte accounting
+     before native execution. If the direct-only daemon plan's declared
+     `total_bytes` does not match its assigned chunks, the transfer is recorded
+     as failed before host registration or exact-plan submission.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
