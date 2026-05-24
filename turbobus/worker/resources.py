@@ -103,13 +103,13 @@ class WorkerDataPlaneResourceBinding:
         try:
             cpu_handle = _cpu_handle_for_request(self.request)
             device_handle = _device_handle_for_request(self.request)
+            self._device_index = device_handle.device_index
+            _set_cuda_device_for_handle(self.backend, device_handle)
             cpu_buffer = SharedPinnedCpuBuffer.open_from_registration(
                 _registration_from_worker_handle(cpu_handle)
             )
             if self.register_cuda_host:
                 cpu_buffer.register_for_cuda(self.backend)
-            self._device_index = device_handle.device_index
-            _set_cuda_device_for_handle(self.backend, device_handle)
             self._device_ptr = _open_cuda_ipc_device_handle(
                 self.backend,
                 device_handle,
@@ -128,6 +128,7 @@ class WorkerDataPlaneResourceBinding:
                 self.backend.close_device_ipc_handle(self._device_ptr)
                 self._device_ptr = None
             if cpu_buffer is not None:
+                _set_cuda_device_index(self.backend, self._device_index)
                 cpu_buffer.close()
             raise WorkerDataPlaneResourceError(
                 f"failed to bind worker data-plane resources: {exc}"
@@ -136,11 +137,11 @@ class WorkerDataPlaneResourceBinding:
     def __exit__(self, exc_type, exc, traceback) -> None:
         try:
             if self._resources is not None:
+                _set_cuda_device_index(self.backend, self._device_index)
                 self._resources.close()
                 self._resources = None
         finally:
             if self._device_ptr is not None:
-                _set_cuda_device_index(self.backend, self._device_index)
                 self.backend.close_device_ipc_handle(self._device_ptr)
                 self._device_ptr = None
             self._device_index = None

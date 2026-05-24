@@ -897,6 +897,11 @@ phase:
      accounting before rebuilding its relay-scoped exact-plan payload. A helper
      cannot bypass the native exact-plan guard by replacing the daemon-declared
      total with the locally recomputed chunk sum.
+102. worker data-plane resource binding now selects the daemon-authorized CUDA
+     device before shared pinned CPU host registration and keeps that device
+     selected for host unregister, CUDA IPC open, and CUDA IPC close. This keeps
+     helper-process execution tied to the registered target/source GPU instead
+     of the process default CUDA context.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
@@ -958,6 +963,8 @@ $env:PYTHONPATH='.'; python -m compileall turbobus
 - keep direct fallback available when relay lease or worker execution fails;
 - verify native relay staging clear/protection on a CUDA server as part of the
   H2D and D2H worker-managed relay runs;
+- verify worker shared CPU host registration and CUDA IPC open/close on a
+  nonzero target GPU through the helper-socket verifier;
 - verify daemon-issued pool mode on a CUDA server for the same helper-socket
   worker-managed path;
 - verify the worker-managed failure cleanup on a CUDA server by forcing a

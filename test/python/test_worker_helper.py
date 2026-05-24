@@ -54,20 +54,29 @@ from turbobus.worker import (
 
 class FakeCudaBackend:
     def __init__(self) -> None:
+        self.current_device: int | None = None
         self.set_device_calls: list[int] = []
         self.register_calls: list[tuple[int, int]] = []
+        self.register_device_calls: list[int | None] = []
         self.unregister_calls: list[int] = []
+        self.unregister_device_calls: list[int | None] = []
         self.open_ipc_calls: list[bytes] = []
+        self.open_ipc_device_calls: list[int | None] = []
         self.close_ipc_calls: list[int] = []
+        self.close_ipc_device_calls: list[int | None] = []
 
     def set_device(self, device_index: int) -> None:
-        self.set_device_calls.append(int(device_index))
+        device = int(device_index)
+        self.current_device = device
+        self.set_device_calls.append(device)
 
     def register_host_memory(self, host_ptr: int, bytes_: int) -> None:
         self.register_calls.append((int(host_ptr), int(bytes_)))
+        self.register_device_calls.append(self.current_device)
 
     def unregister_host_memory(self, host_ptr: int) -> None:
         self.unregister_calls.append(int(host_ptr))
+        self.unregister_device_calls.append(self.current_device)
 
     def open_device_ipc_handle(self, cuda_ipc_handle) -> int:
         handle = (
@@ -76,10 +85,12 @@ class FakeCudaBackend:
             else bytes(cuda_ipc_handle)
         )
         self.open_ipc_calls.append(handle)
+        self.open_ipc_device_calls.append(self.current_device)
         return 4321
 
     def close_device_ipc_handle(self, device_ptr: int) -> None:
         self.close_ipc_calls.append(int(device_ptr))
+        self.close_ipc_device_calls.append(self.current_device)
 
 
 def authorization_payload() -> dict:
@@ -1193,6 +1204,10 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(backend.set_device_calls, [2, 2])
         self.assertEqual(backend.open_ipc_calls, [b"t" * 64])
         self.assertEqual(backend.close_ipc_calls, [4321])
+        self.assertEqual(backend.register_device_calls, [2])
+        self.assertEqual(backend.unregister_device_calls, [2])
+        self.assertEqual(backend.open_ipc_device_calls, [2])
+        self.assertEqual(backend.close_ipc_device_calls, [2])
         self.assertEqual(daemon_client.release_requests, ["lease-1"])
 
     def test_worker_client_reports_resource_binding_failure(self) -> None:

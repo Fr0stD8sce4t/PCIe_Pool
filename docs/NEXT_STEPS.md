@@ -329,6 +329,10 @@ Completed current code cut:
 - Reject the same `total_bytes` mismatch inside the worker CUDA executor before
   rebuilding a relay-scoped native plan, so helper execution cannot bypass the
   shared exact-plan conversion guard.
+- Bind worker resource setup to the daemon-authorized CUDA device before CUDA
+  host registration and keep that device selected through host unregister and
+  CUDA IPC close, so helper-process verification is not implicitly tied to the
+  default CUDA context.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -399,6 +403,9 @@ Completed current code cut:
    - Reject worker/helper CUDA executor plans whose daemon-declared total byte
      count does not match the rebuilt direct-plus-relay chunk set before native
      submission.
+   - Bind shared pinned CPU host registration, host unregister, CUDA IPC open,
+     and CUDA IPC close to the daemon-authorized CUDA device in the worker
+     resource lifecycle.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor
