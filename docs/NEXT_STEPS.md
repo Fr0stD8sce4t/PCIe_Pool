@@ -333,6 +333,10 @@ Completed current code cut:
   host registration and keep that device selected through host unregister and
   CUDA IPC close, so helper-process verification is not implicitly tied to the
   default CUDA context.
+- Reject malformed daemon-plan byte accounting during worker authorization
+  before worker-local relay staging is allocated, so a bad exact plan is
+  cleaned up through the authorization-failure path instead of reaching the
+  data plane.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -406,6 +410,8 @@ Completed current code cut:
    - Bind shared pinned CPU host registration, host unregister, CUDA IPC open,
      and CUDA IPC close to the daemon-authorized CUDA device in the worker
      resource lifecycle.
+   - Reject daemon-plan total byte mismatches during worker authorization
+     before relay staging allocation.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor

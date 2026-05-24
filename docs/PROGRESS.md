@@ -902,6 +902,11 @@ phase:
      selected for host unregister, CUDA IPC open, and CUDA IPC close. This keeps
      helper-process execution tied to the registered target/source GPU instead
      of the process default CUDA context.
+103. worker authorization now rejects daemon-issued plans whose declared
+     `total_bytes` does not match assigned direct-plus-relay chunks before
+     worker-local relay staging allocation. Malformed exact plans now clean the
+     daemon reservation through the authorization-failure path instead of
+     reaching resource binding or CUDA execution.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

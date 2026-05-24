@@ -1035,6 +1035,7 @@ def _require_daemon_worker_plan(request: WorkerTransferRequest) -> None:
     relay_gpu = int(request.data_plane.relay_gpu)
     direction = request.data_plane.direction
     relay_ranges: list[dict[str, int]] = []
+    plan_total_bytes = 0
     for assignment in assignments:
         if not isinstance(assignment, Mapping):
             raise ValueError("daemon plan assignment must be an object")
@@ -1047,19 +1048,27 @@ def _require_daemon_worker_plan(request: WorkerTransferRequest) -> None:
         if str(path.get("direction", "")).lower() != direction:
             raise ValueError("daemon plan direction does not match worker request")
         if path_kind == "direct":
-            continue
-        if int(path.get("relay_device", -1)) != relay_gpu:
-            raise ValueError("daemon plan relay does not match worker lease")
-        for chunk in assignment.get("chunks", ()) or ():
+            chunks = assignment.get("chunks", ()) or ()
+        else:
+            if int(path.get("relay_device", -1)) != relay_gpu:
+                raise ValueError("daemon plan relay does not match worker lease")
+            chunks = assignment.get("chunks", ()) or ()
+        for chunk in chunks:
             if not isinstance(chunk, Mapping):
                 raise ValueError("daemon plan chunk must be an object")
-            relay_ranges.append(
-                {
-                    "src_offset": int(chunk["src_offset"]),
-                    "dst_offset": int(chunk["dst_offset"]),
-                    "bytes": int(chunk["bytes"]),
-                }
-            )
+            chunk_payload = {
+                "src_offset": int(chunk["src_offset"]),
+                "dst_offset": int(chunk["dst_offset"]),
+                "bytes": int(chunk["bytes"]),
+            }
+            plan_total_bytes += int(chunk_payload["bytes"])
+            if path_kind == "relay":
+                relay_ranges.append(chunk_payload)
+    if plan_total_bytes <= 0:
+        raise ValueError("daemon plan has no assigned bytes")
+    declared_total_bytes = int(plan.get("total_bytes", -1))
+    if declared_total_bytes != plan_total_bytes:
+        raise ValueError("daemon plan total bytes do not match assigned chunks")
     if not relay_ranges:
         raise ValueError("daemon plan has no authorized relay chunks")
     if tuple(relay_ranges) != request.data_plane.ranges:
