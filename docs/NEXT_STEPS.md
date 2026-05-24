@@ -229,6 +229,10 @@ Completed current code cut:
   source or destination buffer before local native execution, so direct
   fallback has the same pre-native bounds protection as the worker/helper
   relay path.
+- Require direct fallback native execution statistics to match the
+  daemon-requested byte count before reporting daemon completion. Partial
+  direct native completion is marked failed instead of being promoted to a
+  successful daemon status update.
 - Require worker-opened shared pinned CPU handles to carry explicit logical
   backing size metadata. `SharedPinnedCpuBuffer.open_from_registration` now
   rejects daemon-authorized shared CPU handles that omit
@@ -434,6 +438,8 @@ Completed current code cut:
      match the registered CUDA IPC buffer before local native execution.
    - Reject daemon-issued direct fallback plan chunks that exceed registered
      source or destination buffers before local native execution.
+   - Reject direct fallback completion when native execution statistics report
+     fewer bytes than the daemon-requested transfer.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor

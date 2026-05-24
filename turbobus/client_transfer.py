@@ -373,7 +373,7 @@ def _execute_direct_fallback_transfer(
 ) -> WorkerManagedTransferResult:
     transfer_id = str(planned_payload["transfer_id"])
     try:
-        _execute_direct_plan(
+        bytes_completed = _execute_direct_plan(
             backend=backend,
             runtime_options=runtime_options,
             direction=transfer_request.direction.value,
@@ -381,6 +381,11 @@ def _execute_direct_fallback_transfer(
             source=source,
             target=target,
         )
+        if bytes_completed != transfer_request.total_bytes:
+            raise RuntimeError(
+                "direct fallback completed "
+                f"{bytes_completed} of {transfer_request.total_bytes} daemon-planned bytes"
+            )
     except Exception as exc:
         daemon_client.transfer_status(
             transfer_id,
@@ -392,7 +397,7 @@ def _execute_direct_fallback_transfer(
     completed = daemon_client.transfer_status(
         transfer_id,
         state="complete",
-        bytes_completed=transfer_request.total_bytes,
+        bytes_completed=bytes_completed,
     )
     _require_ok(completed, "daemon direct transfer completion update failed")
     status = daemon_client.transfer_status(transfer_id)
@@ -425,14 +430,14 @@ def _execute_direct_plan(
     plan_payload: Mapping[str, object],
     source: SharedPinnedCpuBuffer | CudaIpcDeviceBuffer,
     target: SharedPinnedCpuBuffer | CudaIpcDeviceBuffer,
-) -> None:
+) -> int:
     if direction == "h2d":
         if not isinstance(source, SharedPinnedCpuBuffer):
             raise TypeError("direct h2d source must be a SharedPinnedCpuBuffer")
         if not isinstance(target, CudaIpcDeviceBuffer):
             raise TypeError("direct h2d target must be a CudaIpcDeviceBuffer")
         _require_device_pointer(target)
-        _run_direct_plan(
+        return _run_direct_plan(
             backend=backend,
             runtime_options=runtime_options,
             target_device=target.device_index,
@@ -448,7 +453,7 @@ def _execute_direct_plan(
     if not isinstance(target, SharedPinnedCpuBuffer):
         raise TypeError("direct d2h target must be a SharedPinnedCpuBuffer")
     _require_device_pointer(source)
-    _run_direct_plan(
+    return _run_direct_plan(
         backend=backend,
         runtime_options=runtime_options,
         target_device=source.device_index,
@@ -470,7 +475,7 @@ def _run_direct_plan(
     device_ptr: int,
     device_bytes: int,
     direction: str,
-) -> None:
+) -> int:
     _require_direct_plan_matches_target(
         plan_payload,
         target_device=int(target_device),
@@ -502,8 +507,32 @@ def _run_direct_plan(
                 native_plan,
             )
         backend.wait(runtime, handle)
+        return _direct_plan_completed_bytes(
+            backend,
+            runtime,
+            handle,
+            plan_payload=plan_payload,
+        )
     finally:
         host_buffer.unregister_from_cuda()
+
+
+def _direct_plan_completed_bytes(
+    backend,
+    runtime,
+    handle,
+    *,
+    plan_payload: Mapping[str, object],
+) -> int:
+    statter = getattr(backend, "stats", None)
+    if callable(statter):
+        stats = statter(runtime, handle)
+        bytes_value = getattr(stats, "bytes", None)
+        if bytes_value is None and isinstance(stats, Mapping):
+            bytes_value = stats.get("bytes")
+        if bytes_value is not None:
+            return int(bytes_value)
+    return int(plan_payload["total_bytes"])
 
 
 def _require_direct_plan_matches_target(

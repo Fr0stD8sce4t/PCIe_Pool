@@ -66,6 +66,7 @@ class FakeDirectBackend(FakeCudaBackend):
         self.offloads = []
         self.registered = []
         self.unregistered = []
+        self.completed_bytes = None
 
     def make_transfer_plan(self, plan):
         return plan
@@ -108,6 +109,16 @@ class FakeDirectBackend(FakeCudaBackend):
 
     def wait(self, runtime, handle):
         return None
+
+    def stats(self, runtime, handle):
+        bytes_completed = self.completed_bytes
+        if bytes_completed is None:
+            if handle == "fetch-handle":
+                plan = self.fetches[-1][4]
+            else:
+                plan = self.offloads[-1][5]
+            bytes_completed = int(plan["total_bytes"])
+        return {"bytes": bytes_completed}
 
 
 def planned_bytes(request: WorkerTransferRequest) -> int:
@@ -768,6 +779,52 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
         self.assertEqual(direct_backend.initialized, [])
         self.assertEqual(direct_backend.registered, [])
         self.assertEqual(direct_backend.fetches, [])
+        status_payloads = daemon.describe().payload["transfer_statuses"]
+        self.assertEqual(len(status_payloads), 1)
+        failed_status = next(iter(status_payloads.values()))
+        self.assertEqual(failed_status["state"], "failed")
+        self.assertEqual(failed_status["bytes_completed"], 0)
+
+    def test_worker_managed_direct_fallback_rejects_partial_native_completion(
+        self,
+    ) -> None:
+        daemon = daemon_with_relay_path(max_inflight_chunks_per_relay=1)
+        direct_backend = FakeDirectBackend()
+        direct_backend.completed_bytes = 32
+        transfer_client = make_worker_managed_transfer_client(
+            daemon,
+            target_gpu=0,
+            relay_gpus=[1],
+            backend=direct_backend,
+        )
+        allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-client-worker-test")
+
+        with allocator.allocate("cpu-buffer", "job-1", 64) as source:
+            target = CudaIpcDeviceBuffer.from_device_pointer(
+                buffer_id="gpu-buffer",
+                job_id="job-1",
+                device_index=0,
+                size_bytes=64,
+                device_ptr=4096,
+                backend=FakeCudaBackend(),
+            )
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "direct fallback completed 32 of 64 daemon-planned bytes",
+            ):
+                transfer_client.fetch_shared_cpu_to_cuda_ipc(
+                    source,
+                    target,
+                    ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 64},),
+                    chunk_bytes=16,
+                    mode="pool",
+                )
+
+        self.assertEqual(direct_backend.initialized, [(0, ())])
+        self.assertEqual(len(direct_backend.fetches), 1)
+        self.assertEqual(len(direct_backend.registered), 1)
+        self.assertEqual(len(direct_backend.unregistered), 1)
         status_payloads = daemon.describe().payload["transfer_statuses"]
         self.assertEqual(len(status_payloads), 1)
         failed_status = next(iter(status_payloads.values()))

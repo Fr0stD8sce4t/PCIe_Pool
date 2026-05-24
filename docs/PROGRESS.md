@@ -202,6 +202,10 @@ transfer request objects:
   chunks that exceed the registered source or destination buffer before local
   native execution. A malformed direct-only plan is marked failed before host
   registration or exact-plan submission;
+- worker-managed direct fallback now checks native execution statistics before
+  reporting daemon completion. If the backend reports fewer completed bytes
+  than the daemon-requested transfer, the direct fallback transfer is marked
+  failed instead of being promoted to daemon `complete`;
 - worker-opened shared pinned CPU handles now require explicit
   `shared_memory_size_bytes` metadata before the worker can reopen the shared
   memory mapping, host-register it with CUDA, or pass it into the executor;
@@ -834,101 +838,105 @@ phase:
     registration or native exact-plan submission. The rejected transfer is
     recorded as failed in daemon status instead of relying on native CUDA to
     catch the bad range.
-85. daemon session close now removes session-scoped job and buffer
+85. worker-managed direct fallback now validates native execution statistics
+    before daemon completion reporting. A direct native result that reports
+    fewer bytes than the daemon-requested transfer is recorded as failed
+    instead of being accepted as a successful direct fallback.
+86. daemon session close now removes session-scoped job and buffer
     registrations. This keeps stale shared pinned CPU and CUDA IPC handle
     metadata from surviving after worker-managed transfers close their daemon
     session.
-86. daemon job registration now requires named sessions to exist. This keeps
+87. daemon job registration now requires named sessions to exist. This keeps
     worker-managed buffer handles anchored to a live daemon session before
     transfer planning or worker authorization can use them.
-87. daemon transfer planning now rejects registered buffers owned by jobs that
+88. daemon transfer planning now rejects registered buffers owned by jobs that
     are not bound to the transfer session. Detached legacy jobs remain
     registerable for compatibility, but their buffers cannot enter
     worker-managed plan/lease authorization.
-88. daemon transfer planning now binds omitted-job requests to the registered
+89. daemon transfer planning now binds omitted-job requests to the registered
     buffer owner. The inferred job id is written into scheduler leases, lease
     tokens, transfer status, and worker authorization, so same-session
     multi-job transfers cannot fall back to a session-id pseudo owner.
-89. daemon buffer registration now protects active transfer handles from being
+90. daemon buffer registration now protects active transfer handles from being
     overwritten. A `buffer_id` named by an active lease cannot be re-registered
     until that lease is released or expired, so worker authorization cannot
     consume a swapped shared CPU or CUDA IPC handle.
-90. daemon lease validation and worker authorization now require exact
+91. daemon lease validation and worker authorization now require exact
     source/destination buffer-pair matches against the daemon-issued lease.
     Partial buffer validation and swapped source/destination worker requests
     fail before helper execution can open handles.
-91. daemon worker authorization now rejects terminal transfer statuses before
+92. daemon worker authorization now rejects terminal transfer statuses before
     lease or handle authorization. A failed, canceled, or completed transfer
     cannot receive a helper execution context even if relay cleanup has not
     finished yet.
-92. daemon lease validation now rejects terminal transfer statuses too. This
+93. daemon lease validation now rejects terminal transfer statuses too. This
     keeps failed, canceled, and completed transfers from presenting a still-
     active lease as valid before cleanup releases the relay reservation.
-93. daemon-planned reservation release now requires the daemon-owned transfer
+94. daemon-planned reservation release now requires the daemon-owned transfer
     status to be complete first. Incomplete and failed planned transfers use
     cleanup, while the runtime exact-plan baseline reports complete status
     before releasing its relay reservation.
-94. runtime exact-plan failures now clean daemon-planned relay reservations.
+95. runtime exact-plan failures now clean daemon-planned relay reservations.
     Native wait failures and daemon completion status-report failures call
     cleanup instead of normal release, preserving the stricter
     daemon-planned completion rule without leaking relay quota.
-95. worker-managed client completion envelopes are now bound to the daemon
+96. worker-managed client completion envelopes are now bound to the daemon
     authorization. A helper response that reports the wrong transfer id, wrong
     lease id, or a non-ok complete result is rejected and the relay reservation
     is cleaned with `worker_completion_invalid`.
-96. worker-managed client completion envelopes now also bind nested helper
+97. worker-managed client completion envelopes now also bind nested helper
     records to the daemon authorization. Mismatched worker result, daemon
     status update, or daemon status response transfer/lease identity is
     rejected before the client accepts helper completion or releases the relay
     reservation.
-97. worker-managed client completion envelopes now also bind nested helper
+98. worker-managed client completion envelopes now also bind nested helper
     byte counts to the daemon-requested transfer size. A complete helper
     envelope with a partial worker result or daemon status byte count is
     rejected before the client accepts helper completion or releases the relay
     reservation.
-98. worker-managed client completion envelopes now require daemon status
+99. worker-managed client completion envelopes now require daemon status
     reporting evidence for complete helper results. A local-only worker
     completion envelope that omits the daemon status update or response is
     rejected before the client accepts helper completion or releases the relay
     reservation.
-99. worker-managed client completion envelopes now require daemon reservation
+100. worker-managed client completion envelopes now require daemon reservation
     release evidence for complete helper results. A helper completion envelope
     that omits the release response, reports a failed release, or reports a
     release for another reservation is rejected before the client accepts the
     transfer as complete.
-100. worker-managed client completion envelopes now require worker-local staging
+101. worker-managed client completion envelopes now require worker-local staging
     release evidence for complete helper results. A helper completion envelope
     that omits the staging release, leaves it active, or reports release for
     another transfer or lease is rejected before the client accepts the
     transfer as complete.
-101. worker-managed client completion envelopes now bind the worker-local
+102. worker-managed client completion envelopes now bind the worker-local
     staging allocation and release records together. Complete helper results
     must include an active `staging_slot` and an inactive `staging_release`
     for the same slot, transfer, and lease before client completion is
     accepted.
-102. native exact-plan conversion now rejects daemon-issued plans whose
+103. native exact-plan conversion now rejects daemon-issued plans whose
      declared `total_bytes` does not match the sum of assigned chunk bytes.
      Direct fallback, relay, and pooled worker/helper execution all fail before
      native CUDA submission if the daemon plan byte accounting is malformed.
-103. the worker CUDA executor now rejects the same malformed daemon byte
+104. the worker CUDA executor now rejects the same malformed daemon byte
      accounting before rebuilding its relay-scoped exact-plan payload. A helper
      cannot bypass the native exact-plan guard by replacing the daemon-declared
      total with the locally recomputed chunk sum.
-104. worker data-plane resource binding now selects the daemon-authorized CUDA
+105. worker data-plane resource binding now selects the daemon-authorized CUDA
      device before shared pinned CPU host registration and keeps that device
      selected for host unregister, CUDA IPC open, and CUDA IPC close. This keeps
      helper-process execution tied to the registered target/source GPU instead
      of the process default CUDA context.
-105. worker authorization now rejects daemon-issued plans whose declared
+106. worker authorization now rejects daemon-issued plans whose declared
      `total_bytes` does not match assigned direct-plus-relay chunks before
      worker-local relay staging allocation. Malformed exact plans now clean the
      daemon reservation through the authorization-failure path instead of
      reaching resource binding or CUDA execution.
-106. worker authorization now rejects daemon plans whose `target_device` does
+107. worker authorization now rejects daemon plans whose `target_device` does
      not match the authorized CUDA IPC source or destination handle before
      worker-local relay staging allocation. The helper path now binds the
      exact plan to the daemon-approved GPU buffer before opening resources.
-107. worker authorization now rejects disabled daemon plan paths before
+108. worker authorization now rejects disabled daemon plan paths before
      worker-local relay staging allocation. A daemon-issued path marked
      unavailable now cleans the reservation through the authorization-failure
      path instead of reaching resource binding or CUDA execution.
