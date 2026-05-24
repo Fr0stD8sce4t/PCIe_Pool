@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import unittest
 
-from turbobus import TransferDirection, TransferRange, TransferRequest
 from turbobus.schema import TransferMode
+from turbobus.transfer import TransferDirection, TransferRange, TransferRequest
 
 
 class TransferRequestTest(unittest.TestCase):

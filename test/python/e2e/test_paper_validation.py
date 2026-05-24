@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 
-BENCHMARKS = Path(__file__).resolve().parents[2] / "benchmarks"
+BENCHMARKS = Path(__file__).resolve().parents[3] / "benchmarks"
 sys.path.insert(0, str(BENCHMARKS))
 
 import paper_validation  # noqa: E402

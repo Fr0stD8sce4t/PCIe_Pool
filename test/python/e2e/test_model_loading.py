@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from turbobus import BlockState, ModelWeightLoader, OffloadBatch, TransferStats
+from turbobus.model_loading import ModelWeightLoader
+from turbobus.offload_store import BlockState, OffloadBatch, TransferStats
 
 
 class FakeTensor:

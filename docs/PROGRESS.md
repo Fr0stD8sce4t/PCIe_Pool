@@ -51,6 +51,11 @@ The active target architecture is:
   `ExecutionTicket` objects during worker authorization. Worker request
   construction can now use tickets as input and rejects mismatched decision,
   buffer, lease, range, and daemon-plan bindings before data-plane execution.
+- Phase 0 Cut 6 is complete. The Python tests are organized under
+  `test/python/unit/`, `test/python/integration/`, `test/python/e2e/`, and
+  `test/python/fixtures/`. Moved tests now use explicit fixture and internal
+  module imports, so the root package remains focused on daemon-first public
+  API exports instead of old planner, transfer, and offload internals.
 
 ## Active Phase
 
@@ -68,7 +73,7 @@ Phase 0 covers:
 
 ## Next Work Items
 
-Current item: Cut 6, Test tree rewrite.
+Current item: Cut 7, Benchmark and example rewrite.
 
 1. Shared schema layer.
    - Status: complete.
@@ -96,11 +101,12 @@ Current item: Cut 6, Test tree rewrite.
    - Add rejection tests for ticket mismatches.
 
 5. Test tree rewrite.
-   - Status: current.
+   - Status: complete.
    - Organize tests into unit, integration, e2e, and fixtures.
    - Mark GPU-required tests clearly.
 
 6. Benchmark and example rewrite.
+   - Status: current.
    - Use public client APIs.
    - Emit decision id, topology snapshot id, ticket id, bytes, timing, path
      split, and fallback reason.

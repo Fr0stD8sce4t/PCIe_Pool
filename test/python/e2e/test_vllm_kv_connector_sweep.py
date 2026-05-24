@@ -11,7 +11,7 @@ import unittest
 
 
 def load_sweep_module():
-    path = Path(__file__).resolve().parents[2] / "examples" / "vllm_turbobus_kv_connector_sweep.py"
+    path = Path(__file__).resolve().parents[3] / "examples" / "vllm_turbobus_kv_connector_sweep.py"
     spec = importlib.util.spec_from_file_location("vllm_turbobus_kv_connector_sweep", path)
     module = importlib.util.module_from_spec(spec)
     assert spec is not None

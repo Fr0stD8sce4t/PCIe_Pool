@@ -19,7 +19,7 @@ from turbobus.topology import (
     DaemonResourceInventory,
     GpuInventoryRecord,
 )
-from fixtures.topology import (
+from test.python.fixtures.topology import (
     StaticTopologyProvider,
 )
 from turbobus.transfer import TransferRequest

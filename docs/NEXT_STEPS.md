@@ -33,7 +33,7 @@ creates the contracts needed for the rest of the system:
 
 ## Current
 
-Cut 6: Test Tree Rewrite.
+Cut 7: Benchmarks And Examples Rewrite.
 
 Cut 1 is complete. The contract inventory is recorded in
 `docs/PHASE0_CONTRACT_INVENTORY.md`.
@@ -53,6 +53,12 @@ Cut 5 is complete. The daemon scheduler now returns schema
 `SchedulingDecision` objects, daemon worker authorization issues
 `ExecutionTicket` objects, and worker request construction can validate ticket
 bindings against decisions, buffers, byte ranges, leases, and daemon plans.
+
+Cut 6 is complete. Tests now live under `test/python/unit/`,
+`test/python/integration/`, `test/python/e2e/`, and
+`test/python/fixtures/`. Moved tests import internal modules explicitly instead
+of widening the root public API, and synthetic topology remains an explicit
+fixture.
 
 ## Phase 0 Code Cuts
 
@@ -141,7 +147,7 @@ Expected output:
 
 ### Cut 6: Test Tree Rewrite
 
-Status: current.
+Status: complete.
 
 Restructure tests:
 
@@ -162,6 +168,8 @@ Expected output:
 - GPU tests are clearly marked as requiring CUDA hardware.
 
 ### Cut 7: Benchmarks And Examples Rewrite
+
+Status: current.
 
 - Update examples to call the public client API.
 - Update benchmark configuration to request workload and policy, then read

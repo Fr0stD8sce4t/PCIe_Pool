@@ -4,8 +4,8 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 import unittest
 
-from turbobus import OffloadBatch, TransferStats
 from turbobus.inference import InferenceKVSlotAdapter, make_contiguous_kv_slots
+from turbobus.offload_store import OffloadBatch, TransferStats
 from turbobus.vllm import (
     VllmKVGroup,
     VllmKVSlotAdapter,

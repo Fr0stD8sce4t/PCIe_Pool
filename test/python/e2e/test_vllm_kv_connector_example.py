@@ -8,7 +8,7 @@ from unittest import mock
 
 
 def load_example_module():
-    path = Path(__file__).resolve().parents[2] / "examples" / "vllm_turbobus_kv_connector.py"
+    path = Path(__file__).resolve().parents[3] / "examples" / "vllm_turbobus_kv_connector.py"
     spec = importlib.util.spec_from_file_location("vllm_turbobus_kv_connector", path)
     module = importlib.util.module_from_spec(spec)
     assert spec is not None

@@ -22,7 +22,7 @@ from turbobus.topology import (
     GpuInventoryRecord,
     PciePathRecord,
 )
-from fixtures.topology import (
+from test.python.fixtures.topology import (
     StaticTopologyProvider,
 )
 from turbobus.worker import (

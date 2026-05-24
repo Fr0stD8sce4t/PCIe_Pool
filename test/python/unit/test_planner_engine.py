@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import unittest
 
-from turbobus import PlannerEngine, PlannerEngineOptions, plan_transfer_ranges
+from turbobus.planner_engine import PlannerEngine, PlannerEngineOptions, plan_transfer_ranges
 from turbobus.schema import TransferMode
 
 

@@ -6,7 +6,7 @@ import unittest
 import sys
 from pathlib import Path
 
-BENCHMARKS = Path(__file__).resolve().parents[2] / "benchmarks"
+BENCHMARKS = Path(__file__).resolve().parents[3] / "benchmarks"
 sys.path.insert(0, str(BENCHMARKS))
 
 from daemon_support import (  # noqa: E402

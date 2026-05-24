@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from turbobus import (
+from turbobus.offload_store import (
     BlockState,
     OffloadBatch,
-    TrainingOffloadManager,
     TransferStats,
 )
+from turbobus.training_offload import TrainingOffloadManager
 
 
 class FakeTensor:

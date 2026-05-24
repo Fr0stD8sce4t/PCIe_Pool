@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import unittest
 
-from turbobus import (
+from turbobus.planner_types import (
     PlannerChunk,
     PlannerDevice,
     PlannerLease,

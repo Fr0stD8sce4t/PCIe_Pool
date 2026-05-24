@@ -4,11 +4,11 @@ import unittest
 
 from types import SimpleNamespace
 
-from turbobus import (
+from turbobus.offload_store import (
     BlockState,
     OffloadBatch,
-    OffloadStore,
     OffloadBlockInfo,
+    OffloadStore,
     TransferStats,
     summarize_transfer_handles,
 )
