@@ -29,23 +29,38 @@ class VllmKVConnectorExampleTest(unittest.TestCase):
                 "vllm_turbobus_kv_connector.py",
                 "--model",
                 "model",
-                "--target-gpu",
-                "6",
+                "--job-id",
+                "job-a",
+                "--session-id",
+                "session-a",
+                "--cpu-buffer-id",
+                "cpu-buffer",
+                "--gpu-buffer-id",
+                "gpu-buffer",
                 "--daemon-socket-path",
                 "/tmp/turbobusd.sock",
-                "--daemon-max-inflight-chunks",
-                "12",
-                "--daemon-profile-max-age-seconds",
-                "45",
+                "--wait-timeout-seconds",
+                "2.5",
             ],
         ):
             args = example.parse_args()
 
         self.assertTrue(args.save_enabled)
         self.assertFalse(args.restore_enabled)
+        self.assertEqual(args.job_id, "job-a")
+        self.assertEqual(args.session_id, "session-a")
+        self.assertEqual(args.cpu_buffer_id, "cpu-buffer")
+        self.assertEqual(args.gpu_buffer_id, "gpu-buffer")
         self.assertEqual(args.daemon_socket_path, "/tmp/turbobusd.sock")
-        self.assertEqual(args.daemon_max_inflight_chunks, 12)
-        self.assertEqual(args.daemon_profile_max_age_seconds, 45.0)
+        self.assertEqual(args.wait_timeout_seconds, 2.5)
+        removed_fields = (
+            "target_" + "gpu",
+            "relay_" + "gpus",
+            "mode",
+            "min_" + "pool_bytes",
+        )
+        for field_name in removed_fields:
+            self.assertNotIn(field_name, vars(args))
 
     def test_no_save_disables_first_request_save_intent(self) -> None:
         with mock.patch.object(
@@ -55,8 +70,8 @@ class VllmKVConnectorExampleTest(unittest.TestCase):
                 "vllm_turbobus_kv_connector.py",
                 "--model",
                 "model",
-                "--target-gpu",
-                "6",
+                "--daemon-socket-path",
+                "/tmp/turbobusd.sock",
                 "--no-save",
                 "--restore-enabled",
             ],

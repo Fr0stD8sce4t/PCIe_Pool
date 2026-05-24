@@ -10,22 +10,10 @@ import traceback
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from turbobus.example_config import configure_cuda_runtime_mapping, parse_gpu_list
-
 
 def default_log_path() -> str:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return str(Path("benchmarks") / "results" / f"vllm_turbobus_kv_connector_{stamp}.log")
-
-
-def configure_cuda_devices(args) -> None:
-    mapping = configure_cuda_runtime_mapping(
-        args.target_gpu,
-        args.relay_gpus,
-        map_physical_gpus=args.map_physical_gpus,
-    )
-    args.runtime_target_gpu = mapping.runtime_target_gpu
-    args.runtime_relay_gpus = list(mapping.runtime_relay_gpus)
 
 
 def prompt_text(prompt: str, repeat: int) -> str:
@@ -61,12 +49,24 @@ def format_ms(event: dict | None, key: str) -> str:
         return "0.000"
 
 
+def receipt_fields(event: dict | None) -> list[str]:
+    return [
+        f"direct_chunks={event_value(event, 'direct_chunks')}",
+        f"relay_chunks={event_value(event, 'relay_chunks')}",
+        f"direct_bytes={event_value(event, 'direct_bytes')}",
+        f"relay_bytes={event_value(event, 'relay_bytes')}",
+        f"receipt_ids={event_value(event, 'receipt_ids', '')}",
+        f"decision_ids={event_value(event, 'decision_ids', '')}",
+        f"topology_snapshot_ids={event_value(event, 'topology_snapshot_ids', '')}",
+        f"ticket_ids={event_value(event, 'ticket_ids', '')}",
+        f"fallback_reason={event_value(event, 'fallback_reason', '')}",
+    ]
+
+
 def run(args) -> None:
-    configure_cuda_devices(args)
     if args.disable_multiproc_executor:
         os.environ.setdefault("VLLM_ENABLE_V1_MULTIPROCESSING", "0")
 
-    import torch
     from vllm import LLM, SamplingParams
     from vllm.config import KVTransferConfig
 
@@ -76,29 +76,24 @@ def run(args) -> None:
         get_connector_events,
     )
 
-    torch.cuda.set_device(args.runtime_target_gpu)
     clear_connector_events()
     clear_saved_prefixes(args.session_id)
 
-    relay_gpus = ",".join(str(gpu) for gpu in args.runtime_relay_gpus)
     ktc = KVTransferConfig(
         kv_connector="TurboBusConnector",
         kv_role="kv_both",
         kv_connector_module_path="turbobus.vllm_kv_connector",
         kv_connector_extra_config={
-            "turbobus.target_gpu": args.runtime_target_gpu,
-            "turbobus.relay_gpus": relay_gpus,
+            "turbobus.job_id": args.job_id,
+            "turbobus.session_id": args.session_id,
+            "turbobus.cpu_buffer_id": args.cpu_buffer_id,
+            "turbobus.gpu_buffer_id": args.gpu_buffer_id,
             "turbobus.chunk_bytes": args.chunk_bytes,
-            "turbobus.profile_bytes": args.profile_bytes,
-            "turbobus.mode": args.mode,
-            "turbobus.min_pool_bytes": args.min_pool_bytes,
             "turbobus.daemon_socket_path": args.daemon_socket_path,
-            "turbobus.daemon_max_inflight_chunks": args.daemon_max_inflight_chunks,
-            "turbobus.daemon_profile_max_age_seconds": args.daemon_profile_max_age_seconds,
+            "turbobus.wait_timeout_seconds": args.wait_timeout_seconds,
             "turbobus.restore_block_limit": args.restore_blocks,
             "turbobus.restore_enabled": args.restore_enabled,
             "turbobus.max_saved_prefixes": args.max_saved_prefixes,
-            "turbobus.session_id": args.session_id,
         },
     )
     llm_kwargs = {
@@ -112,7 +107,6 @@ def run(args) -> None:
     llm = LLM(**llm_kwargs)
 
     first_prompt = prompt_text(args.prompt, args.prompt_repeat)
-    second_prompt = second_prompt_text(args, first_prompt)
     base_sampling = SamplingParams(
         temperature=0.0,
         max_tokens=args.max_tokens,
@@ -125,7 +119,7 @@ def run(args) -> None:
             }
         },
     )
-    first_outputs = llm.generate([first_prompt], base_sampling)
+    llm.generate([first_prompt], base_sampling)
 
     events = get_connector_events()
     first_save_event = last_event(events, "save", prefix_key=args.prefix_key)
@@ -189,16 +183,17 @@ def run(args) -> None:
     print("COPY_SUMMARY_BEGIN")
     print(
         "vllm_kv_connector_config",
-        f"target={args.target_gpu}",
-        f"relays={parse_gpu_list(args.relay_gpus)}",
-        f"runtime_target={args.runtime_target_gpu}",
-        f"runtime_relays={args.runtime_relay_gpus}",
-        f"cuda_visible_devices={os.environ.get('CUDA_VISIBLE_DEVICES', '')}",
         f"model={args.model}",
+        f"job_id={args.job_id}",
+        f"session_id={args.session_id}",
+        f"cpu_buffer_id={args.cpu_buffer_id}",
+        f"gpu_buffer_id={args.gpu_buffer_id}",
+        f"daemon_socket_path={args.daemon_socket_path}",
+        f"wait_timeout_seconds={args.wait_timeout_seconds}",
+        f"cuda_visible_devices={os.environ.get('CUDA_VISIBLE_DEVICES', '')}",
         f"prompt_repeat={args.prompt_repeat}",
         f"prefix_key={args.prefix_key}",
         f"second_save_prefix_key={args.second_save_prefix_key}",
-        f"session_id={args.session_id}",
         f"restore_prefix_key={restore_prefix_key}",
         f"second_prompt_suffix={args.second_prompt_suffix!r}",
         f"requested_matched_tokens={args.matched_tokens}",
@@ -208,11 +203,6 @@ def run(args) -> None:
         f"restore_enabled={args.restore_enabled}",
         f"max_saved_prefixes={args.max_saved_prefixes}",
         f"chunk_bytes={args.chunk_bytes}",
-        f"min_pool_bytes={args.min_pool_bytes}",
-        f"mode={args.mode}",
-        f"daemon_socket_path={args.daemon_socket_path}",
-        f"daemon_max_inflight_chunks={args.daemon_max_inflight_chunks}",
-        f"daemon_profile_max_age_seconds={args.daemon_profile_max_age_seconds}",
     )
     print(
         "vllm_kv_connector_scenario",
@@ -229,7 +219,7 @@ def run(args) -> None:
             f"blocks={event_value(save_event, 'block_count')}",
             f"bytes={event_value(save_event, 'bytes')}",
             f"elapsed_ms={format_ms(save_event, 'elapsed_ms')}",
-            f"runtime_init_ms={format_ms(save_event, 'runtime_init_ms')}",
+            f"client_init_ms={format_ms(save_event, 'client_init_ms')}",
             f"prepare_ms={format_ms(save_event, 'prepare_ms')}",
             f"cpu_alloc_ms={format_ms(save_event, 'cpu_alloc_ms')}",
             f"group_ms={format_ms(save_event, 'group_ms')}",
@@ -238,16 +228,9 @@ def run(args) -> None:
             f"transfer_ms={format_ms(save_event, 'transfer_ms')}",
             f"register_ms={format_ms(save_event, 'register_ms')}",
             f"total_ms={format_ms(save_event, 'total_ms')}",
-            f"direct_chunks={event_value(save_event, 'direct_chunks')}",
-            f"relay_chunks={event_value(save_event, 'relay_chunks')}",
             f"save_layer_count={event_value(save_event, 'layers')}",
             f"save_layer_ranges={event_value(save_event, 'ranges')}",
-            f"auto_resolved_mode={event_value(save_event, 'auto_resolved_mode', 'NA')}",
-            f"auto_reason={event_value(save_event, 'auto_reason', 'NA')}",
-            f"daemon_session_id={event_value(save_event, 'daemon_session_id', '')}",
-            f"daemon_reservation_status={event_value(save_event, 'daemon_reservation_status', '')}",
-            f"daemon_reserved_relays={event_value(save_event, 'daemon_reserved_relays', '')}",
-            f"daemon_reserved_chunks_per_relay={event_value(save_event, 'daemon_reserved_chunks_per_relay', '')}",
+            *receipt_fields(save_event),
         )
     if first_save_event is not None and first_save_event is not save_event:
         print(
@@ -256,6 +239,7 @@ def run(args) -> None:
             f"blocks={event_value(first_save_event, 'block_count')}",
             f"bytes={event_value(first_save_event, 'bytes')}",
             f"elapsed_ms={format_ms(first_save_event, 'elapsed_ms')}",
+            *receipt_fields(first_save_event),
         )
     if second_save_event is not None and second_save_event is not save_event:
         print(
@@ -264,6 +248,7 @@ def run(args) -> None:
             f"blocks={event_value(second_save_event, 'block_count')}",
             f"bytes={event_value(second_save_event, 'bytes')}",
             f"elapsed_ms={format_ms(second_save_event, 'elapsed_ms')}",
+            *receipt_fields(second_save_event),
         )
     if restore_event is not None:
         print(
@@ -275,16 +260,9 @@ def run(args) -> None:
             f"prepare_ms={format_ms(restore_event, 'prepare_ms')}",
             f"transfer_ms={format_ms(restore_event, 'transfer_ms')}",
             f"total_ms={format_ms(restore_event, 'total_ms')}",
-            f"direct_chunks={event_value(restore_event, 'direct_chunks')}",
-            f"relay_chunks={event_value(restore_event, 'relay_chunks')}",
             f"layers={event_value(restore_event, 'layers')}",
             f"ranges={event_value(restore_event, 'ranges')}",
-            f"auto_resolved_mode={event_value(restore_event, 'auto_resolved_mode', 'NA')}",
-            f"auto_reason={event_value(restore_event, 'auto_reason', 'NA')}",
-            f"daemon_session_id={event_value(restore_event, 'daemon_session_id', '')}",
-            f"daemon_reservation_status={event_value(restore_event, 'daemon_reservation_status', '')}",
-            f"daemon_reserved_relays={event_value(restore_event, 'daemon_reserved_relays', '')}",
-            f"daemon_reserved_chunks_per_relay={event_value(restore_event, 'daemon_reserved_chunks_per_relay', '')}",
+            *receipt_fields(restore_event),
         )
     print(
         "vllm_kv_connector_result",
@@ -306,11 +284,12 @@ def parse_args():
     parser.add_argument("--prefix-key", default="qwen3-prefix")
     parser.add_argument("--second-save-prefix-key", default=None)
     parser.add_argument("--second-save-prompt", default="The capital of Germany is")
+    parser.add_argument("--job-id", default="vllm-kv-connector-job")
     parser.add_argument("--session-id", default="vllm-kv-connector-example")
+    parser.add_argument("--cpu-buffer-id", default="vllm-kv-cpu-buffer")
+    parser.add_argument("--gpu-buffer-id", default="vllm-kv-gpu-buffer")
     parser.add_argument("--matched-tokens", type=int, default=128)
     parser.add_argument("--max-tokens", type=int, default=8)
-    parser.add_argument("--target-gpu", type=int, required=True)
-    parser.add_argument("--relay-gpus", default="")
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.8)
     parser.add_argument("--enforce-eager", action="store_true")
@@ -341,23 +320,15 @@ def parse_args():
         help="Actually write saved TurboBus CPU backing into later vLLM KV slots.",
     )
     parser.add_argument("--chunk-bytes", type=int, default=4 * 1024 * 1024)
-    parser.add_argument("--profile-bytes", type=int, default=16 * 1024 * 1024)
-    parser.add_argument("--min-pool-bytes", type=int, default=12 * 1024 * 1024)
-    parser.add_argument("--mode", choices=["auto", "direct", "relay", "pool"], default="pool")
-    parser.add_argument("--daemon-socket-path", default="")
-    parser.add_argument("--daemon-max-inflight-chunks", type=int, default=8)
-    parser.add_argument("--daemon-profile-max-age-seconds", type=float, default=3600.0)
+    parser.add_argument("--daemon-socket-path", required=True)
+    parser.add_argument("--wait-timeout-seconds", type=float, default=None)
     parser.add_argument("--log-output", default=None)
-    parser.add_argument(
-        "--no-map-physical-gpus",
-        dest="map_physical_gpus",
-        action="store_false",
-    )
-    parser.set_defaults(map_physical_gpus=True)
     args = parser.parse_args()
     if args.log_output is None:
         args.log_output = default_log_path()
     return args
+
+
 def main() -> None:
     args = parse_args()
     log_path = Path(args.log_output)

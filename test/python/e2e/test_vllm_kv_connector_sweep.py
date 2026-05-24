@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
-import contextlib
-import io
 import tempfile
 import unittest
 
@@ -26,11 +26,11 @@ sweep = load_sweep_module()
 class VllmKVConnectorSweepTest(unittest.TestCase):
     def test_parse_summary_line_handles_quoted_values(self) -> None:
         name, values = sweep.parse_summary_line(
-            "vllm_kv_connector_config mode=pool second_prompt_suffix=' Italy'"
+            "vllm_kv_connector_config case_id=daemon second_prompt_suffix=' Italy'"
         )
 
         self.assertEqual(name, "vllm_kv_connector_config")
-        self.assertEqual(values["mode"], "pool")
+        self.assertEqual(values["case_id"], "daemon")
         self.assertEqual(values["second_prompt_suffix"], " Italy")
 
     def test_parse_copy_summary_extracts_named_records(self) -> None:
@@ -54,67 +54,44 @@ class VllmKVConnectorSweepTest(unittest.TestCase):
         self.assertEqual(sweep.gib_per_second(str(1024**3), "1000"), "1.000")
         self.assertEqual(sweep.gib_per_second("0", "1000"), "NA")
 
-    def test_speedup_formats_latency_ratio(self) -> None:
-        self.assertEqual(sweep.speedup("40", "20"), "2.000")
-        self.assertEqual(sweep.speedup("40", "0"), "NA")
-
-    def test_build_sweep_summary_lines_includes_bandwidth_and_speedup(self) -> None:
+    def test_build_sweep_summary_lines_reports_daemon_receipt_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            direct_log = Path(tmpdir) / "direct.log"
-            pool_log = Path(tmpdir) / "pool.log"
-            direct_log.write_text(
+            log = Path(tmpdir) / "daemon.log"
+            log.write_text(
                 "\n".join(
                     [
-                        "turbobus_kv_connector_event event=restore elapsed_ms=40 prepare_ms=2 transfer_ms=40 total_ms=42 layers=28 ranges=224 bytes=1073741824 direct_chunks=1 relay_chunks=0",
-                        "turbobus_kv_connector_event event=start_load_done requests=1 restore_enabled=True elapsed_ms=43",
-                    ]
-                ),
-                encoding="utf-8",
-            )
-            pool_log.write_text(
-                "\n".join(
-                    [
-                        "turbobus_kv_connector_event event=save elapsed_ms=12 runtime_init_ms=3 transfer_ms=10 total_ms=13 auto_resolved_mode=pool auto_reason=pool_speedup_1.500 daemon_reservation_status=granted daemon_reserved_relays=5 daemon_reserved_chunks_per_relay=12",
-                        "turbobus_kv_connector_event event=restore elapsed_ms=20 prepare_ms=1 transfer_ms=20 total_ms=21 layers=28 ranges=224 bytes=1073741824 direct_chunks=1 relay_chunks=1 auto_resolved_mode=pool auto_reason=pool_speedup_1.500 auto_direct_bw_gbps=7.500 auto_relay_bw_gbps=7.600",
+                        "turbobus_kv_connector_event event=save elapsed_ms=12 transfer_ms=10 total_ms=13 receipt_ids=save-r decision_ids=save-d topology_snapshot_ids=save-t ticket_ids=save-ticket direct_bytes=8 relay_bytes=0 fallback_reason=",
+                        "turbobus_kv_connector_event event=restore elapsed_ms=20 prepare_ms=1 transfer_ms=20 total_ms=21 layers=28 ranges=224 bytes=1073741824 direct_chunks=1 relay_chunks=1 direct_bytes=536870912 relay_bytes=536870912 receipt_ids=restore-r decision_ids=restore-d topology_snapshot_ids=restore-t ticket_ids=restore-ticket fallback_reason=direct_saturated",
                         "turbobus_kv_connector_event event=start_load_done requests=1 restore_enabled=True elapsed_ms=22",
                     ]
                 ),
                 encoding="utf-8",
             )
             args = SimpleNamespace(
-                target_gpu=6,
-                relay_gpus="5",
                 model="model",
+                job_id="job-a",
+                session_id="session-a",
+                cpu_buffer_id="cpu-buffer",
+                gpu_buffer_id="gpu-buffer",
                 prompt_repeat=64,
-                modes=["direct", "pool"],
+                case_ids=["daemon"],
                 restore_blocks_list=[8],
                 chunk_bytes=4194304,
-                profile_bytes=16777216,
+                daemon_socket_path="/tmp/turbobusd.sock",
+                wait_timeout_seconds=None,
             )
             results = [
                 {
-                    "mode": "direct",
+                    "case_id": "daemon",
                     "restore_blocks": 8,
                     "matched_tokens": 128,
                     "returncode": 0,
-                    "log_path": str(direct_log),
+                    "log_path": str(log),
                     "summary": {
-                        "vllm_kv_connector_save": {
-                            "elapsed_ms": "41",
-                            "bytes": "1073741824",
-                            "save_layer_count": "28",
-                            "save_layer_ranges": "56",
+                        "vllm_kv_connector_config": {
+                            "job_id": "job-a",
+                            "session_id": "session-a",
                         },
-                        "vllm_kv_connector_result": {"prompt_tokens": "321", "shared_prefix": "True"},
-                    },
-                },
-                {
-                    "mode": "pool",
-                    "restore_blocks": 8,
-                    "matched_tokens": 128,
-                    "returncode": 0,
-                    "log_path": str(pool_log),
-                    "summary": {
                         "vllm_kv_connector_save": {
                             "elapsed_ms": "21",
                             "bytes": "1073741824",
@@ -129,47 +106,46 @@ class VllmKVConnectorSweepTest(unittest.TestCase):
             lines = sweep.build_sweep_summary_lines(args, results)
             rows = sweep.build_case_rows(args, results)
 
-        self.assertTrue(any("mode=pool" in line and "restore_gib_s=50.000" in line for line in lines))
-        self.assertEqual(rows[1]["mode"], "pool")
-        self.assertEqual(rows[1]["restore_gib_s"], "50.000")
-        self.assertEqual(rows[1]["save_auto_resolved_mode"], "pool")
-        self.assertEqual(rows[1]["save_daemon_reservation_status"], "granted")
-        self.assertTrue(any("mode=pool" in line and "restore_prepare_ms=1" in line for line in lines))
-        self.assertTrue(any("mode=pool" in line and "start_load_ms=22" in line for line in lines))
-        self.assertTrue(any("mode=pool" in line and "layers=28" in line for line in lines))
-        self.assertTrue(any("mode=pool" in line and "ranges=224" in line for line in lines))
-        self.assertTrue(any("mode=pool" in line and "auto_resolved_mode=pool" in line for line in lines))
-        self.assertTrue(any("mode=pool" in line and "auto_reason=pool_speedup_1.500" in line for line in lines))
-        self.assertTrue(any("mode=pool" in line and "save_daemon_reserved_relays=5" in line for line in lines))
-        self.assertTrue(any("mode=pool" in line and "auto_direct_bw_gbps=7.500" in line for line in lines))
-        self.assertTrue(any("mode=pool" in line and "auto_relay_bw_gbps=7.600" in line for line in lines))
-        self.assertTrue(any("mode=pool" in line and "save_layer_count=28" in line for line in lines))
-        self.assertTrue(any("mode=pool" in line and "save_layer_ranges=56" in line for line in lines))
-        self.assertTrue(any("direct_over_pool_restore=2.000" in line for line in lines))
+        self.assertTrue(any("case_id=daemon" in line and "restore_gib_s=50.000" in line for line in lines))
+        self.assertEqual(rows[0]["case_id"], "daemon")
+        self.assertEqual(rows[0]["restore_gib_s"], "50.000")
+        self.assertEqual(rows[0]["receipt_ids"], "restore-r")
+        self.assertEqual(rows[0]["decision_ids"], "restore-d")
+        self.assertEqual(rows[0]["topology_snapshot_ids"], "restore-t")
+        self.assertEqual(rows[0]["ticket_ids"], "restore-ticket")
+        self.assertEqual(rows[0]["direct_bytes"], "536870912")
+        self.assertEqual(rows[0]["relay_bytes"], "536870912")
+        self.assertEqual(rows[0]["fallback_reason"], "direct_saturated")
+        self.assertTrue(any("case_id=daemon" in line and "start_load_ms=22" in line for line in lines))
+        forbidden = ("auto_" + "resolved_mode", "direct_" + "over_pool")
+        self.assertTrue(all(all(item not in line for item in forbidden) for line in lines))
 
     def test_print_sweep_summary_writes_output_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "summary.txt"
             json_output = Path(tmpdir) / "cases.json"
             csv_output = Path(tmpdir) / "cases.csv"
-            log = Path(tmpdir) / "pool.log"
+            log = Path(tmpdir) / "daemon.log"
             log.write_text(
                 "turbobus_kv_connector_event event=restore elapsed_ms=20 bytes=1073741824\n",
                 encoding="utf-8",
             )
             args = SimpleNamespace(
-                target_gpu=6,
-                relay_gpus="5",
                 model="model",
+                job_id="job-a",
+                session_id="session-a",
+                cpu_buffer_id="cpu-buffer",
+                gpu_buffer_id="gpu-buffer",
                 prompt_repeat=64,
-                modes=[],
+                case_ids=[],
                 restore_blocks_list=[],
                 chunk_bytes=4194304,
-                profile_bytes=16777216,
+                daemon_socket_path="/tmp/turbobusd.sock",
+                wait_timeout_seconds=None,
             )
             results = [
                 {
-                    "mode": "pool",
+                    "case_id": "daemon",
                     "restore_blocks": 8,
                     "matched_tokens": 128,
                     "returncode": 0,
@@ -188,7 +164,7 @@ class VllmKVConnectorSweepTest(unittest.TestCase):
 
             self.assertIn("SWEEP_SUMMARY_BEGIN", output.read_text(encoding="utf-8"))
             cases = json.loads(json_output.read_text(encoding="utf-8"))
-            self.assertEqual(cases[0]["mode"], "pool")
+            self.assertEqual(cases[0]["case_id"], "daemon")
             self.assertIn("restore_gib_s", csv_output.read_text(encoding="utf-8"))
 
 

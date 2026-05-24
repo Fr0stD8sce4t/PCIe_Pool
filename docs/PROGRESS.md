@@ -89,6 +89,16 @@ The active target architecture is:
   receipts. The model-loading, training-offload, inference KV, vLLM slot, and
   vLLM integration adapter tests now protect intent construction and receipt
   consumption.
+- Phase 0 Cut 8 Substage 8.2 is complete. `vllm_kv_connector.py` no longer
+  imports `Runtime` or exposes target GPU, relay GPU, transfer mode, or
+  min-pool-byte configuration. The connector now accepts daemon socket, job,
+  session, and registered CPU/GPU buffer identity, routes vLLM KV save and
+  restore through `AdapterTransferContext`, `TurboBusClient`, and
+  `VllmKVSlotAdapter`, and reports receipt ids, decision ids, topology
+  snapshot ids, ticket ids, path split, bytes, and fallback reason. The vLLM
+  connector example and sweep now use public daemon-first identity arguments
+  and daemon receipt output instead of application-side direct, relay, or pool
+  choices.
 
 ## Active Phase
 
@@ -106,7 +116,8 @@ Phase 0 covers:
 
 ## Next Work Items
 
-Current item: Cut 8 Substage 8.2, vLLM KV connector daemon-first rewrite.
+Current item: Cut 8 Substage 8.3, adapter exports and old Runtime test
+cleanup.
 
 1. Shared schema layer.
    - Status: complete.
@@ -161,10 +172,10 @@ Current item: Cut 8 Substage 8.2, vLLM KV connector daemon-first rewrite.
      `TransferIntent` through the client API and consumes `TransferReceipt`
      for stats and block state. Model-loading, training-offload, inference KV,
      vLLM slot, and vLLM integration adapters now use that path.
-   - Substage 8.2 current: rewrite `vllm_kv_connector` so it removes Runtime,
+   - Substage 8.2 complete: rewrite `vllm_kv_connector` so it removes Runtime,
      target GPU, relay GPU, transfer mode, and min-pool-byte configuration from
      the adapter surface and reports daemon receipt ids and path split instead.
-   - Substage 8.3 pending: clean adapter-facing exports/tests that still only
+   - Substage 8.3 current: clean adapter-facing exports/tests that still only
      protect old Runtime route-selection behavior.
 
 ## Phase 0 Acceptance Criteria
@@ -183,18 +194,18 @@ Phase 0 is done when:
 
 ## Latest Validation
 
-Phase 0 Cut 8 Substage 8.1 validation:
+Phase 0 Cut 8 Substage 8.2 validation:
 
-- `python -m unittest test.python.unit.test_offload_store test.python.e2e.test_model_loading test.python.e2e.test_training_offload test.python.e2e.test_inference_adapters test.python.e2e.test_vllm_integration test.python.e2e.test_vllm_connector test.python.unit.test_adapters_package`
-- `python -m compileall -q turbobus\offload_store.py turbobus\adapters\model_loading.py turbobus\adapters\training_offload.py turbobus\adapters\inference.py turbobus\adapters\vllm.py turbobus\adapters\vllm_integration.py test\python\unit\test_offload_store.py test\python\e2e\test_model_loading.py test\python\e2e\test_training_offload.py test\python\e2e\test_inference_adapters.py test\python\e2e\test_vllm_integration.py`
+- `python -m unittest test.python.e2e.test_vllm_kv_connector test.python.e2e.test_vllm_kv_connector_example test.python.e2e.test_vllm_kv_connector_sweep test.python.unit.test_adapters_package`
+- `python -m compileall -q turbobus\adapters\vllm_kv_connector.py examples\vllm_turbobus_kv_connector.py examples\vllm_turbobus_kv_connector_sweep.py test\python\e2e\test_vllm_kv_connector.py test\python\e2e\test_vllm_kv_connector_example.py test\python\e2e\test_vllm_kv_connector_sweep.py`
+- `rg -n "\bRuntime\b|RuntimeOptions|_make_runtime|turbobus\.target_gpu|turbobus\.relay_gpus|turbobus\.mode|min_pool_bytes|--modes|--target-gpu|--relay-gpus|auto_resolved_mode|auto_reason|daemon_reserved|daemon_reservation|direct_over_pool" turbobus\adapters\vllm_kv_connector.py examples\vllm_turbobus_kv_connector.py examples\vllm_turbobus_kv_connector_sweep.py test\python\e2e\test_vllm_kv_connector.py test\python\e2e\test_vllm_kv_connector_example.py test\python\e2e\test_vllm_kv_connector_sweep.py`
 - `git diff --check`
 
 Remaining Phase 0 risk:
 
-- `vllm_kv_connector.py` still imports `Runtime`, exposes target/relay/mode
-  configuration, and constructs `VllmKVSlotAdapter` with the old Runtime
-  surface. vLLM KV paper validation remains deferred until this connector
-  submits `TransferIntent` and consumes `TransferReceipt`.
+- Adapter-facing exports and some old Runtime tests still need a final cleanup
+  pass so they protect framework mapping, intent fields, receipt handling, and
+  package boundaries instead of the old route-selection API.
 
 ## Upcoming Phases
 

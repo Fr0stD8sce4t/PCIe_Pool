@@ -92,7 +92,16 @@ state transitions from receipts. The model-loading, training-offload,
 inference KV, vLLM slot, and vLLM integration adapters now use this shared
 intent/receipt path instead of calling Runtime-owned transfer methods.
 
-Current substage: Cut 8 Substage 8.2, vLLM KV connector rewrite.
+Cut 8 Substage 8.2 is complete. The vLLM KV connector now accepts daemon
+socket, job, session, and registered CPU/GPU buffer identity instead of
+target GPU, relay GPU, physical mode, or min-pool settings. Save and restore
+flow through `AdapterTransferContext`, `TurboBusClient`, and
+`VllmKVSlotAdapter`, and connector/example/sweep output reports daemon
+receipt ids, decision ids, topology snapshot ids, ticket ids, bytes, path
+split, and fallback reason.
+
+Current substage: Cut 8 Substage 8.3, adapter exports and old Runtime test
+cleanup.
 
 ## Phase 0 Code Cuts
 
@@ -270,7 +279,7 @@ Status: complete.
 
 Substage 8.2: vLLM KV connector daemon-first rewrite.
 
-Status: current.
+Status: complete.
 
 - Remove `Runtime`, `RuntimeOptions`, target GPU, relay GPU, transfer mode, and
   min-pool-byte configuration from `vllm_kv_connector`.
@@ -286,7 +295,7 @@ Status: current.
 
 Substage 8.3: adapter exports and old Runtime test cleanup.
 
-Status: pending.
+Status: current.
 
 - Remove or demote adapter-facing tests that only protect the old Runtime
   direct/relay/pool route-selection surface.

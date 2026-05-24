@@ -5,8 +5,9 @@ import os
 import time
 from typing import Any
 
-from ..offload_store import TransferStats, summarize_transfer_handles
-from ..runtime import Runtime, RuntimeOptions
+from ..api import TurboBusClient
+from ..offload_store import AdapterTransferContext, TransferStats, summarize_transfer_handles
+from ..schema import TransferReceipt, WorkloadKind
 from .vllm import make_vllm_layer_range_refs_from_ids
 from .vllm_integration import extract_vllm_block_ids
 
@@ -57,7 +58,7 @@ class TurboBusSavedPrefix:
     source_request_id: str = ""
     bytes: int = 0
     elapsed_ms: float = 0.0
-    runtime_init_ms: float = 0.0
+    client_init_ms: float = 0.0
     prepare_ms: float = 0.0
     cpu_alloc_ms: float = 0.0
     reused_backing: bool = False
@@ -69,6 +70,13 @@ class TurboBusSavedPrefix:
     total_ms: float = 0.0
     direct_chunks: int = 0
     relay_chunks: int = 0
+    direct_bytes: int = 0
+    relay_bytes: int = 0
+    receipt_ids: str = ""
+    decision_ids: str = ""
+    topology_snapshot_ids: str = ""
+    ticket_ids: str = ""
+    fallback_reason: str = ""
     save_layer_count: int = 0
     save_layer_ranges: int = 0
 
@@ -87,7 +95,7 @@ class _LayerSaveContext:
     kv_caches: list[Any]
     reused_backing: bool
     total_start: float
-    runtime_init_ms: float = 0.0
+    client_init_ms: float = 0.0
     cpu_alloc_ms: float = 0.0
     group_ms: float = 0.0
     adapter_ms: float = 0.0
@@ -96,6 +104,13 @@ class _LayerSaveContext:
     bytes: int = 0
     direct_chunks: int = 0
     relay_chunks: int = 0
+    direct_bytes: int = 0
+    relay_bytes: int = 0
+    receipt_ids: list[str] = field(default_factory=list)
+    decision_ids: list[str] = field(default_factory=list)
+    topology_snapshot_ids: list[str] = field(default_factory=list)
+    ticket_ids: list[str] = field(default_factory=list)
+    fallback_reasons: list[str] = field(default_factory=list)
     ranges: int = 0
     saved_layers: set[int] = field(default_factory=set)
 
@@ -215,69 +230,55 @@ class TurboBusKVConnectorState:
 
 @dataclass(frozen=True)
 class TurboBusConnectorConfig:
-    target_gpu: int
-    relay_gpus: tuple[int, ...]
+    job_id: str
+    session_id: str
+    cpu_buffer_id: str
+    gpu_buffer_id: str
     chunk_bytes: int
-    profile_bytes: int
-    mode: str
-    min_pool_bytes: int
     daemon_socket_path: str
-    daemon_max_inflight_chunks: int
-    daemon_profile_max_age_seconds: float
+    wait_timeout_seconds: float | None
     restore_block_limit: int
     restore_enabled: bool
-    session_id: str
     max_saved_prefixes: int
 
     @classmethod
     def from_vllm_config(cls, vllm_config) -> "TurboBusConnectorConfig":
+        session_id = _extra_config_str(
+            vllm_config,
+            "turbobus.session_id",
+            _kv_transfer_engine_id(vllm_config),
+        )
         return cls(
-            target_gpu=_extra_config_int(
+            job_id=_extra_config_str(
                 vllm_config,
-                "turbobus.target_gpu",
-                int(os.environ.get("TURBOBUS_TARGET_GPU", "0") or 0),
+                "turbobus.job_id",
+                os.environ.get("TURBOBUS_JOB_ID", session_id),
             ),
-            relay_gpus=_parse_relay_gpus(
-                _extra_config_value(
-                    vllm_config,
-                    "turbobus.relay_gpus",
-                    os.environ.get("TURBOBUS_RELAY_GPUS", ""),
-                )
+            session_id=session_id,
+            cpu_buffer_id=_extra_config_str(
+                vllm_config,
+                "turbobus.cpu_buffer_id",
+                os.environ.get("TURBOBUS_CPU_BUFFER_ID", "vllm-kv-cpu-buffer"),
+            ),
+            gpu_buffer_id=_extra_config_str(
+                vllm_config,
+                "turbobus.gpu_buffer_id",
+                os.environ.get("TURBOBUS_GPU_BUFFER_ID", "vllm-kv-gpu-buffer"),
             ),
             chunk_bytes=_extra_config_int(
                 vllm_config,
                 "turbobus.chunk_bytes",
                 int(os.environ.get("TURBOBUS_CHUNK_BYTES", 4 * 1024 * 1024)),
             ),
-            profile_bytes=_extra_config_int(
-                vllm_config,
-                "turbobus.profile_bytes",
-                int(os.environ.get("TURBOBUS_PROFILE_BYTES", 16 * 1024 * 1024)),
-            ),
-            mode=_extra_config_str(
-                vllm_config,
-                "turbobus.mode",
-                os.environ.get("TURBOBUS_MODE", "pool"),
-            ),
-            min_pool_bytes=_extra_config_int(
-                vllm_config,
-                "turbobus.min_pool_bytes",
-                int(os.environ.get("TURBOBUS_MIN_POOL_BYTES", 12 * 1024 * 1024)),
-            ),
             daemon_socket_path=_extra_config_str(
                 vllm_config,
                 "turbobus.daemon_socket_path",
                 os.environ.get("TURBOBUS_DAEMON_SOCKET_PATH", ""),
             ),
-            daemon_max_inflight_chunks=_extra_config_int(
+            wait_timeout_seconds=_extra_config_optional_float(
                 vllm_config,
-                "turbobus.daemon_max_inflight_chunks",
-                int(os.environ.get("TURBOBUS_DAEMON_MAX_INFLIGHT_CHUNKS", "8") or 8),
-            ),
-            daemon_profile_max_age_seconds=_extra_config_float(
-                vllm_config,
-                "turbobus.daemon_profile_max_age_seconds",
-                float(os.environ.get("TURBOBUS_DAEMON_PROFILE_MAX_AGE_SECONDS", 3600.0) or 3600.0),
+                "turbobus.wait_timeout_seconds",
+                os.environ.get("TURBOBUS_WAIT_TIMEOUT_SECONDS", ""),
             ),
             restore_block_limit=_extra_config_int(
                 vllm_config,
@@ -289,27 +290,11 @@ class TurboBusConnectorConfig:
                 "turbobus.restore_enabled",
                 os.environ.get("TURBOBUS_RESTORE_ENABLED", "0") == "1",
             ),
-            session_id=_extra_config_str(
-                vllm_config,
-                "turbobus.session_id",
-                _kv_transfer_engine_id(vllm_config),
-            ),
             max_saved_prefixes=_extra_config_int(
                 vllm_config,
                 "turbobus.max_saved_prefixes",
                 int(os.environ.get("TURBOBUS_MAX_SAVED_PREFIXES", "0") or 0),
             ),
-        )
-
-    def runtime_options(self) -> RuntimeOptions:
-        return RuntimeOptions(
-            chunk_bytes=self.chunk_bytes,
-            profile_bytes=self.profile_bytes,
-            transfer_mode=self.mode,
-            min_pool_bytes=self.min_pool_bytes,
-            daemon_socket_path=self.daemon_socket_path or None,
-            daemon_max_inflight_chunks=self.daemon_max_inflight_chunks,
-            daemon_profile_max_age_seconds=self.daemon_profile_max_age_seconds,
         )
 
 
@@ -327,7 +312,7 @@ def register_saved_prefix(
     source_request_id: str = "",
     bytes: int = 0,
     elapsed_ms: float = 0.0,
-    runtime_init_ms: float = 0.0,
+    client_init_ms: float = 0.0,
     prepare_ms: float = 0.0,
     cpu_alloc_ms: float = 0.0,
     reused_backing: bool = False,
@@ -339,6 +324,13 @@ def register_saved_prefix(
     total_ms: float = 0.0,
     direct_chunks: int = 0,
     relay_chunks: int = 0,
+    direct_bytes: int = 0,
+    relay_bytes: int = 0,
+    receipt_ids: str = "",
+    decision_ids: str = "",
+    topology_snapshot_ids: str = "",
+    ticket_ids: str = "",
+    fallback_reason: str = "",
     save_layer_count: int = 0,
     save_layer_ranges: int = 0,
 ) -> None:
@@ -351,7 +343,7 @@ def register_saved_prefix(
         source_request_id=str(source_request_id),
         bytes=int(bytes),
         elapsed_ms=float(elapsed_ms),
-        runtime_init_ms=float(runtime_init_ms),
+        client_init_ms=float(client_init_ms),
         prepare_ms=float(prepare_ms),
         cpu_alloc_ms=float(cpu_alloc_ms),
         reused_backing=bool(reused_backing),
@@ -363,6 +355,13 @@ def register_saved_prefix(
         total_ms=float(total_ms),
         direct_chunks=int(direct_chunks),
         relay_chunks=int(relay_chunks),
+        direct_bytes=int(direct_bytes),
+        relay_bytes=int(relay_bytes),
+        receipt_ids=str(receipt_ids),
+        decision_ids=str(decision_ids),
+        topology_snapshot_ids=str(topology_snapshot_ids),
+        ticket_ids=str(ticket_ids),
+        fallback_reason=str(fallback_reason),
         save_layer_count=int(save_layer_count),
         save_layer_ranges=int(save_layer_ranges),
     )
@@ -434,8 +433,9 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         self.restore_block_limit = self.config.restore_block_limit
         self.restore_enabled = self.config.restore_enabled
         self.session_id = self.config.session_id
+        self.job_id = self.config.job_id
         self.max_saved_prefixes = self.config.max_saved_prefixes
-        self.runtime = None
+        self.client = TurboBusClient(socket_path=self.config.daemon_socket_path)
         self._adapters_by_prefix: dict[str, Any] = {}
         self._layer_save_contexts: dict[str, _LayerSaveContext] = {}
         self._backing_pool = TurboBusCPUBackingPool()
@@ -443,6 +443,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         _emit_event(
             "init",
             role=str(role),
+            job_id=self.job_id,
             session_id=self.session_id,
             restore_enabled=self.restore_enabled,
             restore_block_limit=self.restore_block_limit,
@@ -832,8 +833,6 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         adapter = self._adapters_by_prefix.get(saved.key)
         if adapter is not None:
             return adapter
-        if self.runtime is None:
-            self.runtime = _make_runtime_from_config(self._vllm_config)
         if not self.state.kv_caches:
             raise RuntimeError("vLLM did not register KV caches for TurboBus")
         from .vllm import VllmKVSlotAdapter
@@ -846,7 +845,17 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                 f"but vLLM registered {len(kv_caches)} KV cache tensors"
             )
         groups = make_vllm_layer_groups_from_kv_caches(saved.cpu_backings, kv_caches)
-        adapter = VllmKVSlotAdapter(self.runtime, groups)
+        adapter = VllmKVSlotAdapter(
+            self.client,
+            self._adapter_context(
+                intent_prefix=f"vllm-kv-restore-{saved.key}",
+                metadata={
+                    "prefix_key": saved.key,
+                    "vllm_operation": "restore",
+                },
+            ),
+            groups,
+        )
         self._adapters_by_prefix[saved.key] = adapter
         return adapter
 
@@ -870,8 +879,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         transfer_ms = (time.perf_counter() - transfer_start) * 1000.0
         total_ms = (time.perf_counter() - total_start) * 1000.0
         stats = _adapter_transfer_stats(adapter, refs, handles).as_dict()
-        auto_decision = _runtime_auto_decision(self.runtime)
-        daemon_reservation = _runtime_daemon_reservation(self.runtime)
+        receipt_trace = _receipt_trace_from_handles(handles)
         self.state.events.append(
             {
                 "event": "restore",
@@ -887,8 +895,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                 "layers": len(kv_caches),
                 "ranges": len(refs),
                 **stats,
-                **auto_decision,
-                **daemon_reservation,
+                **receipt_trace,
             }
         )
         _emit_event(
@@ -905,8 +912,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             layers=len(kv_caches),
             ranges=len(refs),
             **stats,
-            **auto_decision,
-            **daemon_reservation,
+            **receipt_trace,
         )
 
     def _start_layer_save_context(
@@ -915,10 +921,6 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         kv_caches: list[Any],
     ) -> _LayerSaveContext:
         total_start = time.perf_counter()
-        runtime_start = time.perf_counter()
-        if self.runtime is None:
-            self.runtime = _make_runtime_from_config(self._vllm_config)
-        runtime_init_ms = (time.perf_counter() - runtime_start) * 1000.0
         alloc_start = time.perf_counter()
         cpu_backings, reused_backing = self._backing_pool.acquire(
             request.block_count,
@@ -931,7 +933,6 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             kv_caches=list(kv_caches),
             reused_backing=reused_backing,
             total_start=total_start,
-            runtime_init_ms=runtime_init_ms,
             cpu_alloc_ms=cpu_alloc_ms,
         )
         self._layer_save_contexts[request.request_id] = context
@@ -960,7 +961,19 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         )
         context.group_ms += (time.perf_counter() - group_start) * 1000.0
         adapter_start = time.perf_counter()
-        adapter = VllmKVSlotAdapter(self.runtime, [group])
+        adapter = VllmKVSlotAdapter(
+            self.client,
+            self._adapter_context(
+                intent_prefix=f"vllm-kv-save-{request.prefix_key}-layer{layer_index}",
+                metadata={
+                    "prefix_key": request.prefix_key,
+                    "request_id": request.request_id,
+                    "vllm_operation": "save",
+                    "layer_index": layer_index,
+                },
+            ),
+            [group],
+        )
         context.adapter_ms += (time.perf_counter() - adapter_start) * 1000.0
         refs_start = time.perf_counter()
         refs = make_vllm_layer_range_refs_from_ids(
@@ -975,10 +988,18 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         handles = adapter.save_prefix(refs)
         transfer_ms = (time.perf_counter() - transfer_start) * 1000.0
         stats = _adapter_transfer_stats(adapter, refs, handles)
+        receipt_trace = _receipt_trace_from_handles(handles)
         context.transfer_ms += transfer_ms
         context.bytes += stats.bytes
         context.direct_chunks += stats.direct_chunks
         context.relay_chunks += stats.relay_chunks
+        context.direct_bytes += int(receipt_trace["direct_bytes"])
+        context.relay_bytes += int(receipt_trace["relay_bytes"])
+        context.receipt_ids.extend(_csv_values(receipt_trace["receipt_ids"]))
+        context.decision_ids.extend(_csv_values(receipt_trace["decision_ids"]))
+        context.topology_snapshot_ids.extend(_csv_values(receipt_trace["topology_snapshot_ids"]))
+        context.ticket_ids.extend(_csv_values(receipt_trace["ticket_ids"]))
+        context.fallback_reasons.extend(_csv_values(receipt_trace["fallback_reason"]))
         context.ranges += len(refs)
         context.saved_layers.add(layer_index)
         self.state.events.append(
@@ -992,6 +1013,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                 "ranges": len(refs),
                 "elapsed_ms": transfer_ms,
                 **stats.as_dict(),
+                **receipt_trace,
             }
         )
         _emit_event(
@@ -1004,6 +1026,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             ranges=len(refs),
             elapsed_ms=f"{transfer_ms:.3f}",
             **stats.as_dict(),
+            **receipt_trace,
         )
 
     def _finish_layer_save_context(self, context: _LayerSaveContext) -> None:
@@ -1017,7 +1040,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             session_id=self.session_id,
             source_request_id=request.request_id,
             elapsed_ms=context.transfer_ms,
-            runtime_init_ms=context.runtime_init_ms,
+            client_init_ms=context.client_init_ms,
             prepare_ms=(
                 context.cpu_alloc_ms
                 + context.group_ms
@@ -1033,6 +1056,13 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             bytes=context.bytes,
             direct_chunks=context.direct_chunks,
             relay_chunks=context.relay_chunks,
+            direct_bytes=context.direct_bytes,
+            relay_bytes=context.relay_bytes,
+            receipt_ids=_join_unique(context.receipt_ids),
+            decision_ids=_join_unique(context.decision_ids),
+            topology_snapshot_ids=_join_unique(context.topology_snapshot_ids),
+            ticket_ids=_join_unique(context.ticket_ids),
+            fallback_reason=_join_unique(context.fallback_reasons),
             save_layer_count=len(context.saved_layers),
             save_layer_ranges=context.ranges,
         )
@@ -1062,8 +1092,15 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             direct_chunks=context.direct_chunks,
             relay_chunks=context.relay_chunks,
         ).as_dict()
-        auto_decision = _runtime_auto_decision(self.runtime)
-        daemon_reservation = _runtime_daemon_reservation(self.runtime)
+        receipt_trace = {
+            "direct_bytes": context.direct_bytes,
+            "relay_bytes": context.relay_bytes,
+            "receipt_ids": _join_unique(context.receipt_ids),
+            "decision_ids": _join_unique(context.decision_ids),
+            "topology_snapshot_ids": _join_unique(context.topology_snapshot_ids),
+            "ticket_ids": _join_unique(context.ticket_ids),
+            "fallback_reason": _join_unique(context.fallback_reasons),
+        }
         self.state.events.append(
             {
                 "event": "save",
@@ -1073,7 +1110,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                 "block_count": len(request.block_ids),
                 "matched_tokens": request.matched_tokens,
                 "elapsed_ms": context.transfer_ms,
-                "runtime_init_ms": context.runtime_init_ms,
+                "client_init_ms": context.client_init_ms,
                 "prepare_ms": saved.prepare_ms if saved is not None else 0.0,
                 "cpu_alloc_ms": context.cpu_alloc_ms,
                 "reused_backing": context.reused_backing,
@@ -1086,8 +1123,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                 "layers": len(context.kv_caches),
                 "ranges": context.ranges,
                 **stats,
-                **auto_decision,
-                **daemon_reservation,
+                **receipt_trace,
             }
         )
         _emit_event(
@@ -1098,7 +1134,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             block_count=len(request.block_ids),
             matched_tokens=request.matched_tokens,
             elapsed_ms=f"{context.transfer_ms:.3f}",
-            runtime_init_ms=f"{context.runtime_init_ms:.3f}",
+            client_init_ms=f"{context.client_init_ms:.3f}",
             prepare_ms=f"{(saved.prepare_ms if saved is not None else 0.0):.3f}",
             cpu_alloc_ms=f"{context.cpu_alloc_ms:.3f}",
             reused_backing=context.reused_backing,
@@ -1111,16 +1147,12 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             layers=len(context.kv_caches),
             ranges=context.ranges,
             **stats,
-            **auto_decision,
-            **daemon_reservation,
+            **receipt_trace,
         )
 
     def _save_request(self, request: TurboBusRequestMetadata) -> None:
         total_start = time.perf_counter()
-        runtime_start = time.perf_counter()
-        if self.runtime is None:
-            self.runtime = _make_runtime_from_config(self._vllm_config)
-        runtime_init_ms = (time.perf_counter() - runtime_start) * 1000.0
+        client_init_ms = 0.0
         if not self.state.kv_caches:
             raise RuntimeError("vLLM did not register KV caches for TurboBus")
         from .vllm import VllmKVSlotAdapter
@@ -1138,7 +1170,18 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         groups = make_vllm_layer_groups_from_kv_caches(cpu_backings, kv_caches)
         group_ms = (time.perf_counter() - group_start) * 1000.0
         adapter_start = time.perf_counter()
-        adapter = VllmKVSlotAdapter(self.runtime, groups)
+        adapter = VllmKVSlotAdapter(
+            self.client,
+            self._adapter_context(
+                intent_prefix=f"vllm-kv-save-{request.prefix_key}",
+                metadata={
+                    "prefix_key": request.prefix_key,
+                    "request_id": request.request_id,
+                    "vllm_operation": "save",
+                },
+            ),
+            groups,
+        )
         adapter_ms = (time.perf_counter() - adapter_start) * 1000.0
         refs_start = time.perf_counter()
         refs = make_vllm_layer_range_refs_from_ids(
@@ -1153,6 +1196,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         handles = adapter.save_prefix(refs)
         transfer_ms = (time.perf_counter() - transfer_start) * 1000.0
         stats = _adapter_transfer_stats(adapter, refs, handles).as_dict()
+        receipt_trace = _receipt_trace_from_handles(handles)
         register_start = time.perf_counter()
         prefix = TurboBusSavedPrefix(
             key=request.prefix_key,
@@ -1162,7 +1206,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             session_id=self.session_id,
             source_request_id=request.request_id,
             elapsed_ms=transfer_ms,
-            runtime_init_ms=runtime_init_ms,
+            client_init_ms=client_init_ms,
             prepare_ms=prepare_ms,
             cpu_alloc_ms=cpu_alloc_ms,
             reused_backing=reused_backing,
@@ -1173,6 +1217,13 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             bytes=stats["bytes"],
             direct_chunks=stats["direct_chunks"],
             relay_chunks=stats["relay_chunks"],
+            direct_bytes=int(receipt_trace["direct_bytes"]),
+            relay_bytes=int(receipt_trace["relay_bytes"]),
+            receipt_ids=str(receipt_trace["receipt_ids"]),
+            decision_ids=str(receipt_trace["decision_ids"]),
+            topology_snapshot_ids=str(receipt_trace["topology_snapshot_ids"]),
+            ticket_ids=str(receipt_trace["ticket_ids"]),
+            fallback_reason=str(receipt_trace["fallback_reason"]),
         )
         evicted = self._store_prefix(prefix)
         _store_saved_prefix(prefix)
@@ -1196,8 +1247,6 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         if saved is not None:
             saved.register_ms = register_ms
             saved.total_ms = total_ms
-        auto_decision = _runtime_auto_decision(self.runtime)
-        daemon_reservation = _runtime_daemon_reservation(self.runtime)
         self.state.events.append(
             {
                 "event": "save",
@@ -1207,7 +1256,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                 "block_count": len(request.block_ids),
                 "matched_tokens": request.matched_tokens,
                 "elapsed_ms": transfer_ms,
-                "runtime_init_ms": runtime_init_ms,
+                "client_init_ms": client_init_ms,
                 "prepare_ms": prepare_ms,
                 "cpu_alloc_ms": cpu_alloc_ms,
                 "reused_backing": reused_backing,
@@ -1220,8 +1269,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                 "layers": len(kv_caches),
                 "ranges": len(refs),
                 **stats,
-                **auto_decision,
-                **daemon_reservation,
+                **receipt_trace,
             }
         )
         _emit_event(
@@ -1232,7 +1280,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             block_count=len(request.block_ids),
             matched_tokens=request.matched_tokens,
             elapsed_ms=f"{transfer_ms:.3f}",
-            runtime_init_ms=f"{runtime_init_ms:.3f}",
+            client_init_ms=f"{client_init_ms:.3f}",
             prepare_ms=f"{prepare_ms:.3f}",
             cpu_alloc_ms=f"{cpu_alloc_ms:.3f}",
             reused_backing=reused_backing,
@@ -1245,8 +1293,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             layers=len(kv_caches),
             ranges=len(refs),
             **stats,
-            **auto_decision,
-            **daemon_reservation,
+            **receipt_trace,
         )
 
     def _allocate_cpu_backings(self, block_count: int, kv_caches: list[Any]) -> list[Any]:
@@ -1276,6 +1323,27 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             )
         return evicted
 
+    def _adapter_context(
+        self,
+        *,
+        intent_prefix: str,
+        metadata: dict[str, Any],
+    ) -> AdapterTransferContext:
+        return AdapterTransferContext(
+            job_id=self.config.job_id,
+            session_id=self.config.session_id,
+            cpu_buffer_id=self.config.cpu_buffer_id,
+            gpu_buffer_id=self.config.gpu_buffer_id,
+            workload_kind=WorkloadKind.KV_CACHE,
+            metadata={
+                **metadata,
+                "connector": "vllm_kv",
+                "chunk_bytes": self.config.chunk_bytes,
+            },
+            intent_prefix=intent_prefix,
+            wait_timeout_seconds=self.config.wait_timeout_seconds,
+        )
+
 
 def _request_params(request) -> dict[str, Any]:
     params = getattr(request, "kv_transfer_params", None)
@@ -1304,18 +1372,69 @@ def _adapter_transfer_stats(adapter, refs, handles) -> TransferStats:
     )
 
 
-def _runtime_auto_decision(runtime) -> dict[str, Any]:
-    getter = getattr(runtime, "last_auto_decision_dict", None)
-    if not callable(getter):
-        return {}
-    return dict(getter() or {})
+def _receipt_trace_from_handles(handles) -> dict[str, Any]:
+    receipts: list[TransferReceipt] = []
+    seen = set()
+    for handle in handles:
+        receipt = getattr(handle, "receipt", None)
+        if not isinstance(receipt, TransferReceipt):
+            continue
+        if receipt.receipt_id in seen:
+            continue
+        seen.add(receipt.receipt_id)
+        receipts.append(receipt)
+    return _receipt_trace_from_receipts(receipts)
 
 
-def _runtime_daemon_reservation(runtime) -> dict[str, Any]:
-    getter = getattr(runtime, "last_daemon_reservation_dict", None)
-    if not callable(getter):
-        return {}
-    return dict(getter() or {})
+def _receipt_trace_from_receipts(receipts: list[TransferReceipt]) -> dict[str, Any]:
+    direct_bytes = 0
+    relay_bytes = 0
+    receipt_ids: list[str] = []
+    decision_ids: list[str] = []
+    topology_snapshot_ids: list[str] = []
+    ticket_ids: list[str] = []
+    fallback_reasons: list[str] = []
+    for receipt in receipts:
+        receipt_ids.append(receipt.receipt_id)
+        decision_ids.append(receipt.decision_id)
+        topology_snapshot_ids.append(receipt.topology_snapshot_id)
+        ticket_ids.append(receipt.ticket_id)
+        fallback_reason = receipt.metadata.get("fallback_reason")
+        if fallback_reason:
+            fallback_reasons.append(str(fallback_reason))
+        for path in receipt.path_stats:
+            path_bytes = int(path.get("bytes", 0) or 0)
+            if str(path.get("kind", "")).lower() == "relay":
+                relay_bytes += path_bytes
+            else:
+                direct_bytes += path_bytes
+    return {
+        "direct_bytes": direct_bytes,
+        "relay_bytes": relay_bytes,
+        "receipt_ids": _join_unique(receipt_ids),
+        "decision_ids": _join_unique(decision_ids),
+        "topology_snapshot_ids": _join_unique(topology_snapshot_ids),
+        "ticket_ids": _join_unique(ticket_ids),
+        "fallback_reason": _join_unique(fallback_reasons),
+    }
+
+
+def _csv_values(value: object) -> list[str]:
+    if value is None:
+        return []
+    return [item for item in str(value).split(",") if item]
+
+
+def _join_unique(values) -> str:
+    seen = set()
+    ordered = []
+    for value in values:
+        text = str(value)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        ordered.append(text)
+    return ",".join(ordered)
 
 
 def _layer_index(layer_name: str, kv_layer, kv_items: list[tuple[str, Any]]) -> int:
@@ -1445,6 +1564,13 @@ def _extra_config_float(vllm_config, key: str, default: float) -> float:
     return float(value)
 
 
+def _extra_config_optional_float(vllm_config, key: str, default) -> float | None:
+    value = _extra_config_value(vllm_config, key, default)
+    if value is None or value == "":
+        return None
+    return float(value)
+
+
 def _extra_config_bool(vllm_config, key: str, default: bool) -> bool:
     config = getattr(vllm_config, "kv_transfer_config", None)
     getter = getattr(config, "get_from_extra_config", None)
@@ -1468,29 +1594,12 @@ def _extra_config_value(vllm_config, key: str, default):
     return getter(key, default)
 
 
-def _parse_relay_gpus(value) -> tuple[int, ...]:
-    if value is None:
-        return tuple()
-    if isinstance(value, str):
-        return tuple(int(item) for item in value.split(",") if item.strip())
-    return tuple(int(item) for item in value)
-
-
 def _kv_transfer_engine_id(vllm_config) -> str:
     config = getattr(vllm_config, "kv_transfer_config", None)
     engine_id = getattr(config, "engine_id", None)
     if engine_id:
         return str(engine_id)
     return "default"
-
-
-def _make_runtime_from_config(vllm_config) -> Runtime:
-    config = TurboBusConnectorConfig.from_vllm_config(vllm_config)
-    return Runtime(
-        target_gpu=config.target_gpu,
-        relay_gpus=list(config.relay_gpus),
-        options=config.runtime_options(),
-    )
 
 
 def _max_lanes_per_layer(kv_caches: list[Any]) -> int:

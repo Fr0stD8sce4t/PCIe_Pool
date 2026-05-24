@@ -66,36 +66,29 @@ def gib_per_second(byte_count: str, elapsed_ms: str) -> str:
     return f"{bytes_value / (1024.0 ** 3) / (ms_value / 1000.0):.3f}"
 
 
-def speedup(numerator_ms: str, denominator_ms: str) -> str:
-    try:
-        numerator = float(numerator_ms)
-        denominator = float(denominator_ms)
-    except ValueError:
-        return "NA"
-    if numerator <= 0.0 or denominator <= 0.0:
-        return "NA"
-    return f"{numerator / denominator:.3f}"
-
-
-def run_case(args, mode: str, restore_blocks: int, matched_tokens: int, log_path: Path):
+def run_case(args, case_id: str, restore_blocks: int, matched_tokens: int, log_path: Path):
     script = Path(__file__).with_name("vllm_turbobus_kv_connector.py")
     repo_root = Path(__file__).resolve().parents[1]
-    min_pool_bytes = getattr(args, "min_pool_bytes", 12 * 1024 * 1024)
+    session_id = f"{args.session_id}-{case_id}-blocks{restore_blocks}"
     command = [
         sys.executable,
         str(script),
         "--model",
         args.model,
-        "--target-gpu",
-        str(args.target_gpu),
-        "--relay-gpus",
-        args.relay_gpus,
+        "--job-id",
+        args.job_id,
+        "--session-id",
+        session_id,
+        "--cpu-buffer-id",
+        args.cpu_buffer_id,
+        "--gpu-buffer-id",
+        args.gpu_buffer_id,
         "--prompt-repeat",
         str(args.prompt_repeat),
         "--second-prompt-suffix",
         args.second_prompt_suffix,
         "--prefix-key",
-        f"{args.prefix_key}-{mode}-{restore_blocks}",
+        f"{args.prefix_key}-{case_id}-{restore_blocks}",
         "--matched-tokens",
         str(matched_tokens),
         "--restore-blocks",
@@ -103,31 +96,17 @@ def run_case(args, mode: str, restore_blocks: int, matched_tokens: int, log_path
         "--restore-enabled",
         "--chunk-bytes",
         str(args.chunk_bytes),
-        "--profile-bytes",
-        str(args.profile_bytes),
-        "--min-pool-bytes",
-        str(min_pool_bytes),
-        "--mode",
-        mode,
+        "--daemon-socket-path",
+        args.daemon_socket_path,
         "--log-output",
         str(log_path),
     ]
-    if args.daemon_socket_path:
-        command.extend(["--daemon-socket-path", args.daemon_socket_path])
-    command.extend(
-        [
-            "--daemon-max-inflight-chunks",
-            str(args.daemon_max_inflight_chunks),
-            "--daemon-profile-max-age-seconds",
-            str(args.daemon_profile_max_age_seconds),
-        ]
-    )
+    if args.wait_timeout_seconds is not None:
+        command.extend(["--wait-timeout-seconds", str(args.wait_timeout_seconds)])
     if args.enforce_eager:
         command.append("--enforce-eager")
     if args.enable_multiproc_executor:
         command.append("--enable-multiproc-executor")
-    if args.no_map_physical_gpus:
-        command.append("--no-map-physical-gpus")
 
     completed = subprocess.run(
         command,
@@ -139,7 +118,7 @@ def run_case(args, mode: str, restore_blocks: int, matched_tokens: int, log_path
     log_text = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
     summary = parse_copy_summary(log_text)
     return {
-        "mode": mode,
+        "case_id": case_id,
         "restore_blocks": restore_blocks,
         "matched_tokens": matched_tokens,
         "returncode": completed.returncode,
@@ -152,11 +131,8 @@ def run_case(args, mode: str, restore_blocks: int, matched_tokens: int, log_path
 
 def build_sweep_summary_lines(args, results) -> list[str]:
     case_rows = build_case_rows(args, results)
-    lines = ["SWEEP_SUMMARY_BEGIN"]
-    lines.append(_config_line(args))
-    for row in case_rows:
-        lines.append(_case_line(row))
-    lines.extend(_speedup_lines(case_rows))
+    lines = ["SWEEP_SUMMARY_BEGIN", _config_line(args)]
+    lines.extend(_case_line(row) for row in case_rows)
     lines.append("SWEEP_SUMMARY_END")
     return lines
 
@@ -168,33 +144,34 @@ def build_case_rows(args, results) -> list[dict[str, object]]:
         config = summary.get("vllm_kv_connector_config", {})
         save = summary.get("vllm_kv_connector_save", {})
         save_event = _event_from_log(Path(result["log_path"]), "save")
-        restore = _restore_from_log(Path(result["log_path"]))
+        restore = _event_from_log(Path(result["log_path"]), "restore")
         start_load = _event_from_log(Path(result["log_path"]), "start_load_done")
         output = summary.get("vllm_kv_connector_result", {})
         row = {
-            "mode": result["mode"],
+            "case_id": result["case_id"],
             "restore_blocks": result["restore_blocks"],
             "matched_tokens": result["matched_tokens"],
             "returncode": result["returncode"],
+            "job_id": config.get("job_id", getattr(args, "job_id", "NA")),
+            "session_id": config.get("session_id", "NA"),
             "save_ms": save.get("elapsed_ms", "NA"),
-            "save_runtime_init_ms": save_event.get("runtime_init_ms", "NA"),
-            "save_prepare_ms": save_event.get("prepare_ms", "NA") if save_event else "NA",
-            "save_cpu_alloc_ms": save_event.get("cpu_alloc_ms", "NA") if save_event else "NA",
-            "save_adapter_ms": save_event.get("adapter_ms", "NA") if save_event else "NA",
-            "save_refs_ms": save_event.get("refs_ms", "NA") if save_event else "NA",
-            "save_transfer_ms": save_event.get("transfer_ms", save.get("elapsed_ms", "NA")) if save_event else save.get("elapsed_ms", "NA"),
-            "save_register_ms": save_event.get("register_ms", "NA") if save_event else "NA",
-            "save_total_ms": save_event.get("total_ms", "NA") if save_event else "NA",
-            "save_auto_resolved_mode": save_event.get("auto_resolved_mode", "NA") if save_event else "NA",
-            "save_auto_reason": save_event.get("auto_reason", "NA") if save_event else "NA",
-            "save_daemon_reservation_status": save_event.get("daemon_reservation_status", "NA") if save_event else "NA",
-            "save_daemon_reserved_relays": save_event.get("daemon_reserved_relays", "NA") if save_event else "NA",
-            "save_daemon_reserved_chunks_per_relay": save_event.get(
-                "daemon_reserved_chunks_per_relay",
-                "NA",
-            ) if save_event else "NA",
+            "save_prepare_ms": save_event.get("prepare_ms", "NA"),
+            "save_cpu_alloc_ms": save_event.get("cpu_alloc_ms", "NA"),
+            "save_adapter_ms": save_event.get("adapter_ms", "NA"),
+            "save_refs_ms": save_event.get("refs_ms", "NA"),
+            "save_transfer_ms": save_event.get("transfer_ms", save.get("elapsed_ms", "NA")),
+            "save_register_ms": save_event.get("register_ms", "NA"),
+            "save_total_ms": save_event.get("total_ms", "NA"),
             "save_layer_count": save.get("save_layer_count", "NA"),
             "save_layer_ranges": save.get("save_layer_ranges", "NA"),
+            "save_receipt_ids": save.get("receipt_ids", save_event.get("receipt_ids", "NA")),
+            "save_decision_ids": save.get("decision_ids", save_event.get("decision_ids", "NA")),
+            "save_topology_snapshot_ids": save.get(
+                "topology_snapshot_ids",
+                save_event.get("topology_snapshot_ids", "NA"),
+            ),
+            "save_ticket_ids": save.get("ticket_ids", save_event.get("ticket_ids", "NA")),
+            "save_fallback_reason": save.get("fallback_reason", save_event.get("fallback_reason", "NA")),
             "restore_ms": restore.get("elapsed_ms", "NA"),
             "restore_prepare_ms": restore.get("prepare_ms", "NA"),
             "restore_transfer_ms": restore.get("transfer_ms", restore.get("elapsed_ms", "NA")),
@@ -203,24 +180,17 @@ def build_case_rows(args, results) -> list[dict[str, object]]:
             "bytes": restore.get("bytes", save.get("bytes", "NA")),
             "direct_chunks": restore.get("direct_chunks", "NA"),
             "relay_chunks": restore.get("relay_chunks", "NA"),
-            "auto_resolved_mode": restore.get("auto_resolved_mode", "NA"),
-            "auto_reason": restore.get("auto_reason", "NA"),
-            "auto_request_bytes": restore.get("auto_request_bytes", "NA"),
-            "auto_request_chunks": restore.get("auto_request_chunks", "NA"),
-            "auto_direct_bw_gbps": restore.get("auto_direct_bw_gbps", "NA"),
-            "auto_relay_bw_gbps": restore.get("auto_relay_bw_gbps", "NA"),
-            "auto_eligible_relays": restore.get("auto_eligible_relays", "NA"),
-            "daemon_reservation_status": restore.get("daemon_reservation_status", "NA"),
-            "daemon_reserved_relays": restore.get("daemon_reserved_relays", "NA"),
-            "daemon_reserved_chunks_per_relay": restore.get(
-                "daemon_reserved_chunks_per_relay",
-                "NA",
-            ),
+            "direct_bytes": restore.get("direct_bytes", "NA"),
+            "relay_bytes": restore.get("relay_bytes", "NA"),
+            "receipt_ids": restore.get("receipt_ids", "NA"),
+            "decision_ids": restore.get("decision_ids", "NA"),
+            "topology_snapshot_ids": restore.get("topology_snapshot_ids", "NA"),
+            "ticket_ids": restore.get("ticket_ids", "NA"),
+            "fallback_reason": restore.get("fallback_reason", "NA"),
             "layers": restore.get("layers", "NA"),
             "ranges": restore.get("ranges", "NA"),
             "prompt_tokens": output.get("prompt_tokens", "NA"),
             "shared_prefix": output.get("shared_prefix", "NA"),
-            "child_mode": config.get("mode", result["mode"]),
             "log": result["log_path"],
         }
         row["restore_gib_s"] = gib_per_second(row["bytes"], row["restore_ms"])
@@ -238,7 +208,6 @@ def print_sweep_summary(
     case_rows = build_case_rows(args, results)
     lines = ["SWEEP_SUMMARY_BEGIN", _config_line(args)]
     lines.extend(_case_line(row) for row in case_rows)
-    lines.extend(_speedup_lines(case_rows))
     lines.append("SWEEP_SUMMARY_END")
     text = "\n".join(lines)
     print(text)
@@ -256,35 +225,34 @@ def print_sweep_summary(
 
 
 def _config_line(args) -> str:
-    min_pool_bytes = getattr(args, "min_pool_bytes", 12 * 1024 * 1024)
     return " ".join(
         [
             "vllm_kv_connector_sweep_config",
-            f"target={args.target_gpu}",
-            f"relays={parse_csv_ints(args.relay_gpus)}",
             f"cuda_visible_devices={os.environ.get('CUDA_VISIBLE_DEVICES', '')}",
             f"model={args.model}",
+            f"job_id={args.job_id}",
+            f"session_id={args.session_id}",
+            f"cpu_buffer_id={args.cpu_buffer_id}",
+            f"gpu_buffer_id={args.gpu_buffer_id}",
             f"prompt_repeat={args.prompt_repeat}",
-            f"modes={','.join(args.modes)}",
+            f"case_ids={','.join(args.case_ids)}",
             f"restore_blocks_list={','.join(str(item) for item in args.restore_blocks_list)}",
             f"chunk_bytes={args.chunk_bytes}",
-            f"profile_bytes={args.profile_bytes}",
-            f"min_pool_bytes={min_pool_bytes}",
-            f"daemon_socket_path={getattr(args, 'daemon_socket_path', '')}",
-            f"daemon_max_inflight_chunks={getattr(args, 'daemon_max_inflight_chunks', 8)}",
-            f"daemon_profile_max_age_seconds={getattr(args, 'daemon_profile_max_age_seconds', 3600.0)}",
+            f"daemon_socket_path={args.daemon_socket_path}",
+            f"wait_timeout_seconds={args.wait_timeout_seconds}",
         ]
     )
 
 
 def _case_line(row) -> str:
     keys = [
-        "mode",
+        "case_id",
         "restore_blocks",
         "matched_tokens",
         "returncode",
+        "job_id",
+        "session_id",
         "save_ms",
-        "save_runtime_init_ms",
         "save_prepare_ms",
         "save_cpu_alloc_ms",
         "save_adapter_ms",
@@ -292,13 +260,13 @@ def _case_line(row) -> str:
         "save_transfer_ms",
         "save_register_ms",
         "save_total_ms",
-        "save_auto_resolved_mode",
-        "save_auto_reason",
-        "save_daemon_reservation_status",
-        "save_daemon_reserved_relays",
-        "save_daemon_reserved_chunks_per_relay",
         "save_layer_count",
         "save_layer_ranges",
+        "save_receipt_ids",
+        "save_decision_ids",
+        "save_topology_snapshot_ids",
+        "save_ticket_ids",
+        "save_fallback_reason",
         "restore_ms",
         "restore_gib_s",
         "restore_prepare_ms",
@@ -308,21 +276,17 @@ def _case_line(row) -> str:
         "bytes",
         "direct_chunks",
         "relay_chunks",
-        "auto_resolved_mode",
-        "auto_reason",
-        "auto_request_bytes",
-        "auto_request_chunks",
-        "auto_direct_bw_gbps",
-        "auto_relay_bw_gbps",
-        "auto_eligible_relays",
-        "daemon_reservation_status",
-        "daemon_reserved_relays",
-        "daemon_reserved_chunks_per_relay",
+        "direct_bytes",
+        "relay_bytes",
+        "receipt_ids",
+        "decision_ids",
+        "topology_snapshot_ids",
+        "ticket_ids",
+        "fallback_reason",
         "layers",
         "ranges",
         "prompt_tokens",
         "shared_prefix",
-        "child_mode",
         "log",
     ]
     return " ".join(["vllm_kv_connector_sweep_case", *(f"{key}={row[key]}" for key in keys)])
@@ -339,35 +303,6 @@ def _write_case_rows_csv(path: Path, case_rows) -> None:
         writer.writerows(case_rows)
 
 
-def _speedup_lines(case_rows) -> list[str]:
-    lines = []
-    by_blocks = {}
-    for row in case_rows:
-        by_blocks.setdefault(row["restore_blocks"], {})[row["mode"]] = row
-    for restore_blocks in sorted(by_blocks):
-        rows = by_blocks[restore_blocks]
-        pool = rows.get("pool")
-        if pool is None:
-            continue
-        direct = rows.get("direct")
-        relay = rows.get("relay")
-        lines.append(
-            " ".join(
-                [
-                    "vllm_kv_connector_sweep_speedup",
-                    f"restore_blocks={restore_blocks}",
-                    f"direct_over_pool_restore={speedup(direct['restore_ms'], pool['restore_ms']) if direct else 'NA'}",
-                    f"relay_over_pool_restore={speedup(relay['restore_ms'], pool['restore_ms']) if relay else 'NA'}",
-                ]
-            )
-        )
-    return lines
-
-
-def _restore_from_log(log_path: Path) -> dict[str, str]:
-    return _event_from_log(log_path, "restore")
-
-
 def _event_from_log(log_path: Path, event: str) -> dict[str, str]:
     if not log_path.exists():
         return {}
@@ -382,32 +317,30 @@ def _event_from_log(log_path: Path, event: str) -> dict[str, str]:
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Sweep real vLLM KV connector restores across TurboBus modes"
+        description="Run daemon-scheduled vLLM KV connector cases through TurboBus"
     )
     parser.add_argument("--model", required=True)
-    parser.add_argument("--target-gpu", type=int, required=True)
-    parser.add_argument("--relay-gpus", default="")
+    parser.add_argument("--job-id", default="vllm-kv-sweep-job")
+    parser.add_argument("--session-id", default="vllm-kv-sweep-session")
+    parser.add_argument("--cpu-buffer-id", default="vllm-kv-cpu-buffer")
+    parser.add_argument("--gpu-buffer-id", default="vllm-kv-gpu-buffer")
     parser.add_argument("--prompt-repeat", type=int, default=64)
     parser.add_argument("--second-prompt-suffix", default=" Italy")
     parser.add_argument("--prefix-key", default="qwen3-prefix")
     parser.add_argument("--restore-blocks-list", default="8")
     parser.add_argument("--tokens-per-block", type=int, default=16)
-    parser.add_argument("--modes", default="auto,direct,relay,pool")
+    parser.add_argument("--case-ids", default="daemon")
     parser.add_argument("--chunk-bytes", type=int, default=4 * 1024 * 1024)
-    parser.add_argument("--profile-bytes", type=int, default=16 * 1024 * 1024)
-    parser.add_argument("--min-pool-bytes", type=int, default=12 * 1024 * 1024)
-    parser.add_argument("--daemon-socket-path", default="")
-    parser.add_argument("--daemon-max-inflight-chunks", type=int, default=8)
-    parser.add_argument("--daemon-profile-max-age-seconds", type=float, default=3600.0)
+    parser.add_argument("--daemon-socket-path", required=True)
+    parser.add_argument("--wait-timeout-seconds", type=float, default=None)
     parser.add_argument("--enforce-eager", action="store_true")
     parser.add_argument("--enable-multiproc-executor", action="store_true")
-    parser.add_argument("--no-map-physical-gpus", action="store_true")
     parser.add_argument("--log-dir", default=None)
     parser.add_argument("--summary-output", default=None)
     parser.add_argument("--cases-json-output", default=None)
     parser.add_argument("--cases-csv-output", default=None)
     args = parser.parse_args()
-    args.modes = parse_csv_strings(args.modes)
+    args.case_ids = parse_csv_strings(args.case_ids)
     args.restore_blocks_list = parse_csv_ints(args.restore_blocks_list)
     return args
 
@@ -438,17 +371,17 @@ def main() -> None:
     failed = False
     for restore_blocks in args.restore_blocks_list:
         matched_tokens = restore_blocks * args.tokens_per_block
-        for mode in args.modes:
-            log_path = log_dir / f"{mode}_blocks{restore_blocks}.log"
+        for case_id in args.case_ids:
+            log_path = log_dir / f"{case_id}_blocks{restore_blocks}.log"
             print(
                 "vllm_kv_connector_sweep run",
-                f"mode={mode}",
+                f"case_id={case_id}",
                 f"restore_blocks={restore_blocks}",
                 f"matched_tokens={matched_tokens}",
                 f"log={log_path}",
                 flush=True,
             )
-            result = run_case(args, mode, restore_blocks, matched_tokens, log_path)
+            result = run_case(args, case_id, restore_blocks, matched_tokens, log_path)
             results.append(result)
             if result["returncode"] != 0:
                 failed = True
