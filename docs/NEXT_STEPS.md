@@ -69,7 +69,14 @@ model-weight `TransferIntent` objects through the public client API, treats
 benchmark policy as metadata instead of physical path selection, and reports
 daemon receipt ids, path split, bytes, timing, and fallback reason.
 
-Current substage: Cut 7 Substage 7.3, training-offload benchmark rewrite.
+Cut 7 Substage 7.3 is complete. The training-offload benchmark now submits H2D
+prefetch and D2H offload `TransferIntent` objects through the public client
+API, treats benchmark policy as metadata instead of physical path selection,
+and reports separate receipt ids, decision ids, topology snapshot ids,
+execution ticket ids, bytes, timing, path split, and fallback reason.
+
+Current substage: Cut 7 Substage 7.4, examples and paper-validation command
+rewrite.
 
 ## Phase 0 Code Cuts
 
@@ -206,7 +213,7 @@ Status: complete.
 
 Substage 7.3: training-offload benchmark rewrite.
 
-Status: current.
+Status: complete.
 
 - Submit H2D prefetch and D2H offload intent through the public client API.
 - Report separate prefetch/offload receipt ids, decision ids, ticket ids, bytes,
@@ -214,7 +221,7 @@ Status: current.
 
 Substage 7.4: examples and paper-validation command rewrite.
 
-Status: pending.
+Status: current.
 
 - Update examples to demonstrate daemon-first submission.
 - Update paper-validation command construction and output validation so it no

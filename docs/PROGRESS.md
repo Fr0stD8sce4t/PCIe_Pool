@@ -67,6 +67,13 @@ The active target architecture is:
   benchmark policy as metadata, and reads actual path split and ids from daemon
   receipts. Focused validation covered the model-loading benchmark contract and
   JSON-safe receipt output.
+- Phase 0 Cut 7 Substage 7.3 is complete. `benchmarks/training_offload.py` no
+  longer builds torch tensors, constructs a `Runtime`, or accepts
+  application-side target GPU, relay GPU, or physical transfer mode controls.
+  It now submits paired H2D prefetch and D2H offload `TransferIntent` objects
+  through `TurboBusClient`, stores benchmark policy as metadata, and reads
+  separate receipt ids, decision ids, topology snapshot ids, execution ticket
+  ids, bytes, timing, path split, and fallback reason from daemon receipts.
 
 ## Active Phase
 
@@ -126,9 +133,12 @@ Current item: Cut 7, Benchmark and example rewrite.
    - Substage 7.2 complete: model-loading benchmark submission now goes through
      the public client API and consumes daemon receipts. It no longer exposes
      target GPU, relay GPU, or physical transfer mode CLI controls.
-   - Current substage: rewrite training-offload benchmark to submit H2D
-     prefetch and D2H offload intent through the public client API and consume
-     daemon receipts.
+   - Substage 7.3 complete: training-offload benchmark submission now goes
+     through the public client API for paired H2D prefetch and D2H offload
+     intent and consumes daemon receipts for both directions.
+   - Current substage: rewrite examples and paper-validation command/output
+     handling so they no longer expect applications to choose physical transfer
+     paths.
    - Remaining substages: examples and paper-validation command/output rewrite.
 
 7. Adapter thinning.
@@ -151,17 +161,16 @@ Phase 0 is done when:
 
 ## Latest Validation
 
-Phase 0 Cut 7 Substage 7.2 validation:
+Phase 0 Cut 7 Substage 7.3 validation:
 
-- `python -m unittest test.python.e2e.test_model_loading_benchmark test.python.e2e.test_benchmark_daemon_support test.python.unit.test_public_client_api`
-- `python -m compileall -q benchmarks\model_loading.py benchmarks\daemon_support.py test\python\e2e\test_model_loading_benchmark.py`
+- `python -m unittest test.python.e2e.test_training_offload_benchmark test.python.e2e.test_benchmark_daemon_support test.python.unit.test_public_client_api`
+- `python -m compileall -q benchmarks\training_offload.py benchmarks\daemon_support.py test\python\e2e\test_training_offload_benchmark.py`
 - `git diff --check`
 
 Remaining Phase 0 risk:
 
-- `benchmarks/training_offload.py`, examples, paper-validation command
-  construction, and adapters still need the same daemon-first rewrite before
-  Phase 0 can be marked complete.
+- examples, paper-validation command construction, and adapters still need the
+  same daemon-first rewrite before Phase 0 can be marked complete.
 
 ## Upcoming Phases
 
