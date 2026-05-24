@@ -299,6 +299,13 @@ class TurboBusDaemonClient:
             )
         )
 
+    def invalidate_topology(self) -> DaemonResponse:
+        return self.send(
+            DaemonRequest(
+                request_type=RequestType.INVALIDATE_TOPOLOGY,
+            )
+        )
+
     def discover_relays(
         self,
         target_gpu: int | None = None,

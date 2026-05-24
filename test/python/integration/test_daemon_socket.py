@@ -111,6 +111,19 @@ class DaemonSocketTest(unittest.TestCase):
             },
         )
 
+    def test_client_invalidate_topology_uses_invalidate_request(self) -> None:
+        client = RecordingDaemonClient()
+
+        response = client.invalidate_topology()
+
+        self.assertTrue(response.ok)
+        self.assertEqual(len(client.requests), 1)
+        self.assertEqual(
+            client.requests[0].request_type,
+            RequestType.INVALIDATE_TOPOLOGY,
+        )
+        self.assertEqual(client.requests[0].payload, {})
+
     def test_client_reap_expired_leases_uses_reap_request(self) -> None:
         client = RecordingDaemonClient()
 
@@ -377,6 +390,53 @@ class DaemonSocketTest(unittest.TestCase):
                 inventory.payload["inventory"]["gpus"][0]["device_id"],
                 1,
             )
+
+    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
+    def test_client_invalidate_topology_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            socket_path = os.path.join(tmpdir, "turbobusd.sock")
+            provider = MutableTopologyProvider(
+                (
+                    socket_inventory(snapshot_id="topology-socket-v1", version=1),
+                    socket_inventory(snapshot_id="topology-socket-v2", version=2),
+                )
+            )
+            daemon = TurboBusDaemon(
+                relay_gpus=[1],
+                topology_provider=provider,
+            )
+            thread = threading.Thread(
+                target=daemon.serve_forever,
+                args=(socket_path,),
+                daemon=True,
+            )
+            thread.start()
+
+            for _ in range(100):
+                if os.path.exists(socket_path):
+                    break
+                time.sleep(0.01)
+            self.assertTrue(os.path.exists(socket_path))
+
+            client = TurboBusDaemonClient(socket_path)
+            first = client.get_inventory()
+            refreshed = client.invalidate_topology()
+            second = client.discover_relays(target_gpu=0, relay_gpus=[1])
+
+            self.assertTrue(first.ok)
+            self.assertEqual(
+                first.payload["inventory"]["snapshot_id"],
+                "topology-socket-v1",
+            )
+            self.assertTrue(refreshed.ok)
+            self.assertEqual(refreshed.payload["topology_snapshot_id"], "topology-socket-v2")
+            self.assertEqual(refreshed.payload["topology_version"], 2)
+            self.assertTrue(second.ok)
+            self.assertEqual(
+                second.payload["relay_discovery"]["topology_snapshot_id"],
+                "topology-socket-v2",
+            )
+            self.assertEqual(provider.invalidate_count, 1)
 
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
     def test_client_reap_expired_leases_round_trip_clears_relay_discovery_state(self) -> None:
@@ -1004,6 +1064,33 @@ class DaemonSocketTest(unittest.TestCase):
             self.assertEqual(completed.state, TransferStatusState.COMPLETE)
             self.assertEqual(completed.bytes_completed, 64)
             self.assertEqual(completed.decision_id, receipt.decision_id)
+
+
+class MutableTopologyProvider:
+    def __init__(self, inventories) -> None:
+        self._inventories = tuple(inventories)
+        self._index = 0
+        self.invalidate_count = 0
+
+    def snapshot(self) -> DaemonResourceInventory:
+        return self._inventories[self._index]
+
+    def invalidate(self) -> None:
+        self.invalidate_count += 1
+        self._index = min(self._index + 1, len(self._inventories) - 1)
+
+
+def socket_inventory(*, snapshot_id: str, version: int) -> DaemonResourceInventory:
+    return DaemonResourceInventory(
+        gpus=(
+            GpuInventoryRecord(device_id=0, role="target"),
+            GpuInventoryRecord(device_id=1, role="relay"),
+        ),
+        source="cuda_nvml",
+        discovered_at=float(version),
+        snapshot_id=snapshot_id,
+        version=version,
+    )
 
 
 if __name__ == "__main__":

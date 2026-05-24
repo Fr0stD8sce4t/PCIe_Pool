@@ -338,6 +338,79 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual([gpu["device_id"] for gpu in payload["gpus"]], [1, 2])
         self.assertEqual([gpu["role"] for gpu in payload["gpus"]], ["relay", "relay"])
 
+    def test_invalidate_topology_refreshes_relay_discovery(self) -> None:
+        provider = MutableTopologyProvider(
+            (
+                refresh_inventory(
+                    snapshot_id="topology-test-v1",
+                    version=1,
+                    fabric_enabled=False,
+                ),
+                refresh_inventory(
+                    snapshot_id="topology-test-v2",
+                    version=2,
+                    fabric_enabled=True,
+                ),
+            )
+        )
+        daemon = _daemon(
+            relay_gpus=[1],
+            topology_provider=provider,
+        )
+
+        first = daemon.discover_relays(target_gpu=0, requested_relays=[1])
+        refreshed = daemon.handle_request(
+            DaemonRequest(request_type=RequestType.INVALIDATE_TOPOLOGY)
+        )
+        second = daemon.discover_relays(target_gpu=0, requested_relays=[1])
+
+        self.assertTrue(first.ok)
+        self.assertEqual(
+            first.payload["relay_discovery"]["topology_snapshot_id"],
+            "topology-test-v1",
+        )
+        self.assertFalse(
+            first.payload["relay_discovery"]["relays"][0]["eligibility"]["eligible"]
+        )
+        self.assertTrue(refreshed.ok)
+        self.assertEqual(refreshed.payload["topology_snapshot_id"], "topology-test-v2")
+        self.assertEqual(refreshed.payload["topology_version"], 2)
+        self.assertTrue(second.ok)
+        self.assertEqual(
+            second.payload["relay_discovery"]["topology_snapshot_id"],
+            "topology-test-v2",
+        )
+        self.assertEqual(second.payload["relay_discovery"]["topology_version"], 2)
+        self.assertEqual(
+            second.payload["relay_discovery"]["relay_eligibility"]["eligible_relays"],
+            [{"relay_gpu": 1, "reason": "eligible"}],
+        )
+        capabilities = second.payload["relay_discovery"]["relays"][0][
+            "inventory"
+        ]["path_capabilities"]
+        self.assertEqual(capabilities["enabled_fabric_link_count"], 1)
+        self.assertTrue(capabilities["p2p_enabled"])
+        self.assertEqual(provider.invalidate_count, 1)
+
+    def test_invalidate_topology_reports_provider_without_refresh_support(self) -> None:
+        daemon = _daemon(
+            relay_gpus=[1],
+            topology_provider=NoInvalidateTopologyProvider(
+                refresh_inventory(
+                    snapshot_id="topology-test-v1",
+                    version=1,
+                    fabric_enabled=True,
+                )
+            ),
+        )
+
+        refreshed = daemon.handle_request(
+            DaemonRequest(request_type=RequestType.INVALIDATE_TOPOLOGY)
+        )
+
+        self.assertFalse(refreshed.ok)
+        self.assertIn("does not support invalidation", refreshed.error)
+
     def test_discover_relays_reports_cross_job_lease_bookkeeping(self) -> None:
         daemon = _daemon(
             relay_gpus=[1],
@@ -2526,6 +2599,64 @@ class DaemonStateTest(unittest.TestCase):
                 ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 64},),
                 policy_hints={"relay_gpus": [1]},
             )
+
+
+class MutableTopologyProvider:
+    def __init__(self, inventories) -> None:
+        self._inventories = tuple(inventories)
+        self._index = 0
+        self.invalidate_count = 0
+
+    def snapshot(self) -> DaemonResourceInventory:
+        return self._inventories[self._index]
+
+    def invalidate(self) -> None:
+        self.invalidate_count += 1
+        self._index = min(self._index + 1, len(self._inventories) - 1)
+
+
+class NoInvalidateTopologyProvider:
+    def __init__(self, inventory: DaemonResourceInventory) -> None:
+        self._inventory = inventory
+
+    def snapshot(self) -> DaemonResourceInventory:
+        return self._inventory
+
+
+def refresh_inventory(
+    *,
+    snapshot_id: str,
+    version: int,
+    fabric_enabled: bool,
+) -> DaemonResourceInventory:
+    return DaemonResourceInventory(
+        gpus=(
+            GpuInventoryRecord(device_id=0, role="target"),
+            GpuInventoryRecord(device_id=1, role="relay"),
+        ),
+        pcie_paths=(
+            PciePathRecord(
+                device_id=1,
+                root_complex="rc0",
+                link_generation=5,
+                link_width=16,
+                bandwidth_gbps=63.0,
+            ),
+        ),
+        fabric_links=(
+            FabricLinkRecord(
+                src_device_id=1,
+                dst_device_id=0,
+                fabric="nvlink",
+                bandwidth_gbps=100.0,
+                enabled=fabric_enabled,
+            ),
+        ),
+        source="cuda_nvml",
+        discovered_at=float(version),
+        snapshot_id=snapshot_id,
+        version=version,
+    )
 
 
 if __name__ == "__main__":

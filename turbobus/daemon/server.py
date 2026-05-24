@@ -102,6 +102,35 @@ class TurboBusDaemon:
             },
         )
 
+    def invalidate_topology(self) -> DaemonResponse:
+        if self._topology_provider is None:
+            return _topology_unavailable_response()
+        invalidate = getattr(self._topology_provider, "invalidate", None)
+        if not callable(invalidate):
+            return DaemonResponse(
+                ok=False,
+                error="topology provider does not support invalidation",
+            )
+        try:
+            invalidate()
+        except NotImplementedError:
+            return DaemonResponse(
+                ok=False,
+                error="topology provider does not support invalidation",
+            )
+        inventory = self._topology_provider.snapshot()
+        return DaemonResponse(
+            ok=True,
+            payload={
+                "topology_snapshot_id": inventory.topology_snapshot_id(),
+                "topology_version": inventory.version,
+                "inventory_source": inventory.source,
+                "inventory_discovered_at": inventory.discovered_at,
+                "inventory": inventory.as_dict(),
+                "topology_snapshot": asdict(inventory.to_topology_snapshot()),
+            },
+        )
+
     def discover_relays(
         self,
         target_gpu: int | None = None,
@@ -1389,6 +1418,8 @@ class TurboBusDaemon:
                 target_gpu=int(payload["target_gpu"]),
                 relay_gpus=payload.get("relay_gpus", []),
             )
+        if request.request_type == RequestType.INVALIDATE_TOPOLOGY:
+            return self.invalidate_topology()
         if request.request_type == RequestType.GET_PROFILE:
             payload = request.payload
             return self.get_profile(

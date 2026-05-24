@@ -4,9 +4,10 @@
 
 The active project plan has been reset to paper-parity execution.
 
-Phase 0 realignment is complete. The next work is Phase 1, automatic topology
-discovery, which moves production startup away from manual or fixture topology
-and toward daemon-owned machine discovery.
+Phase 0 realignment and Phase 1 automatic topology discovery are complete. The
+next work is Phase 2, privileged daemon control plane, which turns the daemon
+into the authority for peer identity, job/session ownership, buffer access,
+leases, cleanup, and audit records.
 
 The active target architecture is:
 
@@ -127,12 +128,18 @@ The active target architecture is:
   CUDA P2P topology-matrix tokens. Relay discovery now reports
   `path_capabilities` for each candidate relay beside eligibility and filtered
   reasons.
+- Phase 1 Cut 3 is complete. The daemon now has an explicit topology
+  invalidation control-plane request and client method. Invalidation calls the
+  provider refresh path, returns the refreshed topology snapshot id/version,
+  and subsequent `GET_INVENTORY` and `DISCOVER_RELAYS` responses use the new
+  snapshot. Integration tests cover refresh changing relay discovery from a
+  filtered candidate to an eligible relay with path capabilities.
 
 ## Active Phase
 
-Phase 1: Automatic Topology Discovery.
+Phase 2: Privileged Daemon Control Plane.
 
-Phase 1 covers:
+Phase 1 is complete:
 
 - daemon-owned topology provider boundaries;
 - production GPU identity and PCI bus discovery;
@@ -141,9 +148,17 @@ Phase 1 covers:
 - versioned `TopologySnapshot` creation and invalidation;
 - startup failure when production topology cannot satisfy policy.
 
+Phase 2 covers:
+
+- socket peer credential checks;
+- user, process, container, job, and session ownership;
+- buffer registration with ownership checks;
+- transfer state, lease, reservation, and staging lifecycle cleanup;
+- audit records for relay use and failures.
+
 ## Next Work Items
 
-Current item: Phase 1 Cut 3, topology refresh and relay discovery completion.
+Current item: Phase 2 Cut 1, peer identity and socket credential foundation.
 
 1. Shared schema layer.
    - Status: complete.
@@ -218,16 +233,22 @@ Current item: Phase 1 Cut 3, topology refresh and relay discovery completion.
      data-plane tests where daemon decisions and tickets are authoritative.
 
 9. Automatic topology discovery.
-   - Status: current.
+   - Status: complete.
    - Cut 1 complete: daemon-owned topology provider boundary, CUDA/NVML
      provider, versioned topology snapshot ids, production startup provider
      selection, fixture rejection, and startup relay policy validation.
    - Cut 2 complete: normalize GPU UUID, PCI bus id, NUMA, memory, PCIe link,
      and fabric capability fields from production discovery; expose per-relay
      path capabilities in daemon discovery output.
-   - Cut 3 current: add daemon topology refresh/invalidation behavior and
+   - Cut 3 complete: add daemon topology refresh/invalidation behavior and
      complete relay discovery reporting so Phase 1 can be validated on a real
      multi-GPU server.
+
+10. Privileged daemon control plane.
+   - Status: current.
+   - Cut 1 current: add peer identity and socket credential foundation.
+   - Later Phase 2 work: enforce job/session/buffer ownership, clean stale
+     resources after disconnects and worker failures, and emit audit records.
 
 ## Phase 0 Acceptance Criteria
 
@@ -245,20 +266,19 @@ Phase 0 is complete:
 
 ## Latest Validation
 
-Phase 1 Cut 2 validation:
+Phase 1 Cut 3 validation:
 
 - `python -m unittest test.python.unit.test_topology_provider test.python.unit.test_schema test.python.integration.test_daemon_state test.python.integration.test_daemon_socket`
-- `python -m compileall -q turbobus\topology turbobus\daemon test\python\unit\test_topology_provider.py test\python\unit\test_schema.py test\python\integration\test_daemon_state.py test\python\integration\test_daemon_socket.py`
+- `python -m compileall -q turbobus\topology turbobus\daemon turbobus\schema.py test\python\fixtures\topology.py test\python\unit\test_topology_provider.py test\python\unit\test_schema.py test\python\integration\test_daemon_state.py test\python\integration\test_daemon_socket.py`
 - `git diff --check`
 
-Remaining Phase 1 risk:
+Remaining risk:
 
-- topology refresh and invalidation are not yet exposed through the daemon
-  control path, so Phase 1 still needs Cut 3 before production discovery can be
-  audited across topology changes.
-- Phase 1 is not complete until daemon discovery can report usable relay
-  candidates, filtered reasons, path capabilities, and refresh behavior from
-  the local production machine.
+- Phase 1 implementation is complete, but production topology behavior still
+  needs to be exercised on a real multi-GPU CUDA server with `nvidia-smi topo
+  -m` available.
+- Phase 2 has not yet added socket peer credential enforcement, so ownership
+  checks still depend on request-provided identity until the next cut.
 
 ## Upcoming Phases
 

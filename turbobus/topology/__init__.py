@@ -302,6 +302,9 @@ class TopologyProvider:
     def snapshot(self) -> DaemonResourceInventory:
         raise NotImplementedError
 
+    def invalidate(self) -> None:
+        raise NotImplementedError
+
 
 def _has_enabled_fabric_link(
     inventory: DaemonResourceInventory,

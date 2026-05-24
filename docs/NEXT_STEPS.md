@@ -12,27 +12,31 @@ new architecture rather than preserve application-side route selection.
 
 ## Immediate Functional Target
 
-Begin Phase 1: Automatic Topology Discovery.
+Begin Phase 2: Privileged Daemon Control Plane.
 
 Phase 0 is complete. The public examples and benchmarks now use daemon-first
 client APIs, and the old Runtime-shaped benchmark/example entry points have
 been removed instead of preserved as compatibility paths.
 
-The next target is daemon-owned topology discovery:
+Phase 1 is complete. The daemon now owns production topology discovery,
+normalizes GPU, PCIe, and fabric capabilities, exposes versioned topology
+snapshots, supports explicit topology invalidation, reports relay eligibility
+with path capabilities, and fails production startup clearly when discovery
+cannot satisfy policy.
 
-1. Discover GPU identity, UUID, PCI bus id, NUMA node, memory size, and
-   visibility from a daemon-owned provider.
-2. Discover PCIe hierarchy, link generation, link width, negotiated speed, and
-   estimated bandwidth where available.
-3. Discover CUDA P2P reachability and NVLink or NVSwitch information where
-   available.
-4. Produce versioned `TopologySnapshot` objects for scheduler input.
-5. Fail production startup clearly when topology discovery cannot satisfy the
-   configured policy.
+The next target is daemon-owned resource authority:
+
+1. Bind clients to user, process, container, job, and session identity.
+2. Check peer credentials on the daemon socket where the platform supports it.
+3. Register buffers with ownership checks and reject cross-job access.
+4. Manage transfer, lease, reservation, and buffer lifecycle on failures,
+   disconnects, timeouts, and worker mismatch.
+5. Emit audit records for relay use, bytes moved, duration, owner, and failure
+   reason.
 
 ## Current
 
-Phase 1: Automatic Topology Discovery.
+Phase 2: Privileged Daemon Control Plane.
 
 Cut 1 is complete. The contract inventory is recorded in
 `docs/PHASE0_CONTRACT_INVENTORY.md`.
@@ -124,9 +128,15 @@ type/capability/link count. `GET_INVENTORY` and relay discovery now expose the
 normalized fields, and relay discovery includes a `path_capabilities` summary
 for each candidate relay.
 
-Current phase: Phase 1, automatic topology discovery.
+Phase 1 Cut 3 is complete. The daemon now exposes an explicit topology
+invalidation request through the control plane and client API. Refreshing
+topology forces the provider to produce a new snapshot, and subsequent
+inventory and relay-discovery responses carry the new snapshot id/version,
+eligibility, filtered reasons, and per-relay path capabilities.
 
-Current item: Phase 1 Cut 3, topology refresh and relay discovery completion.
+Current phase: Phase 2, privileged daemon control plane.
+
+Current item: Phase 2 Cut 1, peer identity and socket credential foundation.
 
 ## Phase 0 Code Cuts
 
@@ -384,7 +394,7 @@ Phase 0 is complete.
 
 ## Phase 1 Current Work
 
-Current item: Phase 1 Cut 3, topology refresh and relay discovery completion.
+Phase 1 is complete.
 
 Cut 1: topology provider boundary and production startup contract.
 
@@ -428,7 +438,7 @@ Expected output:
 
 Cut 3: topology refresh and relay discovery completion.
 
-Status: current.
+Status: complete.
 
 - Add an explicit daemon-owned topology refresh or invalidation path for
   providers that cache discovery results.
@@ -449,6 +459,46 @@ Expected output:
 - relay discovery can be audited from snapshot id to candidate path
   capabilities;
 - Phase 1 exit criteria are ready to validate on a real multi-GPU server.
+
+## Phase 1 Done Criteria
+
+Phase 1 is complete.
+
+- daemon-owned CUDA/NVML topology discovery is the production provider path;
+- topology inventories include GPU identity, PCI bus id, NUMA, memory,
+  visibility, PCIe link capability, and fabric capability fields;
+- `GET_INVENTORY` returns versioned `TopologySnapshot` data;
+- `DISCOVER_RELAYS` reports eligible relays, filtered relays, filtering
+  reasons, and per-relay path capabilities;
+- explicit topology invalidation refreshes provider state and changes
+  snapshot id/version when new topology is discovered;
+- production startup rejects synthetic fixtures and fails clearly when relay
+  policy cannot be satisfied.
+
+## Phase 2 Current Work
+
+Current item: Phase 2 Cut 1, peer identity and socket credential foundation.
+
+Cut 1: peer identity and socket credential foundation.
+
+Status: current.
+
+- Add a daemon-side peer identity record for socket-connected clients.
+- Capture platform socket credentials where available, keeping unsupported
+  platforms explicit instead of pretending credentials were checked.
+- Bind peer identity to job and session registration paths without allowing
+  clients to spoof another job owner.
+- Preserve existing daemon-first TransferIntent and ExecutionTicket contracts.
+- Add focused tests for accepted same-owner registration, rejected mismatched
+  owner registration, and unsupported credential behavior.
+
+Expected output:
+
+- daemon request handling can attach an authenticated or explicitly
+  unauthenticated peer identity to control-plane actions;
+- job/session registration has a clear ownership boundary for Phase 2 buffer
+  checks;
+- no application or adapter gains physical path selection.
 
 ## After Phase 0
 

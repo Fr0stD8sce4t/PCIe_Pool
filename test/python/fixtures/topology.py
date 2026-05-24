@@ -34,6 +34,9 @@ class StaticTopologyProvider(TopologyProvider):
     def snapshot(self) -> DaemonResourceInventory:
         return self._inventory
 
+    def invalidate(self) -> None:
+        return None
+
 
 __all__ = [
     "DaemonResourceInventory",
