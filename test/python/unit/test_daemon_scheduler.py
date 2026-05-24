@@ -9,6 +9,7 @@ from turbobus.schema import (
     SchedulingDecisionState,
     Session,
     TransferMode,
+    WorkloadKind,
 )
 
 
@@ -125,6 +126,89 @@ class DaemonSchedulerTest(unittest.TestCase):
                 for item in decision.plan["assignments"]
             },
             {"direct"},
+        )
+
+    def test_busy_relay_from_runtime_state_returns_direct_fallback(self) -> None:
+        scheduler = self.make_scheduler()
+        session = self.make_session()
+        quotas = {1: RelayQuota(relay_gpu=1, max_inflight_chunks=8)}
+
+        decision = scheduler.plan_transfer(
+            session=session,
+            profile_entry=profile_entry(),
+            relay_quotas=quotas,
+            total_bytes=64,
+            chunk_bytes=16,
+            mode=TransferMode.POOL,
+            direction="h2d",
+            runtime_state={
+                "active_paths": (
+                    {
+                        "transfer_id": "busy-transfer",
+                        "kind": "relay",
+                        "direction": "h2d",
+                        "relay_device": 1,
+                        "bytes_total": 32,
+                    },
+                ),
+                "summary": {
+                    "active_transfer_count": 1,
+                    "queued_transfer_count": 1,
+                },
+            },
+            job_id="job-2",
+        )
+
+        self.assertEqual(decision.state, SchedulingDecisionState.FALLBACK)
+        self.assertEqual(decision.metadata["stats"]["resolved_mode"], "direct")
+        self.assertIn("no daemon-approved relay path", decision.fallback_reason)
+        self.assertEqual(decision.metadata["policy"]["busy_relays"], (1,))
+
+    def test_weighted_fairness_can_prefer_direct_fallback(self) -> None:
+        scheduler = self.make_scheduler()
+        session = self.make_session()
+        quotas = {1: RelayQuota(relay_gpu=1, max_inflight_chunks=8)}
+
+        decision = scheduler.plan_transfer(
+            session=session,
+            profile_entry=profile_entry(),
+            relay_quotas=quotas,
+            total_bytes=64,
+            chunk_bytes=16,
+            mode=TransferMode.POOL,
+            direction="h2d",
+            runtime_state={
+                "job_runtime_state": {
+                    "job-1": {
+                        "weight": 1.0,
+                        "active_bytes_remaining": 256,
+                        "active_transfer_count": 2,
+                    },
+                    "job-2": {
+                        "weight": 4.0,
+                        "active_bytes_remaining": 0,
+                        "active_transfer_count": 0,
+                    },
+                },
+                "summary": {
+                    "active_transfer_count": 2,
+                    "queued_transfer_count": 2,
+                },
+            },
+            workload_kind=WorkloadKind.MODEL_WEIGHTS,
+            priority=0,
+            job_id="job-1",
+        )
+
+        self.assertEqual(decision.state, SchedulingDecisionState.FALLBACK)
+        self.assertEqual(decision.metadata["stats"]["resolved_mode"], "direct")
+        self.assertIn("weighted fairness", decision.fallback_reason)
+        policy = decision.metadata["policy"]
+        self.assertEqual(policy["job_weight"], 1.0)
+        self.assertEqual(policy["total_weight"], 5.0)
+        self.assertGreater(
+            policy["projected_weighted_active_bytes"],
+            policy["fairness_threshold_bytes"],
         )
 
     def test_missing_profile_returns_direct_fallback(self) -> None:

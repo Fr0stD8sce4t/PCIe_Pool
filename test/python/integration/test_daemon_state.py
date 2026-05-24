@@ -3565,8 +3565,20 @@ class DaemonStateTest(unittest.TestCase):
         )
         first_session_id = first.payload["session"]["session_id"]
         second_session_id = second.payload["session"]["session_id"]
-        self.assertTrue(daemon.register_job(job_id="job-1", session_id=first_session_id).ok)
-        self.assertTrue(daemon.register_job(job_id="job-2", session_id=second_session_id).ok)
+        self.assertTrue(
+            daemon.register_job(
+                job_id="job-1",
+                session_id=first_session_id,
+                weight=1.0,
+            ).ok
+        )
+        self.assertTrue(
+            daemon.register_job(
+                job_id="job-2",
+                session_id=second_session_id,
+                weight=4.0,
+            ).ok
+        )
         for job_id in ("job-1", "job-2"):
             self.assertTrue(
                 daemon.register_buffer(
@@ -3635,6 +3647,8 @@ class DaemonStateTest(unittest.TestCase):
             runtime["summary"]["queued_bytes_by_direction"]["h2d"]["bytes_total"],
             128,
         )
+        self.assertEqual(runtime["job_runtime_state"]["job-1"]["weight"], 1.0)
+        self.assertEqual(runtime["job_runtime_state"]["job-2"]["weight"], 4.0)
         self.assertEqual(queue[0]["workload_kind"], "model_weights")
         self.assertEqual(queue[0]["priority"], 5)
         self.assertEqual(queue[1]["workload_kind"], "kv_cache")
@@ -3653,8 +3667,74 @@ class DaemonStateTest(unittest.TestCase):
             second_decision["metadata"]["runtime_state"]["active_transfer_count"],
             1,
         )
+        self.assertEqual(second_decision["metadata"]["policy"]["job_weight"], 4.0)
+        self.assertEqual(second_decision["metadata"]["policy"]["workload_kind"], "kv_cache")
+        self.assertEqual(second_decision["metadata"]["policy"]["priority"], 1)
         self.assertNotIn("relay_gpus", first_submit.payload["receipt"])
         self.assertNotIn("mode", first_submit.payload["receipt"])
+
+    def test_scheduler_avoids_busy_relay_without_app_path_controls(self) -> None:
+        daemon = _daemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=2,
+            max_inflight_chunks_per_relay=8,
+        )
+        _, planned, _, _ = _authorized_relay_transfer(daemon)
+        first_transfer_id = planned.payload["transfer_id"]
+        self.assertTrue(
+            daemon.transfer_status(
+                first_transfer_id,
+                state="running",
+                bytes_completed=16,
+            ).ok
+        )
+        second = daemon.register_session(
+            target_gpu=0,
+            requested_relays=[1],
+            max_inflight_chunks=8,
+        )
+        second_session_id = second.payload["session"]["session_id"]
+        self.assertTrue(
+            daemon.register_job(job_id="job-2", session_id=second_session_id).ok
+        )
+        self.assertTrue(
+            daemon.register_buffer(
+                buffer_id="job-2-cpu",
+                job_id="job-2",
+                kind="cpu_pinned",
+                size_bytes=64,
+                pinned=True,
+            ).ok
+        )
+        self.assertTrue(
+            daemon.register_buffer(
+                buffer_id="job-2-gpu",
+                job_id="job-2",
+                kind="gpu",
+                size_bytes=64,
+                device_index=0,
+            ).ok
+        )
+
+        second_submit = daemon.submit_transfer_intent(
+            TransferIntent(
+                intent_id="avoids-busy-relay",
+                job_id="job-2",
+                session_id=second_session_id,
+                source_buffer_id="job-2-cpu",
+                destination_buffer_id="job-2-gpu",
+                direction="h2d",
+                total_bytes=64,
+                ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 64},),
+                workload_kind=WorkloadKind.KV_CACHE,
+            )
+        )
+
+        self.assertTrue(second_submit.ok)
+        decision = second_submit.payload["decision"]
+        self.assertEqual(decision["metadata"]["stats"]["resolved_mode"], "direct")
+        self.assertEqual(decision["metadata"]["policy"]["busy_relays"], (1,))
+        self.assertIn("no daemon-approved relay path", decision["fallback_reason"])
 
     def test_runtime_state_tracks_relay_staging_and_terminal_updates(self) -> None:
         daemon = _daemon(

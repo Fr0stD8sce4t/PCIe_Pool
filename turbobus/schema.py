@@ -130,11 +130,15 @@ class JobIdentity:
     session_id: str | None = None
     container_id: str | None = None
     process_id: int | None = None
+    weight: float = 1.0
 
     def __post_init__(self) -> None:
         job_id = _require_non_empty_str(self.job_id, "job_id")
         if self.process_id is not None and int(self.process_id) < 0:
             raise ValueError("process_id must be non-negative")
+        weight = float(self.weight)
+        if weight <= 0.0:
+            raise ValueError("job weight must be positive")
         object.__setattr__(self, "job_id", job_id)
         if self.user_id is not None:
             object.__setattr__(
@@ -156,6 +160,7 @@ class JobIdentity:
             )
         if self.process_id is not None:
             object.__setattr__(self, "process_id", int(self.process_id))
+        object.__setattr__(self, "weight", weight)
 
 
 @dataclass(frozen=True)

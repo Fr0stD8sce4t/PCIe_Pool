@@ -77,6 +77,7 @@ class TurboBusDaemonClient:
         session_id: str | None = None,
         container_id: str | None = None,
         process_id: int | None = None,
+        weight: float = 1.0,
     ) -> DaemonResponse:
         payload: dict[str, object] = {"job_id": str(job_id)}
         if user_id is not None:
@@ -87,6 +88,7 @@ class TurboBusDaemonClient:
             payload["container_id"] = str(container_id)
         if process_id is not None:
             payload["process_id"] = int(process_id)
+        payload["weight"] = float(weight)
         return self.send(
             DaemonRequest(
                 request_type=RequestType.REGISTER_JOB,

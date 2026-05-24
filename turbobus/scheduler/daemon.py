@@ -12,6 +12,7 @@ from ..schema import (
     SchedulingDecisionState,
     Session,
     TransferMode,
+    WorkloadKind,
 )
 
 
@@ -33,6 +34,44 @@ class _Profile:
     direct_h2d_bw_gbps: float
     direct_d2h_bw_gbps: float
     relays: tuple[_RelayProfile, ...]
+
+
+@dataclass(frozen=True)
+class _RuntimeView:
+    job_id: str | None
+    workload_kind: str
+    priority: int
+    busy_relays: frozenset[int]
+    job_weight: float
+    total_weight: float
+    current_job_active_bytes: int
+    total_active_bytes: int
+    request_charge_bytes: float
+    average_weighted_active_bytes: float
+    current_weighted_active_bytes: float
+    projected_weighted_active_bytes: float
+    fairness_threshold_bytes: float
+    active_transfer_count: int
+    queued_transfer_count: int
+
+    def policy_metadata(self) -> dict[str, object]:
+        return {
+            "job_id": self.job_id,
+            "job_weight": self.job_weight,
+            "total_weight": self.total_weight,
+            "workload_kind": self.workload_kind,
+            "priority": self.priority,
+            "request_charge_bytes": self.request_charge_bytes,
+            "current_job_active_bytes": self.current_job_active_bytes,
+            "total_active_bytes": self.total_active_bytes,
+            "current_weighted_active_bytes": self.current_weighted_active_bytes,
+            "projected_weighted_active_bytes": self.projected_weighted_active_bytes,
+            "average_weighted_active_bytes": self.average_weighted_active_bytes,
+            "fairness_threshold_bytes": self.fairness_threshold_bytes,
+            "busy_relays": tuple(sorted(self.busy_relays)),
+            "active_transfer_count": self.active_transfer_count,
+            "queued_transfer_count": self.queued_transfer_count,
+        }
 
 
 class DaemonScheduler:
@@ -60,6 +99,8 @@ class DaemonScheduler:
         mode: TransferMode | str = TransferMode.POOL,
         direction: str = "h2d",
         runtime_state: Mapping[str, object] | None = None,
+        workload_kind: WorkloadKind | str = WorkloadKind.GENERIC,
+        priority: int = 0,
         now: float = 0.0,
         job_id: str | None = None,
         intent_id: str | None = None,
@@ -84,11 +125,19 @@ class DaemonScheduler:
 
         requested_mode = _parse_transfer_mode(mode)
         planning_mode = TransferMode.POOL if requested_mode is TransferMode.AUTO else requested_mode
+        runtime_view = _runtime_view(
+            runtime_state=runtime_state,
+            job_id=job_id,
+            total_bytes=total_bytes,
+            workload_kind=workload_kind,
+            priority=priority,
+        )
         profile, fallback_reason = self._profile_for_planning(
             profile_entry=profile_entry,
             session=session,
             relay_quotas=relay_quotas,
             direction=direction,
+            runtime_view=runtime_view,
         )
         if (
             fallback_reason is None
@@ -114,6 +163,12 @@ class DaemonScheduler:
             now=now,
             job_id=job_id,
         )
+        fairness_fallback = _fairness_fallback_for_plan(
+            plan=plan,
+            runtime_view=runtime_view,
+        )
+        if fairness_fallback is not None:
+            lease_error = fairness_fallback
         if lease_error is not None:
             fallback_reason = lease_error
             plan = self._direct_plan(
@@ -157,6 +212,7 @@ class DaemonScheduler:
                 "leases": [lease.as_dict() for lease in leases],
                 "stats": stats.as_dict(),
                 "runtime_state": _runtime_state_metadata(runtime_state),
+                "policy": runtime_view.policy_metadata(),
             },
         )
 
@@ -167,6 +223,7 @@ class DaemonScheduler:
         session: Session,
         relay_quotas: Mapping[int, RelayQuota],
         direction: str,
+        runtime_view: "_RuntimeView",
     ) -> tuple[_Profile, str | None]:
         payload = _profile_payload(profile_entry)
         if payload is None:
@@ -181,6 +238,8 @@ class DaemonScheduler:
             if relay_device not in allowed_relays:
                 continue
             if not _relay_has_capacity(session, relay_quotas.get(relay_device)):
+                continue
+            if relay_device in runtime_view.busy_relays:
                 continue
             relays.append(
                 _RelayProfile(
@@ -467,6 +526,116 @@ def _runtime_state_metadata(
         ),
         "active_resource_usage": dict(summary.get("active_resource_usage", {}) or {}),
     }
+
+
+def _runtime_view(
+    *,
+    runtime_state: Mapping[str, object] | None,
+    job_id: str | None,
+    total_bytes: int,
+    workload_kind: WorkloadKind | str,
+    priority: int,
+) -> _RuntimeView:
+    normalized_job_id = None if job_id is None else str(job_id)
+    workload = WorkloadKind(workload_kind).value
+    active_paths = ()
+    active_transfer_count = 0
+    queued_transfer_count = 0
+    job_runtime_state: Mapping[str, object] = {}
+    if isinstance(runtime_state, Mapping):
+        active_paths = runtime_state.get("active_paths", ()) or ()
+        summary = runtime_state.get("summary", {})
+        if isinstance(summary, Mapping):
+            active_transfer_count = int(summary.get("active_transfer_count", 0) or 0)
+            queued_transfer_count = int(summary.get("queued_transfer_count", 0) or 0)
+            nested_jobs = summary.get("job_runtime_state", {})
+            if isinstance(nested_jobs, Mapping):
+                job_runtime_state = nested_jobs
+        jobs = runtime_state.get("job_runtime_state", {})
+        if isinstance(jobs, Mapping):
+            job_runtime_state = jobs
+    busy_relays: set[int] = set()
+    for record in active_paths:
+        if not isinstance(record, Mapping):
+            continue
+        if str(record.get("kind", "")).lower() != "relay":
+            continue
+        relay = record.get("relay_device")
+        if relay is None:
+            continue
+        busy_relays.add(int(relay))
+
+    total_weight = 0.0
+    total_active_bytes = 0
+    current_job_active_bytes = 0
+    job_weight = 1.0
+    for key, value in job_runtime_state.items():
+        if not isinstance(value, Mapping):
+            continue
+        weight = max(0.0, float(value.get("weight", 1.0) or 1.0))
+        total_weight += weight
+        active_bytes = int(value.get("active_bytes_remaining", 0) or 0)
+        total_active_bytes += active_bytes
+        if normalized_job_id is not None and str(key) == normalized_job_id:
+            job_weight = weight or 1.0
+            current_job_active_bytes = active_bytes
+    if total_weight <= 0.0:
+        total_weight = max(1.0, job_weight)
+    if normalized_job_id is not None and normalized_job_id not in job_runtime_state:
+        total_weight += job_weight
+    request_charge = float(total_bytes) * _workload_charge_multiplier(workload)
+    if int(priority) > 0:
+        request_charge = request_charge / (1.0 + min(int(priority), 9) * 0.1)
+    current_weighted = current_job_active_bytes / max(job_weight, 1e-12)
+    projected_weighted = (current_job_active_bytes + request_charge) / max(
+        job_weight,
+        1e-12,
+    )
+    average_weighted = (
+        (total_active_bytes + request_charge) / max(total_weight, 1e-12)
+    )
+    return _RuntimeView(
+        job_id=normalized_job_id,
+        workload_kind=workload,
+        priority=int(priority),
+        busy_relays=frozenset(busy_relays),
+        job_weight=job_weight,
+        total_weight=total_weight,
+        current_job_active_bytes=current_job_active_bytes,
+        total_active_bytes=total_active_bytes,
+        request_charge_bytes=request_charge,
+        average_weighted_active_bytes=average_weighted,
+        current_weighted_active_bytes=current_weighted,
+        projected_weighted_active_bytes=projected_weighted,
+        fairness_threshold_bytes=average_weighted * 1.25,
+        active_transfer_count=active_transfer_count,
+        queued_transfer_count=queued_transfer_count,
+    )
+
+
+def _workload_charge_multiplier(workload_kind: str) -> float:
+    if workload_kind == WorkloadKind.KV_CACHE.value:
+        return 0.75
+    if workload_kind == WorkloadKind.TRAINING_STATE.value:
+        return 1.25
+    if workload_kind == WorkloadKind.OPTIMIZER_STATE.value:
+        return 1.25
+    return 1.0
+
+
+def _fairness_fallback_for_plan(
+    *,
+    plan: PlannerTransferPlan,
+    runtime_view: _RuntimeView,
+) -> str | None:
+    has_relay = any(assignment.path.kind == "relay" for assignment in plan.assignments)
+    if not has_relay:
+        return None
+    if runtime_view.total_active_bytes <= 0:
+        return None
+    if runtime_view.projected_weighted_active_bytes <= runtime_view.fairness_threshold_bytes:
+        return None
+    return "weighted fairness limit prefers direct fallback"
 
 
 def _contract_id(value: str | None, *, prefix: str, fallback: str) -> str:

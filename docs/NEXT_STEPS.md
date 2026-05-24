@@ -44,7 +44,7 @@ daemon-owned transfer queue and scheduler-readable runtime resource state now
 let later fairness, admission control, and delayed lease decisions reason
 about queued and active work across jobs.
 
-Current item: Phase 3 Cut 2, cross-job scheduling policy and fairness inputs.
+Current item: Phase 3 Cut 3, relay admission control and rescheduling.
 
 ### Phase 3 Cut 1
 
@@ -71,7 +71,7 @@ Expected output:
 
 ### Phase 3 Cut 2
 
-Status: current.
+Status: complete.
 
 - Feed scheduler decisions from daemon runtime state, measured load, request
   size, workload kind, and job weight.
@@ -87,6 +87,24 @@ Expected output:
 - queue depth and active load influence scheduler decisions;
 - fairness policy can be layered on top of the daemon-owned runtime snapshot;
 - direct fallback remains a scheduler outcome, not an adapter choice.
+
+### Phase 3 Cut 3
+
+Status: current.
+
+- Add daemon-owned relay admission control and delayed lease grants.
+- Add plan expiration and rescheduling when topology, load, or leases change.
+- Keep direct fallback available as a scheduler outcome.
+- Add focused tests for delayed grants, expired plans, and rescheduling without
+  allowing applications or adapters to name relay devices.
+
+Expected output:
+
+- relay plans are admitted only when daemon-owned load and fairness state allow
+  them;
+- queued work can be delayed or replanned instead of forcing immediate lease
+  allocation;
+- expired or stale plans cannot be executed by workers.
 
 ## Phase 0 Code Cuts
 
@@ -531,12 +549,11 @@ Phase 2 is complete.
 
 ## Phase 3 Current Work
 
-Current item: Phase 3 Cut 1, global daemon transfer queue and runtime resource
-state.
+Current item: Phase 3 Cut 3, relay admission control and rescheduling.
 
 Cut 1: global queue and runtime resource state.
 
-Status: current.
+Status: complete.
 
 - Add a daemon-owned transfer queue for submitted TransferIntent work.
 - Track active H2D, D2H, P2P, relay staging, leases, and running transfer
@@ -554,6 +571,33 @@ Expected output:
 - Phase 3 can add fairness and admission control on top of explicit runtime
   resource state;
 - no Phase 2 control-plane isolation or cleanup guarantee regresses.
+
+Cut 2: cross-job scheduling policy and fairness inputs.
+
+Status: complete.
+
+- Feed scheduler decisions from daemon runtime state, request size, workload
+  kind, priority, job weight, queue depth, and active resource usage.
+- Avoid busy relay paths based on daemon runtime state.
+- Prefer direct fallback when the requesting job already exceeds its weighted
+  fair share.
+- Keep all physical path decisions in scheduler output and explanation
+  metadata.
+
+Expected output:
+
+- new requests can avoid busy resources;
+- weighted fair sharing inputs are visible in scheduling decisions;
+- apps and adapters still submit only `TransferIntent` and consume
+  `TransferReceipt`.
+
+Cut 3: relay admission control and rescheduling.
+
+Status: current.
+
+- Add daemon-owned delayed lease grant behavior.
+- Add plan expiration and rescheduling when runtime state changes.
+- Add tests that workers reject expired or stale plans before data movement.
 
 ## After Phase 0
 

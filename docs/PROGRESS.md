@@ -171,6 +171,13 @@ The active target architecture is:
   metadata now receives a runtime-state summary so later fairness and
   admission control can reason over queued and active work without returning
   to adapter-side path selection.
+- Phase 3 Cut 2 is complete. `JobIdentity` now carries a daemon-owned positive
+  weight, job registration and daemon profile state preserve that weight, and
+  runtime snapshots expose per-job queued, running, active-byte, and weight
+  records. The daemon now passes workload kind and priority into scheduler
+  planning. Scheduler decisions now consume runtime state to avoid busy relay
+  paths, compute weighted fair-share policy metadata, and prefer direct
+  fallback when the requesting job already exceeds its weighted share.
 
 ## Active Phase
 
@@ -206,7 +213,7 @@ Phase 3 covers:
 
 ## Next Work Items
 
-Current item: Phase 3 Cut 1, global daemon transfer queue and runtime resource state.
+Current item: Phase 3 Cut 3, relay admission control and rescheduling.
 
 1. Shared schema layer.
    - Status: complete.
@@ -304,8 +311,13 @@ Current item: Phase 3 Cut 1, global daemon transfer queue and runtime resource s
 
 11. Cross-job dynamic scheduling.
    - Status: current.
-   - Cut 1 current: add a global daemon transfer queue and scheduler-readable
+   - Cut 1 complete: add a global daemon transfer queue and scheduler-readable
      runtime resource state for queued and active work.
+   - Cut 2 complete: feed scheduler decisions from daemon runtime state,
+     workload kind, priority, job weight, queue depth, and active resource
+     usage; avoid busy relays and explain weighted fairness fallback.
+   - Cut 3 current: add relay admission control, delayed lease grants, plan
+     expiration, and rescheduling.
 
 ## Phase 0 Acceptance Criteria
 
@@ -337,13 +349,14 @@ Remaining risk:
 - Phase 2 now rejects cross-peer buffer registration and transfer use,
   cleans stale resources after timeout, disconnect, worker failure, and
   mismatch, and exposes daemon-owned audit records for relay use and failures.
-  Phase 3 Cut 1 is now complete, but dynamic scheduling, fairness, and relay
-  admission control still need implementation before real cross-job PCIe
-  pooling is available.
+  Phase 3 Cut 1 and Cut 2 are complete, but delayed relay admission,
+  rescheduling, and plan expiration still need implementation before real
+  cross-job PCIe pooling is available.
 
 Latest validation:
 
 - `python -m unittest test.python.integration.test_daemon_state test.python.integration.test_daemon_socket`
+- `python -m unittest test.python.unit.test_daemon_scheduler test.python.unit.test_schema test.python.unit.test_contract_schema`
 - `python -m compileall -q turbobus\\daemon turbobus\\scheduler test\\python\\integration\\test_daemon_state.py test\\python\\integration\\test_daemon_socket.py`
 - `git diff --check`
 

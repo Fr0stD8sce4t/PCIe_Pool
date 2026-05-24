@@ -231,6 +231,7 @@ class TurboBusDaemon:
         session_id: str | None = None,
         container_id: str | None = None,
         process_id: int | None = None,
+        weight: float = 1.0,
         peer_identity: PeerIdentity | None = None,
     ) -> DaemonResponse:
         try:
@@ -248,6 +249,7 @@ class TurboBusDaemon:
             session_id=session_id,
             container_id=container_id,
             process_id=process_id,
+            weight=weight,
         )
         with self._lock:
             if job.session_id is not None and job.session_id not in self._sessions:
@@ -664,6 +666,8 @@ class TurboBusDaemon:
             buffer_ids=[intent.source_buffer_id, intent.destination_buffer_id],
             ranges=intent.ranges,
             intent_id=intent.intent_id,
+            workload_kind=intent.workload_kind.value,
+            priority=intent.priority,
             peer_identity=peer_identity,
         )
         if not planned.ok:
@@ -926,6 +930,8 @@ class TurboBusDaemon:
         ranges: Iterable[dict[str, int]] | None = None,
         intent_id: str | None = None,
         topology_snapshot_id: str | None = None,
+        workload_kind: str = "generic",
+        priority: int = 0,
         peer_identity: PeerIdentity | None = None,
     ) -> DaemonResponse:
         now = time.time()
@@ -965,6 +971,11 @@ class TurboBusDaemon:
                 return _topology_unavailable_response()
             snapshot_id = topology_snapshot_id or self._topology_snapshot_id_locked()
             plan_job_id = owner_job_id if owner_job_id is not None else job_id
+            intent = (
+                None
+                if intent_id is None
+                else self._transfer_intents.get(str(intent_id))
+            )
             relay_eligibility = self._relay_eligibility_for_session_locked(session)
             planning_relays = tuple(
                 item["relay_gpu"] for item in relay_eligibility["eligible_relays"]
@@ -1002,6 +1013,10 @@ class TurboBusDaemon:
                 ranges=normalized_ranges,
                 mode=mode,
                 direction=direction,
+                workload_kind=(
+                    workload_kind if intent is None else intent.workload_kind
+                ),
+                priority=priority if intent is None else intent.priority,
                 now=now,
                 job_id=plan_job_id,
                 intent_id=intent_id,
@@ -1420,6 +1435,7 @@ class TurboBusDaemon:
             if lease_id in self._reservations
         ]
         staging_records = [dict(value) for _, value in sorted(self._staging_records.items())]
+        job_runtime_state = self._job_runtime_state_locked(transfer_records)
         relay_path_summary = {
             "path_count": 0,
             "chunk_count": 0,
@@ -1451,6 +1467,7 @@ class TurboBusDaemon:
             "active_transfers": active_transfers,
             "active_paths": path_records,
             "active_resource_usage": active_resource_usage,
+            "job_runtime_state": job_runtime_state,
             "active_reservations": active_reservations,
             "active_leases": active_leases,
             "relay_staging": staging_records,
@@ -1477,6 +1494,7 @@ class TurboBusDaemon:
                 "active_bytes_by_direction": active_by_direction,
                 "active_paths": path_summary,
                 "active_resource_usage": active_resource_usage,
+                "job_runtime_state": job_runtime_state,
             },
         }
 
@@ -1507,6 +1525,65 @@ class TurboBusDaemon:
             "expires_at": lease.expires_at,
             "transfer_id": self._reservation_transfers.get(str(lease_id)),
         }
+
+    def _job_runtime_state_locked(
+        self,
+        transfer_records: list[dict[str, object]],
+    ) -> dict[str, dict[str, object]]:
+        jobs = {
+            job_id: {
+                "job_id": job_id,
+                "weight": float(job.weight),
+                "queued_transfer_count": 0,
+                "running_transfer_count": 0,
+                "active_transfer_count": 0,
+                "active_bytes_total": 0,
+                "active_bytes_remaining": 0,
+            }
+            for job_id, job in self._jobs.items()
+        }
+        for record in transfer_records:
+            job_id = record.get("job_id")
+            if job_id is None:
+                continue
+            normalized = str(job_id)
+            job_record = jobs.setdefault(
+                normalized,
+                {
+                    "job_id": normalized,
+                    "weight": 1.0,
+                    "queued_transfer_count": 0,
+                    "running_transfer_count": 0,
+                    "active_transfer_count": 0,
+                    "active_bytes_total": 0,
+                    "active_bytes_remaining": 0,
+                },
+            )
+            state = str(record.get("state", ""))
+            if state == TransferStatusState.SUBMITTED.value:
+                job_record["queued_transfer_count"] = int(
+                    job_record["queued_transfer_count"]
+                ) + 1
+            elif state == TransferStatusState.RUNNING.value:
+                job_record["running_transfer_count"] = int(
+                    job_record["running_transfer_count"]
+                ) + 1
+            if state in {
+                TransferStatusState.SUBMITTED.value,
+                TransferStatusState.RUNNING.value,
+            }:
+                bytes_total = int(record.get("bytes_total", 0) or 0)
+                bytes_completed = int(record.get("bytes_completed", 0) or 0)
+                job_record["active_transfer_count"] = int(
+                    job_record["active_transfer_count"]
+                ) + 1
+                job_record["active_bytes_total"] = int(
+                    job_record["active_bytes_total"]
+                ) + bytes_total
+                job_record["active_bytes_remaining"] = int(
+                    job_record["active_bytes_remaining"]
+                ) + max(0, bytes_total - bytes_completed)
+        return dict(sorted(jobs.items()))
 
     def _active_path_records_locked(
         self,
@@ -2397,6 +2474,7 @@ class TurboBusDaemon:
                 session_id=payload.get("session_id"),
                 container_id=payload.get("container_id"),
                 process_id=payload.get("process_id"),
+                weight=float(payload.get("weight", 1.0)),
                 peer_identity=request.peer_identity,
             )
         if request.request_type == RequestType.REGISTER_BUFFER:
@@ -2473,6 +2551,8 @@ class TurboBusDaemon:
                 ranges=payload.get("ranges"),
                 intent_id=payload.get("intent_id"),
                 topology_snapshot_id=payload.get("topology_snapshot_id"),
+                workload_kind=str(payload.get("workload_kind", "generic")),
+                priority=int(payload.get("priority", 0)),
                 peer_identity=request.peer_identity,
             )
         if request.request_type == RequestType.SUBMIT_TRANSFER_INTENT:
