@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from turbobus.daemon.scheduler import DaemonScheduler
+from turbobus.scheduler import DaemonScheduler
 from turbobus.schema import RelayQuota, Session, TransferMode
 
 

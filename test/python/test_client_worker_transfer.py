@@ -10,11 +10,13 @@ import unittest
 from turbobus.client import CudaIpcDeviceBuffer, SharedPinnedCpuBufferAllocator
 from turbobus.client_transfer import make_worker_managed_transfer_client
 from turbobus.daemon.server import TurboBusDaemon
-from turbobus.daemon.topology import (
+from turbobus.topology import (
     DaemonResourceInventory,
     FabricLinkRecord,
     GpuInventoryRecord,
     PciePathRecord,
+)
+from fixtures.topology import (
     StaticTopologyProvider,
 )
 from turbobus.runtime_engine import RuntimeOptions

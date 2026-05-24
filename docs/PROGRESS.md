@@ -34,6 +34,11 @@ The active target architecture is:
   TopologySnapshot, SchedulingDecision, ExecutionTicket, and TransferReceipt.
   `test/python/unit/test_contract_schema.py` validates serialization and
   rejection behavior for the new contracts.
+- Phase 0 Cut 3 is complete. The package now has explicit `api`, `control`,
+  `topology`, `scheduler`, and `data_plane` boundaries. Production topology
+  records live under `turbobus/topology`; static topology has been moved to
+  `test/python/fixtures/topology.py`, and the daemon no longer creates a
+  synthetic topology provider by default.
 
 ## Active Phase
 
@@ -51,7 +56,7 @@ Phase 0 covers:
 
 ## Next Work Items
 
-Current item: Cut 3, Package boundary setup.
+Current item: Cut 4, Daemon-first client API.
 
 1. Shared schema layer.
    - Status: complete.
@@ -60,13 +65,14 @@ Current item: Cut 3, Package boundary setup.
    - Add validation tests under `test/python/unit/`.
 
 2. Package boundary setup.
-   - Status: current.
+   - Status: complete.
    - Introduce `api`, `control`, `topology`, `scheduler`, and `data_plane`
      package boundaries.
    - Keep adapters under `adapters`.
    - Move synthetic topology support into fixtures.
 
 3. Daemon-first client API.
+   - Status: current.
    - Add intent submission.
    - Add receipt-oriented completion.
    - Update package exports.

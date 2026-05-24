@@ -9,16 +9,25 @@ from turbobus.daemon.protocol import (
     WorkerTransferAuthorizationRequest,
 )
 from turbobus.daemon.server import TurboBusDaemon
-from turbobus.daemon.topology import (
+from turbobus.topology import (
     DaemonResourceInventory,
     FabricLinkRecord,
     GpuInventoryRecord,
     PciePathRecord,
+)
+from fixtures.topology import (
     StaticTopologyProvider,
 )
 
 
 CUDA_IPC_TARGET_HANDLE = (b"t" * 64).hex()
+
+
+def _daemon(*args, **kwargs) -> TurboBusDaemon:
+    if "topology_provider" not in kwargs:
+        relay_gpus = kwargs.get("relay_gpus", args[0] if args else [])
+        kwargs["topology_provider"] = StaticTopologyProvider.from_relay_gpus(relay_gpus)
+    return TurboBusDaemon(*args, **kwargs)
 
 
 def _relay_ranges(plan: dict, relay_gpu: int) -> tuple[dict[str, int], ...]:
@@ -40,7 +49,7 @@ def _relay_ranges(plan: dict, relay_gpu: int) -> tuple[dict[str, int], ...]:
 
 class DaemonStateTest(unittest.TestCase):
     def test_session_lifecycle_releases_quota(self) -> None:
-        daemon = TurboBusDaemon(relay_gpus=[1], max_sessions_per_relay=1)
+        daemon = _daemon(relay_gpus=[1], max_sessions_per_relay=1)
 
         first = daemon.register_session(target_gpu=0, requested_relays=[1])
         self.assertTrue(first.ok)
@@ -57,7 +66,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertTrue(third.ok)
 
     def test_register_session_normalizes_duplicate_relays(self) -> None:
-        daemon = TurboBusDaemon(relay_gpus=[1], max_sessions_per_relay=1)
+        daemon = _daemon(relay_gpus=[1], max_sessions_per_relay=1)
 
         registered = daemon.register_session(target_gpu=0, requested_relays=[1, 1])
 
@@ -67,7 +76,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(daemon.describe().payload["relay_quotas"][1]["sessions"], [session_id])
 
     def test_register_session_rejects_invalid_session_chunk_limit(self) -> None:
-        daemon = TurboBusDaemon(relay_gpus=[1])
+        daemon = _daemon(relay_gpus=[1])
 
         response = daemon.register_session(
             target_gpu=0,
@@ -79,7 +88,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertIn("max_inflight_chunks", response.error)
 
     def test_job_and_buffer_registration_are_tracked_and_cleaned_up(self) -> None:
-        daemon = TurboBusDaemon(relay_gpus=[1])
+        daemon = _daemon(relay_gpus=[1])
         session = daemon.register_session(target_gpu=0, requested_relays=[1])
         self.assertTrue(session.ok)
         session_id = session.payload["session"]["session_id"]
@@ -134,7 +143,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertNotIn("buffer-1", daemon.describe().payload["buffers"])
 
     def test_close_session_removes_session_jobs_and_buffers(self) -> None:
-        daemon = TurboBusDaemon(relay_gpus=[1])
+        daemon = _daemon(relay_gpus=[1])
         session = daemon.register_session(target_gpu=0, requested_relays=[1])
         self.assertTrue(session.ok)
         session_id = session.payload["session"]["session_id"]
@@ -169,7 +178,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertIn("detached-buffer", snapshot["buffers"])
 
     def test_register_job_rejects_unknown_session(self) -> None:
-        daemon = TurboBusDaemon(relay_gpus=[1])
+        daemon = _daemon(relay_gpus=[1])
 
         registered = daemon.register_job("job-1", session_id="missing-session")
 
@@ -178,7 +187,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(daemon.describe().payload["jobs"], {})
 
     def test_cleanup_session_reports_removed_jobs_and_buffers(self) -> None:
-        daemon = TurboBusDaemon(relay_gpus=[1])
+        daemon = _daemon(relay_gpus=[1])
         session = daemon.register_session(target_gpu=0, requested_relays=[1])
         self.assertTrue(session.ok)
         session_id = session.payload["session"]["session_id"]
@@ -208,7 +217,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(daemon.describe().payload["buffers"], {})
 
     def test_handle_request_profile(self) -> None:
-        daemon = TurboBusDaemon(relay_gpus=[1, 2], max_sessions_per_relay=2)
+        daemon = _daemon(relay_gpus=[1, 2], max_sessions_per_relay=2)
         register = daemon.handle_request(
             DaemonRequest(
                 request_type=RequestType.REGISTER_SESSION,
@@ -282,7 +291,7 @@ class DaemonStateTest(unittest.TestCase):
             source="test",
             discovered_at=1.0,
         )
-        daemon = TurboBusDaemon(
+        daemon = _daemon(
             relay_gpus=[1],
             topology_provider=StaticTopologyProvider(inventory),
         )
@@ -299,19 +308,20 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(payload["pcie_paths"][1]["device_id"], 1)
         self.assertEqual(payload["fabric_links"][0]["fabric"], "nvlink")
 
-    def test_default_inventory_comes_from_configured_relays(self) -> None:
-        daemon = TurboBusDaemon(relay_gpus=[2, 1])
+    def test_fixture_inventory_comes_from_explicit_static_provider(self) -> None:
+        daemon = _daemon(relay_gpus=[2, 1])
 
         inventory = daemon.get_inventory()
 
         self.assertTrue(inventory.ok)
         payload = inventory.payload["inventory"]
-        self.assertEqual(payload["source"], "configured")
+        self.assertEqual(payload["source"], "test_fixture_static")
+        self.assertEqual(payload["metadata"]["discovery"], "static test fixture")
         self.assertEqual([gpu["device_id"] for gpu in payload["gpus"]], [1, 2])
         self.assertEqual([gpu["role"] for gpu in payload["gpus"]], ["relay", "relay"])
 
     def test_discover_relays_reports_cross_job_lease_bookkeeping(self) -> None:
-        daemon = TurboBusDaemon(
+        daemon = _daemon(
             relay_gpus=[1],
             max_sessions_per_relay=2,
             max_inflight_chunks_per_relay=8,
@@ -455,7 +465,7 @@ class DaemonStateTest(unittest.TestCase):
             ),
             source="test",
         )
-        daemon = TurboBusDaemon(
+        daemon = _daemon(
             relay_gpus=[1, 2],
             max_sessions_per_relay=1,
             max_inflight_chunks_per_relay=8,
@@ -534,7 +544,7 @@ class DaemonStateTest(unittest.TestCase):
             ),
             source="test",
         )
-        daemon = TurboBusDaemon(
+        daemon = _daemon(
             relay_gpus=[1],
             max_sessions_per_relay=1,
             max_inflight_chunks_per_relay=8,
@@ -596,7 +606,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(daemon.describe().payload["relay_quotas"][1]["active_chunks"], 0)
 
     def test_profile_cache_get_put_round_trip(self) -> None:
-        daemon = TurboBusDaemon(relay_gpus=[1])
+        daemon = _daemon(relay_gpus=[1])
         profile = {
             "target_device": 0,
             "direct_h2d_bw_gbps": 7.5,
@@ -637,7 +647,7 @@ class DaemonStateTest(unittest.TestCase):
         )
 
     def test_profile_cache_can_be_invalidated_explicitly(self) -> None:
-        daemon = TurboBusDaemon(relay_gpus=[1])
+        daemon = _daemon(relay_gpus=[1])
         profile = {
             "target_device": 0,
             "direct_h2d_bw_gbps": 7.5,
@@ -664,7 +674,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertIsNone(daemon.get_profile(target_gpu=0, relay_gpus=[1]).payload["profile"])
 
     def test_profile_cache_purges_stale_entries_on_access(self) -> None:
-        daemon = TurboBusDaemon(relay_gpus=[1], profile_max_age_seconds=1.0)
+        daemon = _daemon(relay_gpus=[1], profile_max_age_seconds=1.0)
         profile = {
             "target_device": 0,
             "direct_h2d_bw_gbps": 7.5,
@@ -697,7 +707,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(daemon.describe().payload["profile_cache"], {})
 
     def test_handle_request_rejects_invalid_profile_cache_update(self) -> None:
-        daemon = TurboBusDaemon(relay_gpus=[1])
+        daemon = _daemon(relay_gpus=[1])
 
         response = daemon.handle_request(
             DaemonRequest(
@@ -714,7 +724,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertIn("direct_h2d", response.error)
 
     def test_handle_request_rejects_missing_required_fields(self) -> None:
-        daemon = TurboBusDaemon(relay_gpus=[1])
+        daemon = _daemon(relay_gpus=[1])
 
         response = daemon.handle_request(
             DaemonRequest(
@@ -727,7 +737,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertIn("invalid request", response.error)
 
     def test_wire_message_errors_do_not_mutate_state(self) -> None:
-        daemon = TurboBusDaemon(relay_gpus=[1])
+        daemon = _daemon(relay_gpus=[1])
 
         malformed = daemon.handle_wire_message("{not-json")
         missing_type = daemon.handle_wire_message("{}")
@@ -741,7 +751,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(len(daemon.describe().payload["sessions"]), 1)
 
     def test_transfer_reservation_uses_relay_chunk_quota(self) -> None:
-        daemon = TurboBusDaemon(
+        daemon = _daemon(
             relay_gpus=[1],
             max_sessions_per_relay=2,
             max_inflight_chunks_per_relay=4,
@@ -774,7 +784,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertTrue(second.ok)
 
     def test_transfer_reservation_rejects_invalid_payload_values(self) -> None:
-        daemon = TurboBusDaemon(relay_gpus=[1])
+        daemon = _daemon(relay_gpus=[1])
         register = daemon.register_session(target_gpu=0, requested_relays=[1])
         session_id = register.payload["session"]["session_id"]
 
@@ -798,7 +808,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(daemon.describe().payload["relay_quotas"][1]["active_chunks"], 0)
 
     def test_stale_session_reap_releases_reservations_and_quota(self) -> None:
-        daemon = TurboBusDaemon(
+        daemon = _daemon(
             relay_gpus=[1],
             max_sessions_per_relay=1,
             max_inflight_chunks_per_relay=4,
@@ -845,7 +855,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertTrue(reopened.ok)
 
     def test_close_session_releases_transfer_reservations(self) -> None:
-        daemon = TurboBusDaemon(
+        daemon = _daemon(
             relay_gpus=[1],
             max_sessions_per_relay=1,
             max_inflight_chunks_per_relay=4,
@@ -881,7 +891,7 @@ class DaemonStateTest(unittest.TestCase):
         )
 
     def test_transfer_reservation_uses_session_chunk_quota(self) -> None:
-        daemon = TurboBusDaemon(
+        daemon = _daemon(
             relay_gpus=[1, 2],
             max_sessions_per_relay=2,
             max_inflight_chunks_per_relay=8,
@@ -908,7 +918,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertTrue(second.ok)
 
     def test_plan_transfer_uses_cached_profile_and_reserves_leases(self) -> None:
-        daemon = TurboBusDaemon(
+        daemon = _daemon(
             relay_gpus=[1],
             max_sessions_per_relay=1,
             max_inflight_chunks_per_relay=8,
@@ -970,7 +980,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(daemon.describe().payload["relay_quotas"][1]["active_chunks"], 0)
 
     def test_expired_plan_lease_reap_releases_reservation_and_quota(self) -> None:
-        daemon = TurboBusDaemon(
+        daemon = _daemon(
             relay_gpus=[1],
             max_sessions_per_relay=1,
             max_inflight_chunks_per_relay=2,
@@ -1067,7 +1077,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(replanned.payload["stats"]["resolved_mode"], "pool")
 
     def test_plan_transfer_issues_validatable_lease_tokens(self) -> None:
-        daemon = TurboBusDaemon(
+        daemon = _daemon(
             relay_gpus=[1],
             max_sessions_per_relay=1,
             max_inflight_chunks_per_relay=8,
@@ -1158,7 +1168,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertIn("unknown lease", inactive.error)
 
     def test_plan_transfer_lease_validation_checks_registered_buffer_ownership(self) -> None:
-        daemon = TurboBusDaemon(
+        daemon = _daemon(
             relay_gpus=[1],
             max_sessions_per_relay=1,
             max_inflight_chunks_per_relay=8,
@@ -1352,7 +1362,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertIn("job session", detached_owner.error)
 
     def test_plan_transfer_infers_job_id_from_registered_buffer_owner(self) -> None:
-        daemon = TurboBusDaemon(
+        daemon = _daemon(
             relay_gpus=[1],
             max_sessions_per_relay=1,
             max_inflight_chunks_per_relay=8,
@@ -1451,7 +1461,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(authorized.payload["authorization"]["job_id"], "job-1")
 
     def test_register_buffer_rejects_overwrite_while_buffer_has_active_lease(self) -> None:
-        daemon = TurboBusDaemon(
+        daemon = _daemon(
             relay_gpus=[1],
             max_sessions_per_relay=1,
             max_inflight_chunks_per_relay=8,
@@ -1548,7 +1558,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(replaced.payload["buffer"]["size_bytes"], 128)
 
     def test_worker_transfer_authorization_packages_validated_transfer_context(self) -> None:
-        daemon = TurboBusDaemon(
+        daemon = _daemon(
             relay_gpus=[1],
             max_sessions_per_relay=1,
             max_inflight_chunks_per_relay=8,
@@ -1723,7 +1733,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertIn("worker ranges do not match daemon plan", mismatched_ranges.error)
 
     def test_worker_transfer_authorization_rejects_terminal_transfer_status(self) -> None:
-        daemon = TurboBusDaemon(
+        daemon = _daemon(
             relay_gpus=[1],
             max_sessions_per_relay=1,
             max_inflight_chunks_per_relay=8,
@@ -1824,7 +1834,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertIn("transfer is terminal", authorized.error)
 
     def test_lease_validation_rejects_terminal_transfer_status(self) -> None:
-        daemon = TurboBusDaemon(
+        daemon = _daemon(
             relay_gpus=[1],
             max_sessions_per_relay=1,
             max_inflight_chunks_per_relay=8,
@@ -1914,7 +1924,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertIn("transfer is terminal", validated.error)
 
     def test_plan_transfer_requires_completion_status_before_release_completes(self) -> None:
-        daemon = TurboBusDaemon(
+        daemon = _daemon(
             relay_gpus=[1],
             max_sessions_per_relay=1,
             max_inflight_chunks_per_relay=8,
@@ -1980,7 +1990,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(still_submitted.payload["status"]["bytes_completed"], 0)
 
     def test_plan_transfer_records_and_completes_transfer_status(self) -> None:
-        daemon = TurboBusDaemon(
+        daemon = _daemon(
             relay_gpus=[1],
             max_sessions_per_relay=1,
             max_inflight_chunks_per_relay=8,
@@ -2043,7 +2053,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(completed.payload["status"]["bytes_completed"], 64)
 
     def test_close_session_marks_planned_transfer_canceled_and_reports_cleanup(self) -> None:
-        daemon = TurboBusDaemon(
+        daemon = _daemon(
             relay_gpus=[1],
             max_sessions_per_relay=1,
             max_inflight_chunks_per_relay=8,
@@ -2114,7 +2124,7 @@ class DaemonStateTest(unittest.TestCase):
         )
 
     def test_transfer_status_can_be_updated_explicitly(self) -> None:
-        daemon = TurboBusDaemon(relay_gpus=[1])
+        daemon = _daemon(relay_gpus=[1])
         register = daemon.register_session(target_gpu=0, requested_relays=[1])
         session_id = register.payload["session"]["session_id"]
 
@@ -2144,7 +2154,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(updated.payload["status"]["bytes_completed"], 32)
 
     def test_transfer_status_rejects_incomplete_complete_update(self) -> None:
-        daemon = TurboBusDaemon(relay_gpus=[1])
+        daemon = _daemon(relay_gpus=[1])
         register = daemon.register_session(target_gpu=0, requested_relays=[1])
         session_id = register.payload["session"]["session_id"]
 
@@ -2177,7 +2187,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(status.payload["status"]["bytes_completed"], 0)
 
     def test_transfer_status_rejects_terminal_state_rewrite(self) -> None:
-        daemon = TurboBusDaemon(relay_gpus=[1])
+        daemon = _daemon(relay_gpus=[1])
         register = daemon.register_session(target_gpu=0, requested_relays=[1])
         session_id = register.payload["session"]["session_id"]
 
@@ -2227,7 +2237,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(status.payload["status"]["error"], "worker failed")
 
     def test_releasing_reservation_does_not_rewrite_failed_transfer(self) -> None:
-        daemon = TurboBusDaemon(
+        daemon = _daemon(
             relay_gpus=[1],
             max_sessions_per_relay=1,
             max_inflight_chunks_per_relay=8,
@@ -2292,7 +2302,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(status.payload["status"]["error"], "worker failed")
 
     def test_plan_transfer_falls_back_direct_when_relay_quota_is_unavailable(self) -> None:
-        daemon = TurboBusDaemon(
+        daemon = _daemon(
             relay_gpus=[1],
             max_sessions_per_relay=1,
             max_inflight_chunks_per_relay=1,
@@ -2346,7 +2356,7 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(daemon.describe().payload["relay_quotas"][1]["active_chunks"], 0)
 
     def test_plan_transfer_rejects_unknown_session(self) -> None:
-        daemon = TurboBusDaemon(relay_gpus=[1])
+        daemon = _daemon(relay_gpus=[1])
 
         planned = daemon.handle_request(
             DaemonRequest(

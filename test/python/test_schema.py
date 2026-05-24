@@ -26,7 +26,7 @@ from turbobus.schema import (
     WorkerTransferAuthorization,
     WorkerTransferAuthorizationRequest,
 )
-from turbobus.daemon.topology import (
+from turbobus.topology import (
     DaemonResourceInventory,
     FabricLinkRecord,
     GpuInventoryRecord,

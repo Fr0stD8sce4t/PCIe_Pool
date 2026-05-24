@@ -20,7 +20,7 @@ from ..schema import (
     WorkerTransferAuthorization,
     WorkerTransferAuthorizationRequest,
 )
-from .topology import (
+from ..topology import (
     DaemonResourceInventory,
     FabricLinkRecord,
     GpuInventoryRecord,

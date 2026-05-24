@@ -15,12 +15,12 @@ from .client import CudaIpcDeviceBuffer, SharedPinnedCpuBufferAllocator
 from .client_transfer import make_worker_managed_transfer_client
 from .daemon import TurboBusDaemonClient
 from .daemon.server import TurboBusDaemon
-from .daemon.topology import (
+from .topology import (
     DaemonResourceInventory,
     FabricLinkRecord,
     GpuInventoryRecord,
     PciePathRecord,
-    StaticTopologyProvider,
+    TopologyProvider,
 )
 from .worker import WorkerServiceSocketClient, run_worker_helper_process
 
@@ -61,6 +61,14 @@ class WorkerManagedH2DRelayVerificationResult(WorkerManagedRelayVerificationResu
 @dataclass(frozen=True)
 class WorkerManagedD2HRelayVerificationResult(WorkerManagedRelayVerificationResult):
     pass
+
+
+class _VerificationTopologyProvider(TopologyProvider):
+    def __init__(self, inventory: DaemonResourceInventory) -> None:
+        self._inventory = inventory
+
+    def snapshot(self) -> DaemonResourceInventory:
+        return self._inventory
 
 
 def verify_worker_managed_h2d_relay(
@@ -487,7 +495,7 @@ def _build_verification_daemon(
         relay_gpus=[relay],
         max_sessions_per_relay=1,
         max_inflight_chunks_per_relay=int(max_inflight_chunks),
-        topology_provider=StaticTopologyProvider(
+        topology_provider=_VerificationTopologyProvider(
             DaemonResourceInventory(
                 gpus=(
                     GpuInventoryRecord(

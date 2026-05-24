@@ -33,13 +33,17 @@ creates the contracts needed for the rest of the system:
 
 ## Current
 
-Cut 3: Package Boundary Setup.
+Cut 4: Daemon-First Client API.
 
 Cut 1 is complete. The contract inventory is recorded in
 `docs/PHASE0_CONTRACT_INVENTORY.md`.
 
 Cut 2 is complete. The shared daemon-first schema objects now live in
 `turbobus/schema.py`, with contract tests under `test/python/unit/`.
+
+Cut 3 is complete. The package now exposes explicit `api`, `control`,
+`topology`, `scheduler`, and `data_plane` boundaries; synthetic topology lives
+under `test/python/fixtures/`.
 
 ## Phase 0 Code Cuts
 
@@ -75,7 +79,7 @@ Expected output:
 
 ### Cut 3: Package Boundary Setup
 
-Status: current.
+Status: complete.
 
 Introduce the new package layout:
 
@@ -98,6 +102,8 @@ Expected output:
 - test fixtures are separated from production topology code.
 
 ### Cut 4: Daemon-First Client API
+
+Status: current.
 
 - Add a public client API that submits TransferIntent.
 - Make receipt-oriented waiting the public completion path.

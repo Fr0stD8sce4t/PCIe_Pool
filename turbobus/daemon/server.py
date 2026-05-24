@@ -25,8 +25,8 @@ from .protocol import (
     WorkerTransferAuthorization,
     WorkerTransferAuthorizationRequest,
 )
-from .scheduler import DaemonScheduler, SchedulerDecision
-from .topology import StaticTopologyProvider, TopologyProvider
+from ..topology import TopologyProvider
+from ..scheduler import DaemonScheduler, SchedulerDecision
 
 
 _TERMINAL_TRANSFER_STATES = {
@@ -67,9 +67,7 @@ class TurboBusDaemon:
         self._system_cleanup_events: list[CleanupRequest] = []
         self._profile_cache: dict[str, dict] = {}
         self._scheduler = DaemonScheduler()
-        self._topology_provider = topology_provider or StaticTopologyProvider.from_relay_gpus(
-            relays
-        )
+        self._topology_provider = topology_provider
         self._session_timeout_seconds = max(0.0, float(session_timeout_seconds))
         self._profile_max_age_seconds = max(0.0, float(profile_max_age_seconds))
         self._relay_quotas = {
@@ -82,6 +80,8 @@ class TurboBusDaemon:
         }
 
     def get_inventory(self) -> DaemonResponse:
+        if self._topology_provider is None:
+            return _topology_unavailable_response()
         inventory = self._topology_provider.snapshot()
         return DaemonResponse(ok=True, payload={"inventory": inventory.as_dict()})
 
@@ -95,6 +95,8 @@ class TurboBusDaemon:
         with self._lock:
             self._reap_stale_sessions_locked(now)
             self._reap_expired_leases_locked(now)
+            if self._topology_provider is None:
+                return _topology_unavailable_response()
             inventory = self._topology_provider.snapshot()
             candidates = (
                 tuple(sorted(self._relay_quotas))
@@ -549,6 +551,8 @@ class TurboBusDaemon:
                 job_id=job_id,
                 session_id=session.session_id,
             )
+            if self._topology_provider is None:
+                return _topology_unavailable_response()
             plan_job_id = owner_job_id if owner_job_id is not None else job_id
             relay_eligibility = self._relay_eligibility_for_session_locked(session)
             planning_relays = tuple(
@@ -1480,6 +1484,13 @@ def reserve_socket(path: str) -> socket.socket:
     sock.bind(path)
     sock.listen()
     return sock
+
+
+def _topology_unavailable_response() -> DaemonResponse:
+    return DaemonResponse(
+        ok=False,
+        error="topology provider is required; synthetic topology is test fixture only",
+    )
 
 
 def _relay_ranges_from_plan(

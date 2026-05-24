@@ -15,9 +15,11 @@ from turbobus.daemon.protocol import (
     WorkerTransferAuthorizationRequest,
 )
 from turbobus.daemon.server import TurboBusDaemon
-from turbobus.daemon.topology import (
+from turbobus.topology import (
     DaemonResourceInventory,
     GpuInventoryRecord,
+)
+from fixtures.topology import (
     StaticTopologyProvider,
 )
 from turbobus.transfer import TransferRequest

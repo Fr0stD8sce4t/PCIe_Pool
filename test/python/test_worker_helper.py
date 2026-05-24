@@ -12,11 +12,13 @@ from turbobus.schema import (
 )
 from turbobus.client import SharedPinnedCpuBuffer, SharedPinnedCpuBufferAllocator
 from turbobus.daemon.server import TurboBusDaemon
-from turbobus.daemon.topology import (
+from turbobus.topology import (
     DaemonResourceInventory,
     FabricLinkRecord,
     GpuInventoryRecord,
     PciePathRecord,
+)
+from fixtures.topology import (
     StaticTopologyProvider,
 )
 from turbobus.worker import (

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from dataclasses import asdict, dataclass, field
 from typing import Iterable, Mapping
 
@@ -111,7 +110,7 @@ class DaemonResourceInventory:
     gpus: tuple[GpuInventoryRecord, ...] = field(default_factory=tuple)
     pcie_paths: tuple[PciePathRecord, ...] = field(default_factory=tuple)
     fabric_links: tuple[FabricLinkRecord, ...] = field(default_factory=tuple)
-    source: str = "static"
+    source: str = "discovered"
     discovered_at: float = 0.0
     metadata: Mapping[str, object] = field(default_factory=dict)
 
@@ -203,29 +202,6 @@ class TopologyProvider:
         raise NotImplementedError
 
 
-class StaticTopologyProvider(TopologyProvider):
-    def __init__(self, inventory: DaemonResourceInventory) -> None:
-        self._inventory = inventory
-
-    @classmethod
-    def from_relay_gpus(cls, relay_gpus: Iterable[int]) -> "StaticTopologyProvider":
-        relays = tuple(sorted({int(gpu) for gpu in relay_gpus}))
-        inventory = DaemonResourceInventory(
-            gpus=tuple(
-                GpuInventoryRecord(device_id=gpu, role="relay")
-                for gpu in relays
-            ),
-            pcie_paths=tuple(PciePathRecord(device_id=gpu) for gpu in relays),
-            source="configured",
-            discovered_at=time.time(),
-            metadata={"discovery": "static relay configuration"},
-        )
-        return cls(inventory)
-
-    def snapshot(self) -> DaemonResourceInventory:
-        return self._inventory
-
-
 def _has_enabled_fabric_link(
     inventory: DaemonResourceInventory,
     relay_device: int,
@@ -254,3 +230,12 @@ def _partition_candidates(
     kept = tuple(gpu for gpu in candidates if gpu in allowed)
     removed = tuple(gpu for gpu in candidates if gpu not in allowed)
     return kept, removed
+
+
+__all__ = [
+    "DaemonResourceInventory",
+    "FabricLinkRecord",
+    "GpuInventoryRecord",
+    "PciePathRecord",
+    "TopologyProvider",
+]
