@@ -194,6 +194,10 @@ transfer request objects:
   daemon-approved direct data path without launching a worker helper; relay and
   pool verifier modes still use the helper socket because they execute
   daemon-authorized relay chunks;
+- worker-managed direct fallback now selects the registered CUDA buffer device
+  before local host registration and native exact-plan submission. Direct H2D
+  and D2H fallback baselines can target nonzero GPUs without relying on the
+  process default CUDA context;
 - worker-managed direct fallback now checks that the daemon-issued direct plan
   targets the same CUDA device as the registered CUDA IPC buffer before local
   native execution. A mismatched direct-only plan is marked failed before host
@@ -956,6 +960,10 @@ phase:
      name the authorized reservation. Complete helper envelopes with an `ok`
      release response but no payload reservation id are rejected and cleaned up
      instead of being accepted as end-to-end completion.
+111. worker-managed direct fallback now selects the registered CUDA device
+     before local exact-plan execution. Nonzero-GPU H2D and D2H direct fallback
+     both bind to the buffer device before host registration and native
+     submission.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

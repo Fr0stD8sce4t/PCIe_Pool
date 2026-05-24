@@ -221,6 +221,9 @@ Completed current code cut:
   `python -m turbobus.verification --mode direct` now starts only the daemon
   and the direct data path; relay and pool modes still start the worker helper
   because they need daemon-authorized relay execution.
+- Select the registered target/source CUDA device before local direct fallback
+  host registration and native exact-plan submission, so direct H2D and D2H
+  baselines are not implicitly tied to GPU 0.
 - Bind daemon-issued direct fallback plans to the registered CUDA buffer
   device before native execution. A direct-only plan whose `target_device`
   does not match the local CUDA IPC source or destination is rejected before
@@ -449,6 +452,8 @@ Completed current code cut:
      fewer bytes than the daemon-requested transfer.
    - Reject daemon-issued direct fallback plan total-byte mismatches before
      local native execution.
+   - Select the registered CUDA device before local direct fallback host
+     registration and native exact-plan submission.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor

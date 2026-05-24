@@ -482,6 +482,7 @@ def _run_direct_plan(
         host_bytes=host_buffer.size_bytes,
         device_bytes=int(device_bytes),
     )
+    _set_cuda_device_for_direct_plan(backend, int(target_device))
     native_plan = backend.make_transfer_plan(plan_payload)
     runtime = backend.create_runtime(runtime_options)
     backend.initialize_runtime(runtime, int(target_device), [])
@@ -514,6 +515,12 @@ def _run_direct_plan(
         )
     finally:
         host_buffer.unregister_from_cuda()
+
+
+def _set_cuda_device_for_direct_plan(backend, target_device: int) -> None:
+    setter = getattr(backend, "set_device", None)
+    if callable(setter):
+        setter(int(target_device))
 
 
 def _direct_plan_completed_bytes(

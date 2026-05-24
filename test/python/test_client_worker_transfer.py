@@ -61,12 +61,16 @@ class FakeCudaBackend:
 
 class FakeDirectBackend(FakeCudaBackend):
     def __init__(self) -> None:
+        self.device_selections = []
         self.initialized = []
         self.fetches = []
         self.offloads = []
         self.registered = []
         self.unregistered = []
         self.completed_bytes = None
+
+    def set_device(self, device_index):
+        self.device_selections.append(int(device_index))
 
     def make_transfer_plan(self, plan):
         return plan
@@ -116,7 +120,7 @@ class FakeDirectBackend(FakeCudaBackend):
             if handle == "fetch-handle":
                 plan = self.fetches[-1][4]
             else:
-                plan = self.offloads[-1][5]
+                plan = self.offloads[-1][4]
             bytes_completed = int(plan["total_bytes"])
         return {"bytes": bytes_completed}
 
@@ -640,6 +644,7 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
         self.assertIsNone(result.worker_completion)
         self.assertEqual(result.plan["stats"]["resolved_mode"], "direct")
         self.assertEqual(executor.requests, [])
+        self.assertEqual(direct_backend.device_selections, [0])
         self.assertEqual(direct_backend.initialized, [(0, ())])
         self.assertEqual(len(direct_backend.fetches), 1)
         self.assertEqual(direct_backend.fetches[0][2], 4096)
@@ -653,6 +658,85 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
         profile = daemon.describe().payload
         self.assertEqual(profile["reservations"], {})
         self.assertEqual(profile["relay_quotas"][1]["active_chunks"], 0)
+
+    def test_worker_managed_direct_fallback_selects_nonzero_h2d_device(self) -> None:
+        daemon = daemon_with_relay_path(
+            max_inflight_chunks_per_relay=1,
+            target_gpu=2,
+        )
+        direct_backend = FakeDirectBackend()
+        transfer_client = make_worker_managed_transfer_client(
+            daemon,
+            target_gpu=2,
+            relay_gpus=[1],
+            worker_client=WorkerTransferClient(daemon, executor=CompleteExecutor()),
+            backend=direct_backend,
+        )
+        allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-client-worker-test")
+
+        with allocator.allocate("cpu-buffer", "job-1", 64) as source:
+            target = CudaIpcDeviceBuffer.from_device_pointer(
+                buffer_id="gpu-buffer",
+                job_id="job-1",
+                device_index=2,
+                size_bytes=64,
+                device_ptr=4096,
+                backend=FakeCudaBackend(),
+            )
+
+            result = transfer_client.fetch_shared_cpu_to_cuda_ipc(
+                source,
+                target,
+                ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 64},),
+                chunk_bytes=16,
+                mode="pool",
+            )
+
+        self.assertEqual(result.state, "complete")
+        self.assertEqual(result.plan["stats"]["resolved_mode"], "direct")
+        self.assertEqual(direct_backend.device_selections, [2])
+        self.assertEqual(direct_backend.initialized, [(2, ())])
+        self.assertEqual(len(direct_backend.fetches), 1)
+        self.assertEqual(direct_backend.offloads, [])
+
+    def test_worker_managed_direct_fallback_selects_nonzero_d2h_device(self) -> None:
+        daemon = daemon_with_relay_path(
+            max_inflight_chunks_per_relay=1,
+            target_gpu=2,
+        )
+        direct_backend = FakeDirectBackend()
+        transfer_client = make_worker_managed_transfer_client(
+            daemon,
+            target_gpu=2,
+            relay_gpus=[1],
+            worker_client=WorkerTransferClient(daemon, executor=CompleteExecutor()),
+            backend=direct_backend,
+        )
+        allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-client-worker-test")
+
+        source = CudaIpcDeviceBuffer.from_device_pointer(
+            buffer_id="gpu-buffer",
+            job_id="job-1",
+            device_index=2,
+            size_bytes=64,
+            device_ptr=4096,
+            backend=FakeCudaBackend(),
+        )
+        with allocator.allocate("cpu-buffer", "job-1", 64) as target:
+            result = transfer_client.offload_cuda_ipc_to_shared_cpu(
+                source,
+                target,
+                ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 64},),
+                chunk_bytes=16,
+                mode="pool",
+            )
+
+        self.assertEqual(result.state, "complete")
+        self.assertEqual(result.plan["stats"]["resolved_mode"], "direct")
+        self.assertEqual(direct_backend.device_selections, [2])
+        self.assertEqual(direct_backend.initialized, [(2, ())])
+        self.assertEqual(direct_backend.fetches, [])
+        self.assertEqual(len(direct_backend.offloads), 1)
 
     def test_worker_managed_direct_fallback_rejects_wrong_target_plan(self) -> None:
         class WrongTargetPlanDaemonClient:
@@ -1924,7 +2008,10 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
         self.assertIs(transfer_client.worker_client.resource_binder.backend, backend)
 
 
-def daemon_with_relay_path(max_inflight_chunks_per_relay: int = 8) -> TurboBusDaemon:
+def daemon_with_relay_path(
+    max_inflight_chunks_per_relay: int = 8,
+    target_gpu: int = 0,
+) -> TurboBusDaemon:
     daemon = TurboBusDaemon(
         relay_gpus=[1],
         max_sessions_per_relay=1,
@@ -1932,14 +2019,14 @@ def daemon_with_relay_path(max_inflight_chunks_per_relay: int = 8) -> TurboBusDa
         topology_provider=StaticTopologyProvider(
             DaemonResourceInventory(
                 gpus=(
-                    GpuInventoryRecord(device_id=0, role="target"),
+                    GpuInventoryRecord(device_id=int(target_gpu), role="target"),
                     GpuInventoryRecord(device_id=1, role="relay"),
                 ),
                 pcie_paths=(PciePathRecord(device_id=1),),
                 fabric_links=(
                     FabricLinkRecord(
                         src_device_id=1,
-                        dst_device_id=0,
+                        dst_device_id=int(target_gpu),
                         fabric="nvlink",
                         enabled=True,
                     ),
@@ -1949,16 +2036,16 @@ def daemon_with_relay_path(max_inflight_chunks_per_relay: int = 8) -> TurboBusDa
         ),
     )
     daemon.put_profile(
-        target_gpu=0,
+        target_gpu=int(target_gpu),
         relay_gpus=[1],
         profile={
-            "target_device": 0,
+            "target_device": int(target_gpu),
             "direct_h2d_bw_gbps": 1.0,
             "direct_d2h_bw_gbps": 1.0,
             "relays": [
                 {
                     "relay_device": 1,
-                    "target_device": 0,
+                    "target_device": int(target_gpu),
                     "h2d_bw_gbps": 8.0,
                     "d2h_bw_gbps": 7.0,
                     "p2p_bw_gbps": 40.0,
