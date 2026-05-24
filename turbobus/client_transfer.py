@@ -475,6 +475,8 @@ def _run_direct_plan(
         plan_payload,
         target_device=int(target_device),
         direction=direction,
+        host_bytes=host_buffer.size_bytes,
+        device_bytes=int(device_bytes),
     )
     native_plan = backend.make_transfer_plan(plan_payload)
     runtime = backend.create_runtime(runtime_options)
@@ -509,11 +511,19 @@ def _require_direct_plan_matches_target(
     *,
     target_device: int,
     direction: str,
+    host_bytes: int,
+    device_bytes: int,
 ) -> None:
     assignments = plan_payload.get("assignments", ()) or ()
     if not assignments:
         raise RuntimeError("daemon direct plan has no assignments")
     expected_direction = str(direction).lower()
+    if expected_direction == "h2d":
+        src_size = int(host_bytes)
+        dst_size = int(device_bytes)
+    else:
+        src_size = int(device_bytes)
+        dst_size = int(host_bytes)
     found_chunks = False
     for assignment in assignments:
         if not isinstance(assignment, Mapping):
@@ -529,7 +539,22 @@ def _require_direct_plan_matches_target(
             raise RuntimeError("daemon direct plan target does not match buffer device")
         if not bool(path.get("enabled", True)):
             raise RuntimeError("daemon direct plan path is disabled")
-        if assignment.get("chunks"):
+        for chunk in assignment.get("chunks", ()) or ():
+            if not isinstance(chunk, Mapping):
+                raise RuntimeError("daemon direct plan chunk must be a mapping")
+            src_offset = int(chunk["src_offset"])
+            dst_offset = int(chunk["dst_offset"])
+            bytes_count = int(chunk["bytes"])
+            if src_offset < 0 or dst_offset < 0:
+                raise RuntimeError(
+                    "daemon direct plan chunk offsets must be non-negative"
+                )
+            if bytes_count <= 0:
+                raise RuntimeError("daemon direct plan chunk bytes must be positive")
+            if src_offset + bytes_count > src_size:
+                raise RuntimeError("daemon direct plan chunk exceeds source buffer")
+            if dst_offset + bytes_count > dst_size:
+                raise RuntimeError("daemon direct plan chunk exceeds destination buffer")
             found_chunks = True
     if not found_chunks:
         raise RuntimeError("daemon direct plan has no chunk assignments")

@@ -225,6 +225,10 @@ Completed current code cut:
   device before native execution. A direct-only plan whose `target_device`
   does not match the local CUDA IPC source or destination is rejected before
   host registration or exact-plan submission.
+- Reject daemon-issued direct fallback chunks that exceed the registered
+  source or destination buffer before local native execution, so direct
+  fallback has the same pre-native bounds protection as the worker/helper
+  relay path.
 - Require worker-opened shared pinned CPU handles to carry explicit logical
   backing size metadata. `SharedPinnedCpuBuffer.open_from_registration` now
   rejects daemon-authorized shared CPU handles that omit
@@ -428,6 +432,8 @@ Completed current code cut:
      relay staging allocation.
    - Reject daemon-issued direct fallback plans whose target device does not
      match the registered CUDA IPC buffer before local native execution.
+   - Reject daemon-issued direct fallback plan chunks that exceed registered
+     source or destination buffers before local native execution.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor
