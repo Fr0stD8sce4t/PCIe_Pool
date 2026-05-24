@@ -1034,6 +1034,14 @@ def _require_daemon_worker_plan(request: WorkerTransferRequest) -> None:
 
     relay_gpu = int(request.data_plane.relay_gpu)
     direction = request.data_plane.direction
+    target_handle = (
+        request.data_plane.dst_handle
+        if direction == "h2d"
+        else request.data_plane.src_handle
+    )
+    if target_handle.device_index is None:
+        raise ValueError("worker target handle requires a CUDA device index")
+    target_device = int(target_handle.device_index)
     relay_ranges: list[dict[str, int]] = []
     plan_total_bytes = 0
     for assignment in assignments:
@@ -1047,6 +1055,8 @@ def _require_daemon_worker_plan(request: WorkerTransferRequest) -> None:
             raise ValueError("daemon plan path must be direct or relay")
         if str(path.get("direction", "")).lower() != direction:
             raise ValueError("daemon plan direction does not match worker request")
+        if int(path.get("target_device", target_device)) != target_device:
+            raise ValueError("daemon plan target does not match worker device")
         if path_kind == "direct":
             chunks = assignment.get("chunks", ()) or ()
         else:

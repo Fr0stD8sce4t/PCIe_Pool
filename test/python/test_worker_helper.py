@@ -641,6 +641,24 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(staging_pool.describe(), {"active_slots": {}})
         self.assertEqual(daemon_client.cleanup_requests[0]["target_id"], "lease-1")
 
+    def test_worker_client_rejects_daemon_plan_target_mismatch_before_staging(
+        self,
+    ) -> None:
+        payload = authorization_payload()
+        payload["authorization"]["plan"]["assignments"][0]["path"]["target_device"] = 2
+        daemon_client = FakeDaemonClient(DaemonResponse(ok=True, payload=payload))
+        staging_pool = WorkerStagingPool()
+        client = WorkerTransferClient(daemon_client, staging_pool=staging_pool)
+
+        lifecycle = client.submit_report_cleanup_lifecycle(authorization_request())
+
+        self.assertEqual(lifecycle.final_state, "authorization_failed")
+        self.assertIn("target", lifecycle.error)
+        self.assertIsNone(lifecycle.worker_request)
+        self.assertIsNone(lifecycle.staging_slot)
+        self.assertEqual(staging_pool.describe(), {"active_slots": {}})
+        self.assertEqual(daemon_client.cleanup_requests[0]["target_id"], "lease-1")
+
     def test_worker_client_rejects_handle_mismatch_before_staging(self) -> None:
         payload = authorization_payload()
         payload["authorization"]["src_buffer"] = dict(payload["authorization"]["dst_buffer"])
@@ -1205,6 +1223,9 @@ class WorkerHelperTest(unittest.TestCase):
         with allocator.allocate("cpu-buffer", "job-1", 64) as source_buffer:
             payload = authorization_payload_for_shared_cpu(source_buffer)
             payload["authorization"]["dst_buffer"]["device_index"] = 2
+            payload["authorization"]["plan"]["assignments"][0]["path"][
+                "target_device"
+            ] = 2
             daemon_client = FakeDaemonClient(
                 DaemonResponse(ok=True, payload=payload)
             )

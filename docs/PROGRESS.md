@@ -907,6 +907,10 @@ phase:
      worker-local relay staging allocation. Malformed exact plans now clean the
      daemon reservation through the authorization-failure path instead of
      reaching resource binding or CUDA execution.
+104. worker authorization now rejects daemon plans whose `target_device` does
+     not match the authorized CUDA IPC source or destination handle before
+     worker-local relay staging allocation. The helper path now binds the
+     exact plan to the daemon-approved GPU buffer before opening resources.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real

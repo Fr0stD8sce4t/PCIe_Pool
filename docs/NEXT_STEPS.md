@@ -337,6 +337,9 @@ Completed current code cut:
   before worker-local relay staging is allocated, so a bad exact plan is
   cleaned up through the authorization-failure path instead of reaching the
   data plane.
+- Reject daemon plans whose target device does not match the authorized CUDA
+  IPC source or destination handle before staging allocation, keeping worker
+  execution tied to the daemon-approved GPU buffer.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.
@@ -411,6 +414,8 @@ Completed current code cut:
      and CUDA IPC close to the daemon-authorized CUDA device in the worker
      resource lifecycle.
    - Reject daemon-plan total byte mismatches during worker authorization
+     before relay staging allocation.
+   - Reject daemon-plan target-device mismatches during worker authorization
      before relay staging allocation.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
