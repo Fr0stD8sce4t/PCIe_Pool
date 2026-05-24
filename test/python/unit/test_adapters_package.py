@@ -11,6 +11,7 @@ from turbobus import vllm_connector as root_vllm_connector
 from turbobus import vllm_integration as root_vllm_integration
 from turbobus import vllm_kv_connector as root_vllm_kv_connector
 from turbobus.adapters import (
+    AdapterTransferContext,
     FrameworkAdapter,
     InferenceKVSlotAdapter,
     ModelWeightLoader,
@@ -22,6 +23,7 @@ from turbobus.adapters import (
     VllmTurboBusConnector,
     VllmTurboBusIntegration,
 )
+from turbobus.offload_store import AdapterTransferContext as StoreAdapterTransferContext
 from turbobus.adapters import inference as adapter_inference
 from turbobus.adapters import model_loading as adapter_model_loading
 from turbobus.adapters import training_offload as adapter_training_offload
@@ -85,6 +87,7 @@ class AdaptersPackageTest(unittest.TestCase):
             root_vllm_kv_connector.TurboBusConnectorConfig,
         )
         self.assertIs(TurboBusSavedPrefix, root_vllm_kv_connector.TurboBusSavedPrefix)
+        self.assertIs(AdapterTransferContext, StoreAdapterTransferContext)
         self.assertNotIn("ModelWeightLoader", turbobus.__all__)
         self.assertNotIn("FrameworkAdapter", turbobus.__all__)
         self.assertIsNotNone(FrameworkAdapter)

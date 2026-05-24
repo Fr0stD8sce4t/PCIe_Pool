@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
-from types import SimpleNamespace
 import unittest
 
 from turbobus.inference import InferenceKVSlotAdapter, make_contiguous_kv_slots
-from turbobus.offload_store import OffloadBatch, TransferStats
+from turbobus.offload_store import AdapterTransferContext, OffloadBatch, TransferStats
+from turbobus.schema import TransferIntent, TransferReceipt, TransferStatusState, WorkloadKind
 from turbobus.vllm import (
     VllmKVGroup,
     VllmKVSlotAdapter,
@@ -41,125 +40,88 @@ class FakeTensor:
         return self._stride[dim]
 
 
-class FakeHandle:
-    def __init__(self, events=None) -> None:
-        self.wait_calls = 0
-        self.events = events
-        self.stats = None
-
-    def wait(self) -> None:
-        self.wait_calls += 1
-        if self.events is not None:
-            self.events.append("wait")
-
-
-class FakeRuntime:
-    target_gpu = 6
-
+class FakeClient:
     def __init__(self) -> None:
-        self.calls = []
-        self.events = []
-        self.options = SimpleNamespace(chunk_bytes=32)
-        self.batch_calls = []
+        self.submitted: list[TransferIntent] = []
+        self.waited: list[tuple[str, float | None]] = []
 
-    @contextmanager
-    def batch_transfer_mode(self, bytes, direction, range_count=None):
-        self.batch_calls.append((bytes, direction, range_count))
-        yield SimpleNamespace(resolved_mode="direct")
+    def submit_transfer_intent(self, intent: TransferIntent) -> TransferReceipt:
+        self.submitted.append(intent)
+        return make_receipt(intent, receipt_id=f"submitted-{intent.intent_id}")
 
-    def fetch_ranges_to_gpu(self, cpu_tensor, gpu_tensor, ranges):
-        handle = FakeHandle(self.events)
-        handle.stats = {
-            "bytes": sum(item["bytes"] for item in ranges),
-            "direct_chunks": len(ranges),
-        }
-        self.calls.append(("prefetch_ranges", cpu_tensor, gpu_tensor, ranges, handle))
-        self.events.append("submit_prefetch")
-        return handle
-
-    def offload_ranges_to_cpu(self, gpu_tensor, cpu_tensor, ranges):
-        handle = FakeHandle(self.events)
-        handle.stats = {
-            "bytes": sum(item["bytes"] for item in ranges),
-            "relay_chunks": len(ranges),
-        }
-        self.calls.append(("evict_ranges", gpu_tensor, cpu_tensor, ranges, handle))
-        self.events.append("submit_evict")
-        return handle
+    def wait_transfer_receipt(
+        self,
+        intent_id: str,
+        timeout_seconds: float | None = None,
+    ) -> TransferReceipt:
+        self.waited.append((str(intent_id), timeout_seconds))
+        intent = next(item for item in self.submitted if item.intent_id == intent_id)
+        return make_receipt(intent, receipt_id=f"receipt-{intent_id}")
 
 
 class InferenceKVSlotAdapterTest(unittest.TestCase):
     def test_restore_and_save_use_registered_ranges(self) -> None:
-        runtime = FakeRuntime()
+        client = FakeClient()
         cpu = FakeTensor(128)
         gpu = object()
-        adapter = InferenceKVSlotAdapter(runtime, cpu, gpu)
+        adapter = InferenceKVSlotAdapter(client, make_context(), cpu, gpu)
         slots = make_contiguous_kv_slots("prefix", 2, 32)
 
         adapter.register_slots(slots)
         restore_handles = adapter.restore_prefix(["prefix0", "prefix1"])
         save_handles = adapter.save_prefix(["prefix0", "prefix1"])
 
-        self.assertEqual(runtime.calls[0][0], "prefetch_ranges")
+        self.assertEqual([intent.direction for intent in client.submitted], ["h2d", "d2h"])
         self.assertEqual(
-            runtime.calls[0][3],
-            [
+            client.submitted[0].ranges,
+            (
                 {"src_offset": 0, "dst_offset": 0, "bytes": 32},
                 {"src_offset": 32, "dst_offset": 32, "bytes": 32},
-            ],
+            ),
         )
-        self.assertEqual(runtime.calls[1][0], "evict_ranges")
         self.assertEqual(
-            runtime.calls[1][3],
-            [
+            client.submitted[1].ranges,
+            (
                 {"src_offset": 0, "dst_offset": 0, "bytes": 32},
                 {"src_offset": 32, "dst_offset": 32, "bytes": 32},
-            ],
+            ),
         )
-        self.assertEqual(runtime.calls[0][4].wait_calls, 1)
-        self.assertEqual(runtime.calls[1][4].wait_calls, 1)
-        self.assertEqual(len(restore_handles), 2)
-        self.assertEqual(len(save_handles), 2)
+        self.assertEqual([handle.wait_calls for handle in restore_handles], [1, 1])
+        self.assertEqual([handle.wait_calls for handle in save_handles], [1, 1])
         self.assertEqual(adapter.block_ids(), [0, 1])
 
     def test_submit_and_wait_can_be_called_separately(self) -> None:
-        runtime = FakeRuntime()
-        cpu = FakeTensor(128)
-        gpu = object()
-        adapter = InferenceKVSlotAdapter(runtime, cpu, gpu)
+        client = FakeClient()
+        adapter = InferenceKVSlotAdapter(client, make_context(), FakeTensor(128), object())
         adapter.register_slots(make_contiguous_kv_slots("prefix", 2, 32))
 
         names, handles = adapter.submit_restore_prefix(["prefix0", "prefix1"])
 
         self.assertEqual(names, ["prefix0", "prefix1"])
-        self.assertEqual(runtime.events, ["submit_prefetch"])
-        self.assertEqual(runtime.calls[0][4].wait_calls, 0)
+        self.assertEqual(len(client.submitted), 1)
+        self.assertEqual(client.waited, [])
         adapter.wait_prefix(names)
-        self.assertEqual(runtime.calls[0][4].wait_calls, 1)
+        self.assertEqual(client.waited, [(client.submitted[0].intent_id, 2.5)])
+        self.assertEqual(handles[0].wait_calls, 1)
         self.assertEqual(len(handles), 2)
 
     def test_transfer_stats_reports_last_prefix_transfer(self) -> None:
-        runtime = FakeRuntime()
-        cpu = FakeTensor(128)
-        gpu = object()
-        adapter = InferenceKVSlotAdapter(runtime, cpu, gpu)
+        adapter = InferenceKVSlotAdapter(FakeClient(), make_context(), FakeTensor(128), object())
         adapter.register_slots(make_contiguous_kv_slots("prefix", 2, 32))
 
         adapter.restore_prefix(["prefix0", "prefix1"])
 
         self.assertEqual(adapter.transfer_stats(["prefix0", "prefix1"]).bytes, 64)
-        self.assertEqual(adapter.transfer_stats(["prefix0", "prefix1"]).direct_chunks, 2)
+        self.assertEqual(adapter.transfer_stats(["prefix0", "prefix1"]).direct_chunks, 1)
+        self.assertEqual(adapter.transfer_stats(["prefix0", "prefix1"]).relay_chunks, 1)
 
     def test_restore_and_save_batches_return_batch_objects(self) -> None:
-        runtime = FakeRuntime()
-        cpu = FakeTensor(128)
-        gpu = object()
-        adapter = InferenceKVSlotAdapter(runtime, cpu, gpu)
+        adapter = InferenceKVSlotAdapter(FakeClient(), make_context(), FakeTensor(128), object())
         adapter.register_slots(make_contiguous_kv_slots("prefix", 2, 32))
 
         restore_batch = adapter.restore_batch(["prefix0", "prefix1"])
         restore_batch.wait()
-        self.assertEqual(restore_batch.transfer_stats(), TransferStats(bytes=64, direct_chunks=2))
+        self.assertEqual(restore_batch.transfer_stats(), TransferStats(bytes=64, direct_chunks=1, relay_chunks=1))
         save_batch = adapter.save_batch(["prefix0", "prefix1"])
         save_batch.wait()
 
@@ -167,7 +129,7 @@ class InferenceKVSlotAdapterTest(unittest.TestCase):
         self.assertIsInstance(save_batch, OffloadBatch)
         self.assertEqual(restore_batch.operation, "restore")
         self.assertEqual(save_batch.operation, "save")
-        self.assertEqual(save_batch.transfer_stats(), TransferStats(bytes=64, relay_chunks=2))
+        self.assertEqual(save_batch.transfer_stats(), TransferStats(bytes=64, direct_chunks=1, relay_chunks=1))
 
 
 class VllmKVSlotAdapterTest(unittest.TestCase):
@@ -238,60 +200,60 @@ class VllmKVSlotAdapterTest(unittest.TestCase):
         self.assertEqual(refs[1].byte_count, 8)
 
     def test_restore_groups_refs_by_layer(self) -> None:
-        runtime = FakeRuntime()
+        client = FakeClient()
         group0 = VllmKVGroup(0, FakeTensor(128), object(), block_bytes=32)
         group1 = VllmKVGroup(1, FakeTensor(128), object(), block_bytes=32)
-        adapter = VllmKVSlotAdapter(runtime, [group0, group1])
+        adapter = VllmKVSlotAdapter(client, make_context(), [group0, group1])
         refs = make_vllm_layer_block_refs_from_ids("req0", [1], layer_count=2)
 
         adapter.restore_prefix(refs)
         adapter.save_prefix(refs)
         adapter.restore_prefix(refs)
 
-        self.assertEqual(len(runtime.calls), 6)
-        self.assertEqual(runtime.batch_calls[0], (64, "h2d", 2))
-        self.assertEqual(runtime.batch_calls[1], (64, "d2h", 2))
-        self.assertEqual(runtime.batch_calls[2], (64, "h2d", 2))
-        self.assertEqual(runtime.calls[0][0], "prefetch_ranges")
-        self.assertEqual(runtime.calls[0][3], [{"src_offset": 0, "dst_offset": 32, "bytes": 32}])
-        self.assertEqual(runtime.calls[1][3], [{"src_offset": 0, "dst_offset": 32, "bytes": 32}])
-        self.assertEqual(runtime.calls[2][0], "evict_ranges")
-        self.assertEqual(runtime.calls[4][0], "prefetch_ranges")
+        self.assertEqual(len(client.submitted), 6)
+        self.assertEqual([intent.direction for intent in client.submitted], ["h2d", "h2d", "d2h", "d2h", "h2d", "h2d"])
+        self.assertEqual(client.submitted[0].ranges, ({"src_offset": 0, "dst_offset": 32, "bytes": 32},))
+        self.assertEqual(client.submitted[1].ranges, ({"src_offset": 0, "dst_offset": 32, "bytes": 32},))
+        self.assertEqual(client.submitted[0].metadata["group_id"], 0)
+        self.assertEqual(client.submitted[1].metadata["group_id"], 1)
 
-    def test_restore_batch_mode_uses_total_bytes_across_layers(self) -> None:
-        runtime = FakeRuntime()
-        runtime.options.chunk_bytes = 128
+    def test_restore_uses_total_chunk_metadata_across_layers(self) -> None:
+        client = FakeClient()
         groups = [
             VllmKVGroup(index, FakeTensor(1024), object(), block_bytes=128)
             for index in range(4)
         ]
-        adapter = VllmKVSlotAdapter(runtime, groups)
+        adapter = VllmKVSlotAdapter(client, make_context(metadata={"chunk_bytes": 128}), groups)
         refs = make_vllm_layer_block_refs_from_ids("req0", [1, 2], layer_count=4)
 
         adapter.restore_prefix(refs)
 
-        self.assertEqual(runtime.batch_calls, [(1024, "h2d", 8)])
-        self.assertEqual(len(runtime.calls), 4)
-        self.assertTrue(all(call[0] == "prefetch_ranges" for call in runtime.calls))
+        self.assertEqual(len(client.submitted), 4)
+        self.assertTrue(all(intent.direction == "h2d" for intent in client.submitted))
+        self.assertTrue(all(intent.metadata["chunk_bytes"] == 128 for intent in client.submitted))
 
     def test_restore_submits_all_layers_before_waiting(self) -> None:
-        runtime = FakeRuntime()
+        client = FakeClient()
         group0 = VllmKVGroup(0, FakeTensor(128), object(), block_bytes=32)
         group1 = VllmKVGroup(1, FakeTensor(128), object(), block_bytes=32)
-        adapter = VllmKVSlotAdapter(runtime, [group0, group1])
+        adapter = VllmKVSlotAdapter(client, make_context(), [group0, group1])
         refs = make_vllm_layer_block_refs_from_ids("req0", [1], layer_count=2)
 
         adapter.restore_prefix(refs)
 
-        self.assertEqual(runtime.events, ["submit_prefetch", "submit_prefetch", "wait", "wait"])
-        self.assertEqual(runtime.calls[0][4].wait_calls, 1)
-        self.assertEqual(runtime.calls[1][4].wait_calls, 1)
+        self.assertEqual(len(client.submitted), 2)
+        self.assertEqual(
+            client.waited,
+            [
+                (client.submitted[0].intent_id, 2.5),
+                (client.submitted[1].intent_id, 2.5),
+            ],
+        )
 
     def test_transfer_stats_sums_groups(self) -> None:
-        runtime = FakeRuntime()
         group0 = VllmKVGroup(0, FakeTensor(128), object(), block_bytes=32)
         group1 = VllmKVGroup(1, FakeTensor(128), object(), block_bytes=32)
-        adapter = VllmKVSlotAdapter(runtime, [group0, group1])
+        adapter = VllmKVSlotAdapter(FakeClient(), make_context(), [group0, group1])
         refs = make_vllm_layer_block_refs_from_ids("req0", [1], layer_count=2)
 
         adapter.restore_prefix(refs)
@@ -299,6 +261,43 @@ class VllmKVSlotAdapterTest(unittest.TestCase):
 
         self.assertEqual(stats.bytes, 64)
         self.assertEqual(stats.direct_chunks, 2)
+        self.assertEqual(stats.relay_chunks, 2)
+
+
+def make_context(**overrides) -> AdapterTransferContext:
+    values = {
+        "job_id": "job-1",
+        "session_id": "session-1",
+        "cpu_buffer_id": "cpu-buffer",
+        "gpu_buffer_id": "gpu-buffer",
+        "workload_kind": WorkloadKind.KV_CACHE,
+        "metadata": {"chunk_bytes": 32},
+        "intent_prefix": "kv",
+        "wait_timeout_seconds": 2.5,
+    }
+    values.update(overrides)
+    return AdapterTransferContext(**values)
+
+
+def make_receipt(intent: TransferIntent, *, receipt_id: str) -> TransferReceipt:
+    direct_bytes = intent.total_bytes // 2
+    relay_bytes = intent.total_bytes - direct_bytes
+    return TransferReceipt(
+        receipt_id=receipt_id,
+        ticket_id=f"ticket-{intent.intent_id}",
+        intent_id=intent.intent_id,
+        decision_id=f"decision-{intent.intent_id}",
+        topology_snapshot_id="topology-1",
+        job_id=intent.job_id,
+        session_id=intent.session_id,
+        state=TransferStatusState.COMPLETE,
+        bytes_total=intent.total_bytes,
+        bytes_completed=intent.total_bytes,
+        path_stats=(
+            {"kind": "direct", "bytes": direct_bytes, "chunk_count": 1},
+            {"kind": "relay", "bytes": relay_bytes, "chunk_count": 1},
+        ),
+    )
 
 
 if __name__ == "__main__":

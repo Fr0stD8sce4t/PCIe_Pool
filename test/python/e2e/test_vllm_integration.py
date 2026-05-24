@@ -3,6 +3,8 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
+from turbobus.offload_store import AdapterTransferContext
+from turbobus.schema import TransferIntent, TransferReceipt, TransferStatusState, WorkloadKind
 from turbobus.vllm_integration import VllmTurboBusIntegration, extract_vllm_block_ids
 
 
@@ -19,24 +21,23 @@ class FakeTensor:
         return self._element_size
 
 
-class FakeHandle:
-    def wait(self) -> None:
-        pass
-
-
-class FakeRuntime:
-    target_gpu = 6
-
+class FakeClient:
     def __init__(self) -> None:
-        self.calls = []
+        self.submitted: list[TransferIntent] = []
+        self.waited: list[tuple[str, float | None]] = []
 
-    def fetch_ranges_to_gpu(self, cpu_tensor, gpu_tensor, ranges):
-        self.calls.append(("restore", cpu_tensor, gpu_tensor, ranges))
-        return FakeHandle()
+    def submit_transfer_intent(self, intent: TransferIntent) -> TransferReceipt:
+        self.submitted.append(intent)
+        return make_receipt(intent, receipt_id=f"submitted-{intent.intent_id}")
 
-    def offload_ranges_to_cpu(self, gpu_tensor, cpu_tensor, ranges):
-        self.calls.append(("save", gpu_tensor, cpu_tensor, ranges))
-        return FakeHandle()
+    def wait_transfer_receipt(
+        self,
+        intent_id: str,
+        timeout_seconds: float | None = None,
+    ) -> TransferReceipt:
+        self.waited.append((str(intent_id), timeout_seconds))
+        intent = next(item for item in self.submitted if item.intent_id == intent_id)
+        return make_receipt(intent, receipt_id=f"receipt-{intent_id}")
 
 
 class FakeRequest:
@@ -81,9 +82,21 @@ class VllmTurboBusIntegrationTest(unittest.TestCase):
         self.assertEqual(extract_vllm_block_ids(((1, 2), (3, None))), ((1, 2), (3,)))
         self.assertEqual(extract_vllm_block_ids(SimpleNamespace(block_ids=[4, 5])), ((4, 5),))
 
-    def test_hooks_capture_real_runner_cache_and_allocated_blocks(self) -> None:
-        runtime = FakeRuntime()
-        integration = VllmTurboBusIntegration(runtime, cpu_backings=[object(), object()])
+    def test_hooks_capture_runner_cache_and_submit_restore_intents(self) -> None:
+        client = FakeClient()
+        integration = VllmTurboBusIntegration(
+            client,
+            AdapterTransferContext(
+                job_id="job-1",
+                session_id="session-1",
+                cpu_buffer_id="cpu-buffer",
+                gpu_buffer_id="gpu-buffer",
+                workload_kind=WorkloadKind.KV_CACHE,
+                intent_prefix="vllm",
+                wait_timeout_seconds=2.5,
+            ),
+            cpu_backings=[object(), object()],
+        )
         callbacks = []
         integration.set_allocation_callback(
             lambda integration, request, blocks, event: callbacks.append(event)
@@ -104,17 +117,45 @@ class VllmTurboBusIntegrationTest(unittest.TestCase):
 
         integration.restore_request_prefix("req0")
 
-        self.assertEqual(len(runtime.calls), 2)
-        self.assertEqual(runtime.calls[0][0], "restore")
+        self.assertEqual(len(client.submitted), 2)
+        self.assertTrue(all(intent.direction == "h2d" for intent in client.submitted))
         self.assertEqual(
-            runtime.calls[0][3],
-            [
+            client.submitted[0].ranges,
+            (
                 {"src_offset": 0, "dst_offset": 32, "bytes": 32},
                 {"src_offset": 32, "dst_offset": 96, "bytes": 32},
                 {"src_offset": 64, "dst_offset": 160, "bytes": 32},
+            ),
+        )
+        self.assertEqual(client.submitted[1].ranges, client.submitted[0].ranges)
+        self.assertEqual(
+            client.waited,
+            [
+                (client.submitted[0].intent_id, 2.5),
+                (client.submitted[1].intent_id, 2.5),
             ],
         )
-        self.assertEqual(runtime.calls[1][3], runtime.calls[0][3])
+
+
+def make_receipt(intent: TransferIntent, *, receipt_id: str) -> TransferReceipt:
+    direct_bytes = intent.total_bytes // 2
+    relay_bytes = intent.total_bytes - direct_bytes
+    return TransferReceipt(
+        receipt_id=receipt_id,
+        ticket_id=f"ticket-{intent.intent_id}",
+        intent_id=intent.intent_id,
+        decision_id=f"decision-{intent.intent_id}",
+        topology_snapshot_id="topology-1",
+        job_id=intent.job_id,
+        session_id=intent.session_id,
+        state=TransferStatusState.COMPLETE,
+        bytes_total=intent.total_bytes,
+        bytes_completed=intent.total_bytes,
+        path_stats=(
+            {"kind": "direct", "bytes": direct_bytes, "chunk_count": 1},
+            {"kind": "relay", "bytes": relay_bytes, "chunk_count": 1},
+        ),
+    )
 
 
 if __name__ == "__main__":

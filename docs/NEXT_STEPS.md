@@ -33,7 +33,7 @@ creates the contracts needed for the rest of the system:
 
 ## Current
 
-Cut 7: Benchmarks And Examples Rewrite.
+Cut 8: Adapter Thinning.
 
 Cut 1 is complete. The contract inventory is recorded in
 `docs/PHASE0_CONTRACT_INVENTORY.md`.
@@ -83,6 +83,16 @@ trace ids and path split fields. `examples/torch_tensor_fetch.py` now
 demonstrates public `TransferIntent` submission and receipt reporting.
 
 Current cut: Cut 8, Adapter Thinning.
+
+Cut 8 Substage 8.1 is complete. The shared adapter transfer path now uses
+`AdapterTransferContext` to describe job, session, buffer, workload, and
+receipt-wait settings. `OffloadStore` submits `TransferIntent` objects through
+the client API, waits for `TransferReceipt` objects, and derives stats and
+state transitions from receipts. The model-loading, training-offload,
+inference KV, vLLM slot, and vLLM integration adapters now use this shared
+intent/receipt path instead of calling Runtime-owned transfer methods.
+
+Current substage: Cut 8 Substage 8.2, vLLM KV connector rewrite.
 
 ## Phase 0 Code Cuts
 
@@ -242,10 +252,48 @@ Expected output:
 
 Status: current.
 
-- Update vLLM, model loading, and training adapters to submit TransferIntent.
-- Make adapters consume TransferReceipt for stats and state transitions.
-- Keep framework-specific mapping logic in adapters and physical path policy in
-  scheduler.
+Cut 8 is split so adapter work does not drift back into Runtime-owned physical
+path selection.
+
+Substage 8.1: shared adapter intent and receipt path.
+
+Status: complete.
+
+- Add an adapter transfer context for job id, session id, registered CPU/GPU
+  buffer ids, workload kind, priority, metadata, and receipt wait timeout.
+- Make the shared named-block adapter layer submit `TransferIntent` through
+  the client API.
+- Make adapter handles wait for `TransferReceipt` and derive bytes, chunks,
+  block state, and failure state from receipts.
+- Rewrite model-loading, training-offload, inference KV, vLLM slot, and vLLM
+  integration adapter tests around intent construction and receipt handling.
+
+Substage 8.2: vLLM KV connector daemon-first rewrite.
+
+Status: current.
+
+- Remove `Runtime`, `RuntimeOptions`, target GPU, relay GPU, transfer mode, and
+  min-pool-byte configuration from `vllm_kv_connector`.
+- Make connector configuration accept daemon socket/session/job/buffer
+  identity and registered backing metadata.
+- Route save/restore through `AdapterTransferContext`, `TurboBusClient`, and
+  `VllmKVSlotAdapter`.
+- Replace connector events that report requested physical mode with receipt
+  ids, decision ids, topology snapshot ids, ticket ids, bytes, path split, and
+  fallback reason.
+- Update connector, sweep, and example tests so they no longer encode
+  application-side direct/relay/pool choices.
+
+Substage 8.3: adapter exports and old Runtime test cleanup.
+
+Status: pending.
+
+- Remove or demote adapter-facing tests that only protect the old Runtime
+  direct/relay/pool route-selection surface.
+- Keep only adapter tests that protect framework mapping, intent fields,
+  receipt handling, and public package boundaries.
+- Confirm no adapter module imports `Runtime` or calls Runtime transfer
+  methods.
 
 Expected output:
 

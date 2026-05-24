@@ -4,7 +4,7 @@ import functools
 from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
-from ..runtime import Runtime
+from ..offload_store import AdapterTransferContext, TransferIntentClient
 from .vllm import (
     VllmKVBlockRef,
     VllmKVSlotAdapter,
@@ -89,10 +89,12 @@ class VllmTurboBusIntegration:
 
     def __init__(
         self,
-        runtime: Runtime,
+        client: TransferIntentClient,
+        transfer_context: AdapterTransferContext,
         cpu_backings: Iterable | None = None,
     ) -> None:
-        self.runtime = runtime
+        self.client = client
+        self.transfer_context = transfer_context
         self.state = VllmIntegrationState()
         self._cpu_backings = list(cpu_backings) if cpu_backings is not None else None
         self._allocation_callback: AllocationCallback | None = None
@@ -241,7 +243,11 @@ class VllmTurboBusIntegration:
             self._cpu_backings,
             self.state.kv_caches,
         )
-        self.state.adapter = VllmKVSlotAdapter(self.runtime, groups)
+        self.state.adapter = VllmKVSlotAdapter(
+            self.client,
+            self.transfer_context,
+            groups,
+        )
 
     def require_adapter(self) -> VllmKVSlotAdapter:
         if self.state.adapter is None:

@@ -2,12 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Iterable
+from typing import Iterable, Mapping, Protocol
+import uuid
 
-try:
-    import torch
-except ImportError:  # pragma: no cover - import-time convenience only
-    torch = None
+from .schema import TransferIntent, TransferReceipt, TransferStatusState, WorkloadKind
 
 
 class BlockState(str, Enum):
@@ -30,6 +28,101 @@ class TransferStats:
             "direct_chunks": self.direct_chunks,
             "relay_chunks": self.relay_chunks,
         }
+
+
+class TransferIntentClient(Protocol):
+    def submit_transfer_intent(self, intent: TransferIntent) -> TransferReceipt:
+        ...
+
+    def wait_transfer_receipt(
+        self,
+        intent_id: str,
+        timeout_seconds: float | None = None,
+    ) -> TransferReceipt:
+        ...
+
+
+@dataclass(frozen=True)
+class AdapterTransferContext:
+    job_id: str
+    session_id: str
+    cpu_buffer_id: str
+    gpu_buffer_id: str
+    workload_kind: WorkloadKind | str = WorkloadKind.GENERIC
+    priority: int = 0
+    policy_hints: Mapping[str, object] = field(default_factory=dict)
+    metadata: Mapping[str, object] = field(default_factory=dict)
+    intent_prefix: str | None = None
+    wait_timeout_seconds: float | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "job_id", _require_non_empty(self.job_id, "job_id"))
+        object.__setattr__(
+            self,
+            "session_id",
+            _require_non_empty(self.session_id, "session_id"),
+        )
+        object.__setattr__(
+            self,
+            "cpu_buffer_id",
+            _require_non_empty(self.cpu_buffer_id, "cpu_buffer_id"),
+        )
+        object.__setattr__(
+            self,
+            "gpu_buffer_id",
+            _require_non_empty(self.gpu_buffer_id, "gpu_buffer_id"),
+        )
+        object.__setattr__(self, "workload_kind", WorkloadKind(self.workload_kind))
+        object.__setattr__(self, "priority", int(self.priority))
+        object.__setattr__(
+            self,
+            "policy_hints",
+            _validate_policy_hints_no_physical(self.policy_hints),
+        )
+        object.__setattr__(self, "metadata", dict(self.metadata))
+        prefix = self.intent_prefix or f"adapter-{uuid.uuid4()}"
+        object.__setattr__(
+            self,
+            "intent_prefix",
+            _require_non_empty(prefix, "intent_prefix"),
+        )
+        if self.wait_timeout_seconds is not None:
+            timeout = float(self.wait_timeout_seconds)
+            if timeout < 0:
+                raise ValueError("wait_timeout_seconds must be non-negative")
+            object.__setattr__(self, "wait_timeout_seconds", timeout)
+
+
+@dataclass
+class ReceiptTransferHandle:
+    client: TransferIntentClient
+    intent: TransferIntent
+    receipt: TransferReceipt
+    wait_timeout_seconds: float | None = None
+    wait_calls: int = 0
+    _waited: bool = field(default=False, init=False, repr=False)
+
+    @property
+    def stats(self) -> TransferStats:
+        return transfer_stats_from_receipt(self.receipt)
+
+    def wait(self) -> TransferReceipt:
+        if self._waited:
+            return self.receipt
+        self.receipt = self.client.wait_transfer_receipt(
+            self.intent.intent_id,
+            timeout_seconds=self.wait_timeout_seconds,
+        )
+        if not isinstance(self.receipt, TransferReceipt):
+            raise TypeError("wait_transfer_receipt must return a TransferReceipt")
+        if self.receipt.intent_id != self.intent.intent_id:
+            raise ValueError("receipt intent_id does not match transfer intent")
+        self.wait_calls += 1
+        self._waited = True
+        state = TransferStatusState(self.receipt.state)
+        if state in {TransferStatusState.FAILED, TransferStatusState.CANCELED}:
+            raise RuntimeError(self.receipt.error or f"transfer {state.value}")
+        return self.receipt
 
 
 @dataclass(frozen=True)
@@ -161,6 +254,27 @@ def summarize_transfer_handles(handles: Iterable) -> TransferStats:
     )
 
 
+def transfer_stats_from_receipt(receipt: TransferReceipt) -> TransferStats:
+    direct_bytes = 0
+    relay_bytes = 0
+    direct_chunks = 0
+    relay_chunks = 0
+    for path in receipt.path_stats:
+        bytes_count = int(path.get("bytes", 0) or 0)
+        chunk_count = int(path.get("chunk_count", path.get("chunks", 0)) or 0)
+        if str(path.get("kind", "")).lower() == "relay":
+            relay_bytes += bytes_count
+            relay_chunks += chunk_count
+        else:
+            direct_bytes += bytes_count
+            direct_chunks += chunk_count
+    return TransferStats(
+        bytes=direct_bytes + relay_bytes,
+        direct_chunks=direct_chunks,
+        relay_chunks=relay_chunks,
+    )
+
+
 def _stat_value(stats, name: str) -> int:
     if isinstance(stats, dict):
         return int(stats.get(name, 0) or 0)
@@ -168,11 +282,19 @@ def _stat_value(stats, name: str) -> int:
 
 
 class OffloadStore:
-    """Connector-shaped named-block layer over Runtime H2D/D2H transfers."""
+    """Connector-shaped named-block layer over daemon transfer intent."""
 
-    def __init__(self, runtime) -> None:
-        self.runtime = runtime
+    def __init__(
+        self,
+        client: TransferIntentClient,
+        transfer_context: AdapterTransferContext,
+    ) -> None:
+        if not isinstance(transfer_context, AdapterTransferContext):
+            raise TypeError("transfer_context must be an AdapterTransferContext")
+        self.client = client
+        self.transfer_context = transfer_context
         self._blocks: dict[str, OffloadBlock] = {}
+        self._intent_counter = 0
 
     def add(
         self,
@@ -192,7 +314,7 @@ class OffloadStore:
         if name in self._blocks:
             raise ValueError(f"offload block already exists: {name}")
         if gpu_tensor is None:
-            gpu_tensor = self._make_gpu_tensor(cpu_tensor)
+            gpu_tensor = object()
         block = OffloadBlock(
             name=name,
             cpu_tensor=cpu_tensor,
@@ -265,22 +387,10 @@ class OffloadStore:
         return [self.block(name).info() for name in names]
 
     def prefetch(self, name: str):
-        block = self.block(name)
-        handle = self.runtime.fetch_to_gpu(block.cpu_tensor, block.gpu_tensor)
-        block.last_prefetch = handle
-        block.last_handle = handle
-        block.last_operation = "prefetch"
-        block.state = BlockState.PREFETCHING
-        return handle
+        return self.submit_prefetch_many([name]).handles[0]
 
     def evict(self, name: str):
-        block = self.block(name)
-        handle = self.runtime.offload_to_cpu(block.gpu_tensor, block.cpu_tensor)
-        block.last_evict = handle
-        block.last_handle = handle
-        block.last_operation = "evict"
-        block.state = BlockState.EVICTING
-        return handle
+        return self.submit_evict_many([name]).handles[0]
 
     def prefetch_many(self, names: Iterable[str]) -> list:
         return list(self.submit_prefetch_many(names).handles)
@@ -301,18 +411,10 @@ class OffloadStore:
         if self._can_use_range_batch(blocks):
             ranges = self._ranges(blocks, operation)
             if operation == "prefetch":
-                handle = self.runtime.fetch_ranges_to_gpu(
-                    blocks[0].cpu_tensor,
-                    blocks[0].gpu_tensor,
-                    ranges,
-                )
+                handle = self._submit_transfer(blocks, "prefetch", ranges)
                 state = BlockState.PREFETCHING
             elif operation == "evict":
-                handle = self.runtime.offload_ranges_to_cpu(
-                    blocks[0].gpu_tensor,
-                    blocks[0].cpu_tensor,
-                    ranges,
-                )
+                handle = self._submit_transfer(blocks, "evict", ranges)
                 state = BlockState.EVICTING
             else:
                 raise ValueError(f"unknown offload operation: {operation}")
@@ -320,11 +422,17 @@ class OffloadStore:
             handles = tuple(handle for _ in blocks)
         else:
             if operation == "prefetch":
-                handles = tuple(self.prefetch(block.name) for block in blocks)
+                state = BlockState.PREFETCHING
             elif operation == "evict":
-                handles = tuple(self.evict(block.name) for block in blocks)
+                state = BlockState.EVICTING
             else:
                 raise ValueError(f"unknown offload operation: {operation}")
+            handles = tuple(
+                self._submit_transfer([block], operation, self._ranges([block], operation))
+                for block in blocks
+            )
+            for block, handle in zip(blocks, handles):
+                self._record_many([block], handle, operation, state)
         return OffloadBatch(operation, tuple(block.name for block in blocks), handles, self)
 
     def wait(self, name: str) -> None:
@@ -437,10 +545,55 @@ class OffloadStore:
             block.last_operation = operation
             block.state = state
 
-    def _make_gpu_tensor(self, cpu_tensor):
-        if torch is None:
-            raise RuntimeError("PyTorch is required to allocate OffloadStore GPU tensors")
-        return torch.empty_like(cpu_tensor, device=f"cuda:{self.runtime.target_gpu}")
+    def _submit_transfer(
+        self,
+        blocks: list[OffloadBlock],
+        operation: str,
+        ranges: Iterable[dict[str, int]],
+    ) -> ReceiptTransferHandle:
+        direction = _direction_for_operation(operation)
+        ranges_tuple = tuple(dict(item) for item in ranges)
+        total_bytes = sum(item["bytes"] for item in ranges_tuple)
+        if direction == "h2d":
+            source_buffer_id = self.transfer_context.cpu_buffer_id
+            destination_buffer_id = self.transfer_context.gpu_buffer_id
+        else:
+            source_buffer_id = self.transfer_context.gpu_buffer_id
+            destination_buffer_id = self.transfer_context.cpu_buffer_id
+        metadata = {
+            **self.transfer_context.metadata,
+            "operation": operation,
+            "block_names": [block.name for block in blocks],
+        }
+        intent = TransferIntent(
+            intent_id=self._next_intent_id(operation),
+            job_id=self.transfer_context.job_id,
+            session_id=self.transfer_context.session_id,
+            source_buffer_id=source_buffer_id,
+            destination_buffer_id=destination_buffer_id,
+            direction=direction,
+            total_bytes=total_bytes,
+            ranges=ranges_tuple,
+            workload_kind=self.transfer_context.workload_kind,
+            priority=self.transfer_context.priority,
+            policy_hints=self.transfer_context.policy_hints,
+            metadata=metadata,
+        )
+        receipt = self.client.submit_transfer_intent(intent)
+        if not isinstance(receipt, TransferReceipt):
+            raise TypeError("submit_transfer_intent must return a TransferReceipt")
+        if receipt.intent_id != intent.intent_id:
+            raise ValueError("receipt intent_id does not match transfer intent")
+        return ReceiptTransferHandle(
+            client=self.client,
+            intent=intent,
+            receipt=receipt,
+            wait_timeout_seconds=self.transfer_context.wait_timeout_seconds,
+        )
+
+    def _next_intent_id(self, operation: str) -> str:
+        self._intent_counter += 1
+        return f"{self.transfer_context.intent_prefix}-{operation}-{self._intent_counter}"
 
     @staticmethod
     def _validate_name(name: str) -> None:
@@ -457,6 +610,47 @@ class OffloadStore:
             raise ValueError("block offsets must be non-negative")
         if byte_count is not None and byte_count <= 0:
             raise ValueError("byte_count must be positive")
+
+
+def _direction_for_operation(operation: str) -> str:
+    if operation == "prefetch":
+        return "h2d"
+    if operation == "evict":
+        return "d2h"
+    raise ValueError(f"unknown offload operation: {operation}")
+
+
+def _require_non_empty(value: object, field_name: str) -> str:
+    normalized = str(value)
+    if not normalized.strip():
+        raise ValueError(f"{field_name} must be non-empty")
+    return normalized
+
+
+def _validate_policy_hints_no_physical(value: Mapping[str, object]) -> dict[str, object]:
+    policy_hints = dict(value)
+    forbidden_keys = {
+        "mode",
+        "path",
+        "paths",
+        "route",
+        "routes",
+        "relay",
+        "relays",
+        "relay_gpu",
+        "relay_gpus",
+        "target_device",
+        "target_gpu",
+    }
+    invalid_keys = sorted(
+        key for key in policy_hints if str(key).lower() in forbidden_keys
+    )
+    if invalid_keys:
+        raise ValueError(
+            "policy_hints must not choose physical paths: "
+            + ", ".join(str(key) for key in invalid_keys)
+        )
+    return policy_hints
 
 
 OffloadManager = OffloadStore

@@ -81,6 +81,14 @@ The active target architecture is:
   daemon receipt trace ids and path split fields. `examples/torch_tensor_fetch.py`
   demonstrates public `TransferIntent` submission and `TransferReceipt`
   reporting instead of constructing a `Runtime`.
+- Phase 0 Cut 8 Substage 8.1 is complete. `AdapterTransferContext` now carries
+  adapter job, session, registered CPU/GPU buffer, workload, metadata, and wait
+  settings. `OffloadStore` no longer calls Runtime transfer methods; it submits
+  `TransferIntent` objects through the client API, waits for
+  `TransferReceipt` objects, and derives transfer stats and block state from
+  receipts. The model-loading, training-offload, inference KV, vLLM slot, and
+  vLLM integration adapter tests now protect intent construction and receipt
+  consumption.
 
 ## Active Phase
 
@@ -98,7 +106,7 @@ Phase 0 covers:
 
 ## Next Work Items
 
-Current item: Cut 8, Adapter thinning.
+Current item: Cut 8 Substage 8.2, vLLM KV connector daemon-first rewrite.
 
 1. Shared schema layer.
    - Status: complete.
@@ -149,8 +157,15 @@ Current item: Cut 8, Adapter thinning.
 
 7. Adapter thinning.
    - Status: current.
-   - Update vLLM, model loading, and training adapters to submit TransferIntent.
-   - Consume TransferReceipt for stats and state transitions.
+   - Substage 8.1 complete: the shared adapter named-block path now submits
+     `TransferIntent` through the client API and consumes `TransferReceipt`
+     for stats and block state. Model-loading, training-offload, inference KV,
+     vLLM slot, and vLLM integration adapters now use that path.
+   - Substage 8.2 current: rewrite `vllm_kv_connector` so it removes Runtime,
+     target GPU, relay GPU, transfer mode, and min-pool-byte configuration from
+     the adapter surface and reports daemon receipt ids and path split instead.
+   - Substage 8.3 pending: clean adapter-facing exports/tests that still only
+     protect old Runtime route-selection behavior.
 
 ## Phase 0 Acceptance Criteria
 
@@ -168,17 +183,18 @@ Phase 0 is done when:
 
 ## Latest Validation
 
-Phase 0 Cut 7 Substage 7.4 validation:
+Phase 0 Cut 8 Substage 8.1 validation:
 
-- `python -m unittest test.python.e2e.test_paper_validation test.python.e2e.test_public_intent_example test.python.e2e.test_benchmark_daemon_support test.python.unit.test_public_client_api`
-- `python -m compileall -q benchmarks\paper_validation.py examples\torch_tensor_fetch.py test\python\e2e\test_paper_validation.py test\python\e2e\test_public_intent_example.py`
+- `python -m unittest test.python.unit.test_offload_store test.python.e2e.test_model_loading test.python.e2e.test_training_offload test.python.e2e.test_inference_adapters test.python.e2e.test_vllm_integration test.python.e2e.test_vllm_connector test.python.unit.test_adapters_package`
+- `python -m compileall -q turbobus\offload_store.py turbobus\adapters\model_loading.py turbobus\adapters\training_offload.py turbobus\adapters\inference.py turbobus\adapters\vllm.py turbobus\adapters\vllm_integration.py test\python\unit\test_offload_store.py test\python\e2e\test_model_loading.py test\python\e2e\test_training_offload.py test\python\e2e\test_inference_adapters.py test\python\e2e\test_vllm_integration.py`
 - `git diff --check`
 
 Remaining Phase 0 risk:
 
-- adapters still need the same daemon-first rewrite before Phase 0 can be
-  marked complete. vLLM KV paper validation remains deferred until the vLLM
-  adapter submits `TransferIntent` and consumes `TransferReceipt`.
+- `vllm_kv_connector.py` still imports `Runtime`, exposes target/relay/mode
+  configuration, and constructs `VllmKVSlotAdapter` with the old Runtime
+  surface. vLLM KV paper validation remains deferred until this connector
+  submits `TransferIntent` and consumes `TransferReceipt`.
 
 ## Upcoming Phases
 

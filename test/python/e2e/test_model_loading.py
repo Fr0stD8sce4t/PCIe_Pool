@@ -3,7 +3,8 @@ from __future__ import annotations
 import unittest
 
 from turbobus.model_loading import ModelWeightLoader
-from turbobus.offload_store import BlockState, OffloadBatch, TransferStats
+from turbobus.offload_store import AdapterTransferContext, BlockState, OffloadBatch, TransferStats
+from turbobus.schema import TransferIntent, TransferReceipt, TransferStatusState, WorkloadKind
 
 
 class FakeTensor:
@@ -17,39 +18,28 @@ class FakeTensor:
         return 1
 
 
-class FakeHandle:
-    def __init__(self, stats) -> None:
-        self.stats = stats
-        self.wait_calls = 0
-
-    def wait(self) -> None:
-        self.wait_calls += 1
-
-
-class FakeRuntime:
-    target_gpu = 6
-
+class FakeClient:
     def __init__(self) -> None:
-        self.calls = []
+        self.submitted: list[TransferIntent] = []
+        self.waited: list[tuple[str, float | None]] = []
 
-    def fetch_to_gpu(self, cpu_tensor, gpu_tensor):
-        self.calls.append(("fetch", cpu_tensor, gpu_tensor))
-        return FakeHandle({"bytes": cpu_tensor.numel(), "direct_chunks": 1})
+    def submit_transfer_intent(self, intent: TransferIntent) -> TransferReceipt:
+        self.submitted.append(intent)
+        return make_receipt(intent, receipt_id=f"submitted-{intent.intent_id}")
 
-    def fetch_ranges_to_gpu(self, cpu_tensor, gpu_tensor, ranges):
-        self.calls.append(("fetch_ranges", cpu_tensor, gpu_tensor, ranges))
-        return FakeHandle(
-            {
-                "bytes": sum(item["bytes"] for item in ranges),
-                "direct_chunks": len(ranges),
-                "relay_chunks": 1,
-            }
-        )
+    def wait_transfer_receipt(
+        self,
+        intent_id: str,
+        timeout_seconds: float | None = None,
+    ) -> TransferReceipt:
+        self.waited.append((str(intent_id), timeout_seconds))
+        intent = next(item for item in self.submitted if item.intent_id == intent_id)
+        return make_receipt(intent, receipt_id=f"receipt-{intent_id}")
 
 
 class ModelWeightLoaderTest(unittest.TestCase):
     def test_add_bucket_tracks_model_weight_metadata(self) -> None:
-        loader = ModelWeightLoader(FakeRuntime())
+        loader = make_loader()
         cpu = FakeTensor(128)
         gpu = object()
 
@@ -63,27 +53,40 @@ class ModelWeightLoaderTest(unittest.TestCase):
         self.assertEqual(loader.names(), ["layer0.mlp"])
         self.assertEqual(loader.bucket_info("layer0.mlp").state, BlockState.CPU)
 
-    def test_load_bucket_uses_runtime_fetch_and_marks_loaded_after_wait(self) -> None:
-        runtime = FakeRuntime()
-        loader = ModelWeightLoader(runtime)
+    def test_load_bucket_submits_model_weight_intent_and_marks_loaded_after_wait(self) -> None:
+        client = FakeClient()
+        loader = make_loader(client)
         cpu = FakeTensor(64)
         gpu = object()
         loader.add_bucket("w0", cpu, gpu)
 
         handle = loader.load_bucket("w0")
 
-        self.assertEqual(runtime.calls, [("fetch", cpu, gpu)])
+        self.assertEqual(len(client.submitted), 1)
+        intent = client.submitted[0]
+        self.assertEqual(intent.workload_kind, WorkloadKind.MODEL_WEIGHTS)
+        self.assertEqual(intent.direction, "h2d")
+        self.assertEqual(intent.source_buffer_id, "cpu-buffer")
+        self.assertEqual(intent.destination_buffer_id, "gpu-buffer")
+        self.assertEqual(intent.total_bytes, 64)
+        self.assertEqual(intent.ranges, ({"src_offset": 0, "dst_offset": 0, "bytes": 64},))
+        self.assertEqual(intent.policy_hints, {})
+        self.assertEqual(intent.metadata["operation"], "prefetch")
         self.assertEqual(loader.bucket("w0").state, BlockState.PREFETCHING)
 
         loader.wait("w0")
 
+        self.assertEqual(client.waited, [(intent.intent_id, 2.5)])
         self.assertEqual(handle.wait_calls, 1)
         self.assertEqual(loader.bucket("w0").state, BlockState.GPU)
-        self.assertEqual(loader.transfer_stats("w0"), TransferStats(bytes=64, direct_chunks=1))
+        self.assertEqual(
+            loader.transfer_stats("w0"),
+            TransferStats(bytes=64, direct_chunks=1, relay_chunks=1),
+        )
 
-    def test_packed_buckets_use_one_range_transfer(self) -> None:
-        runtime = FakeRuntime()
-        loader = ModelWeightLoader(runtime)
+    def test_packed_buckets_use_one_transfer_intent(self) -> None:
+        client = FakeClient()
+        loader = make_loader(client)
         cpu = FakeTensor(256)
         gpu = object()
         loader.add_packed_buckets(
@@ -99,28 +102,27 @@ class ModelWeightLoaderTest(unittest.TestCase):
 
         self.assertEqual(handles[0], handles[1])
         self.assertEqual(handles[1], handles[2])
-        self.assertEqual(runtime.calls[0][0], "fetch_ranges")
+        self.assertEqual(len(client.submitted), 1)
         self.assertEqual(
-            runtime.calls[0][3],
-            [
+            client.submitted[0].ranges,
+            (
                 {"src_offset": 16, "dst_offset": 16, "bytes": 32},
                 {"src_offset": 48, "dst_offset": 48, "bytes": 32},
                 {"src_offset": 80, "dst_offset": 80, "bytes": 32},
-            ],
+            ),
         )
 
         loader.wait_all()
 
         self.assertEqual(handles[0].wait_calls, 1)
-        self.assertEqual(loader.transfer_stats_many(loader.names()), TransferStats(96, 3, 1))
+        self.assertEqual(loader.transfer_stats_many(loader.names()), TransferStats(96, 1, 1))
         self.assertEqual(
             [info.state for info in loader.bucket_infos()],
             [BlockState.GPU, BlockState.GPU, BlockState.GPU],
         )
 
     def test_load_batch_returns_batch_object(self) -> None:
-        runtime = FakeRuntime()
-        loader = ModelWeightLoader(runtime)
+        loader = make_loader()
         cpu = FakeTensor(256)
         gpu = object()
         loader.add_packed_buckets(
@@ -138,13 +140,13 @@ class ModelWeightLoaderTest(unittest.TestCase):
         self.assertIsInstance(batch, OffloadBatch)
         self.assertEqual(batch.operation, "prefetch")
         self.assertEqual(batch.names, ("bucket0", "bucket1"))
-        self.assertEqual(batch.transfer_stats(), TransferStats(64, 2, 1))
+        self.assertEqual(batch.transfer_stats(), TransferStats(64, 1, 1))
         self.assertEqual(batch.as_dict()["transfer_stats"]["bytes"], 64)
         self.assertEqual(loader.bucket("bucket0").state, BlockState.GPU)
         self.assertEqual(loader.bucket("bucket1").state, BlockState.GPU)
 
     def test_mark_unloaded_resets_transfer_state_without_copying(self) -> None:
-        loader = ModelWeightLoader(FakeRuntime())
+        loader = make_loader()
         loader.add_bucket("w0", FakeTensor(1), object())
         loader.load_bucket("w0")
         loader.wait("w0")
@@ -155,6 +157,42 @@ class ModelWeightLoaderTest(unittest.TestCase):
         self.assertEqual(bucket.state, BlockState.CPU)
         self.assertIsNone(bucket.last_handle)
         self.assertIsNone(bucket.last_operation)
+
+
+def make_loader(client: FakeClient | None = None) -> ModelWeightLoader:
+    return ModelWeightLoader(
+        client or FakeClient(),
+        AdapterTransferContext(
+            job_id="job-1",
+            session_id="session-1",
+            cpu_buffer_id="cpu-buffer",
+            gpu_buffer_id="gpu-buffer",
+            workload_kind=WorkloadKind.MODEL_WEIGHTS,
+            intent_prefix="model",
+            wait_timeout_seconds=2.5,
+        ),
+    )
+
+
+def make_receipt(intent: TransferIntent, *, receipt_id: str) -> TransferReceipt:
+    direct_bytes = intent.total_bytes // 2
+    relay_bytes = intent.total_bytes - direct_bytes
+    return TransferReceipt(
+        receipt_id=receipt_id,
+        ticket_id=f"ticket-{intent.intent_id}",
+        intent_id=intent.intent_id,
+        decision_id=f"decision-{intent.intent_id}",
+        topology_snapshot_id="topology-1",
+        job_id=intent.job_id,
+        session_id=intent.session_id,
+        state=TransferStatusState.COMPLETE,
+        bytes_total=intent.total_bytes,
+        bytes_completed=intent.total_bytes,
+        path_stats=(
+            {"kind": "direct", "bytes": direct_bytes, "chunk_count": 1},
+            {"kind": "relay", "bytes": relay_bytes, "chunk_count": 1},
+        ),
+    )
 
 
 if __name__ == "__main__":

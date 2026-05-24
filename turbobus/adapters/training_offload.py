@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Iterable
 
 from ..offload_store import (
+    AdapterTransferContext,
     BlockState,
     OffloadBatch,
     OffloadBlock,
@@ -12,10 +13,14 @@ from ..offload_store import (
 
 
 class TrainingOffloadManager(OffloadStore):
-    """Parameter or optimizer bucket movement API backed by Runtime transfers."""
+    """Parameter or optimizer bucket movement API backed by daemon transfer intent."""
 
-    def __init__(self, runtime) -> None:
-        super().__init__(runtime)
+    def __init__(
+        self,
+        client,
+        transfer_context: AdapterTransferContext,
+    ) -> None:
+        super().__init__(client, transfer_context)
 
     def add_bucket(
         self,

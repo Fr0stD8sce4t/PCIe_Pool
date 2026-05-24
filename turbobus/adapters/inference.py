@@ -3,8 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
-from ..offload_store import OffloadBatch, OffloadStore, TransferStats
-from ..runtime import Runtime
+from ..offload_store import AdapterTransferContext, OffloadBatch, OffloadStore, TransferStats
 
 
 @dataclass(frozen=True)
@@ -25,11 +24,12 @@ class InferenceKVSlotAdapter(OffloadStore):
 
     def __init__(
         self,
-        runtime: Runtime,
+        client,
+        transfer_context: AdapterTransferContext,
         cpu_backing,
         gpu_kv_backing,
     ) -> None:
-        super().__init__(runtime)
+        super().__init__(client, transfer_context)
         self.cpu_backing = cpu_backing
         self.gpu_kv_backing = gpu_kv_backing
 

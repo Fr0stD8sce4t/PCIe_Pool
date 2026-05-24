@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
 from dataclasses import dataclass
 import math
 from typing import Iterable, Mapping
 
-from ..offload_store import TransferStats
+from ..offload_store import AdapterTransferContext, TransferStats
 from .inference import InferenceKVSlot, InferenceKVSlotAdapter
-from ..runtime import Runtime
 
 
 @dataclass(frozen=True)
@@ -41,14 +39,17 @@ class VllmKVSlotAdapter:
 
     def __init__(
         self,
-        runtime: Runtime,
+        client,
+        transfer_context: AdapterTransferContext,
         groups: Iterable[VllmKVGroup],
     ) -> None:
-        self.runtime = runtime
+        self.client = client
+        self.transfer_context = transfer_context
         self.groups: dict[int, VllmKVGroup] = {group.group_id: group for group in groups}
         self.adapters = {
             group.group_id: InferenceKVSlotAdapter(
-                runtime,
+                client,
+                _group_transfer_context(transfer_context, group.group_id),
                 group.cpu_backing,
                 group.gpu_kv_backing,
             )
@@ -113,17 +114,14 @@ class VllmKVSlotAdapter:
         names_by_group = self._register_and_group(refs)
         handles = []
         submitted = []
-        batch_bytes, batch_chunks = self._batch_size(refs)
-        direction = "h2d" if operation == "restore" else "d2h"
         submit_method = "submit_restore_prefix" if operation == "restore" else "submit_save_prefix"
-        with self._batch_transfer_mode(batch_bytes, direction, batch_chunks):
-            for group_id, names in names_by_group.items():
-                submit = getattr(self.adapters[group_id], submit_method)
-                names, group_handles = submit(names)
-                submitted.append((group_id, names))
-                handles.extend(group_handles)
-            for group_id, names in submitted:
-                self.adapters[group_id].wait_prefix(names)
+        for group_id, names in names_by_group.items():
+            submit = getattr(self.adapters[group_id], submit_method)
+            names, group_handles = submit(names)
+            submitted.append((group_id, names))
+            handles.extend(group_handles)
+        for group_id, names in submitted:
+            self.adapters[group_id].wait_prefix(names)
         return handles
 
     @staticmethod
@@ -148,8 +146,10 @@ class VllmKVSlotAdapter:
     def _batch_size(self, refs: Iterable[VllmKVBlockRef]) -> tuple[int, int]:
         total_bytes = 0
         total_chunks = 0
-        options = getattr(self.runtime, "options", None)
-        chunk_bytes = max(1, int(getattr(options, "chunk_bytes", 16 * 1024 * 1024)))
+        chunk_bytes = max(
+            1,
+            int(self.transfer_context.metadata.get("chunk_bytes", 16 * 1024 * 1024)),
+        )
         for ref in refs:
             group = self.groups[ref.group_id]
             byte_count = ref.byte_count if ref.byte_count is not None else group.block_bytes
@@ -157,16 +157,24 @@ class VllmKVSlotAdapter:
             total_chunks += max(1, math.ceil(int(byte_count) / chunk_bytes))
         return total_bytes, total_chunks
 
-    def _batch_transfer_mode(self, bytes_: int, direction: str, chunks: int):
-        batch_transfer_mode = getattr(self.runtime, "batch_transfer_mode", None)
-        if batch_transfer_mode is not None:
-            return batch_transfer_mode(bytes_, direction, chunks)
-        return _null_context()
-
-
-@contextmanager
-def _null_context():
-    yield None
+def _group_transfer_context(
+    transfer_context: AdapterTransferContext,
+    group_id: int,
+) -> AdapterTransferContext:
+    metadata = dict(transfer_context.metadata)
+    metadata["group_id"] = int(group_id)
+    return AdapterTransferContext(
+        job_id=transfer_context.job_id,
+        session_id=transfer_context.session_id,
+        cpu_buffer_id=transfer_context.cpu_buffer_id,
+        gpu_buffer_id=transfer_context.gpu_buffer_id,
+        workload_kind=transfer_context.workload_kind,
+        priority=transfer_context.priority,
+        policy_hints=transfer_context.policy_hints,
+        metadata=metadata,
+        intent_prefix=f"{transfer_context.intent_prefix}-g{int(group_id)}",
+        wait_timeout_seconds=transfer_context.wait_timeout_seconds,
+    )
 
 
 def vllm_block_name(ref: VllmKVBlockRef) -> str:
