@@ -39,6 +39,12 @@ The active target architecture is:
   records live under `turbobus/topology`; static topology has been moved to
   `test/python/fixtures/topology.py`, and the daemon no longer creates a
   synthetic topology provider by default.
+- Phase 0 Cut 4 is complete. `turbobus.api.TurboBusClient` is the public
+  daemon-first client facade. It submits `TransferIntent` objects through the
+  daemon client and returns `TransferReceipt` objects as the public completion
+  result. The root `turbobus` package now exports the daemon-first API and
+  shared contract objects instead of top-level planner/runtime transfer
+  controls.
 
 ## Active Phase
 
@@ -56,7 +62,7 @@ Phase 0 covers:
 
 ## Next Work Items
 
-Current item: Cut 4, Daemon-first client API.
+Current item: Cut 5, Scheduler and ticket contract.
 
 1. Shared schema layer.
    - Status: complete.
@@ -72,12 +78,13 @@ Current item: Cut 4, Daemon-first client API.
    - Move synthetic topology support into fixtures.
 
 3. Daemon-first client API.
-   - Status: current.
+   - Status: complete.
    - Add intent submission.
    - Add receipt-oriented completion.
    - Update package exports.
 
 4. Scheduler and ticket contract.
+   - Status: current.
    - Make SchedulingDecision the scheduler output.
    - Make ExecutionTicket the worker input.
    - Add rejection tests for ticket mismatches.

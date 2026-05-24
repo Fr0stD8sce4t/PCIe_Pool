@@ -66,7 +66,7 @@ class AdaptersPackageTest(unittest.TestCase):
             root_vllm_kv_connector.TurboBusConnector,
         )
 
-    def test_top_level_exports_now_flow_through_adapter_boundary(self) -> None:
+    def test_adapters_remain_available_outside_top_level_public_api(self) -> None:
         self.assertIs(ModelWeightLoader, root_model_loading.ModelWeightLoader)
         self.assertIs(InferenceKVSlotAdapter, root_inference.InferenceKVSlotAdapter)
         self.assertIs(
@@ -85,8 +85,8 @@ class AdaptersPackageTest(unittest.TestCase):
             root_vllm_kv_connector.TurboBusConnectorConfig,
         )
         self.assertIs(TurboBusSavedPrefix, root_vllm_kv_connector.TurboBusSavedPrefix)
-        self.assertIs(turbobus.ModelWeightLoader, ModelWeightLoader)
-        self.assertIn("FrameworkAdapter", turbobus.__all__)
+        self.assertNotIn("ModelWeightLoader", turbobus.__all__)
+        self.assertNotIn("FrameworkAdapter", turbobus.__all__)
         self.assertIsNotNone(FrameworkAdapter)
 
 

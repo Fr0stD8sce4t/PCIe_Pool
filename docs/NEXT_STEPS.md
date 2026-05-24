@@ -33,7 +33,7 @@ creates the contracts needed for the rest of the system:
 
 ## Current
 
-Cut 4: Daemon-First Client API.
+Cut 5: Scheduler And Ticket Contract.
 
 Cut 1 is complete. The contract inventory is recorded in
 `docs/PHASE0_CONTRACT_INVENTORY.md`.
@@ -44,6 +44,10 @@ Cut 2 is complete. The shared daemon-first schema objects now live in
 Cut 3 is complete. The package now exposes explicit `api`, `control`,
 `topology`, `scheduler`, and `data_plane` boundaries; synthetic topology lives
 under `test/python/fixtures/`.
+
+Cut 4 is complete. The public client API now submits `TransferIntent` objects
+and waits for `TransferReceipt` objects. Root package exports now emphasize the
+daemon-first public API and shared contract objects.
 
 ## Phase 0 Code Cuts
 
@@ -103,7 +107,7 @@ Expected output:
 
 ### Cut 4: Daemon-First Client API
 
-Status: current.
+Status: complete.
 
 - Add a public client API that submits TransferIntent.
 - Make receipt-oriented waiting the public completion path.
@@ -116,6 +120,8 @@ Expected output:
 - public exports match the daemon-first contract.
 
 ### Cut 5: Scheduler And Ticket Contract
+
+Status: current.
 
 - Make SchedulingDecision the scheduler output.
 - Make ExecutionTicket the worker input.
