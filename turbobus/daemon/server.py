@@ -25,7 +25,7 @@ from .protocol import (
     WorkerTransferAuthorization,
     WorkerTransferAuthorizationRequest,
 )
-from ..schema import ExecutionTicket
+from ..schema import ExecutionTicket, TransferIntent, TransferReceipt
 from ..topology import TopologyProvider
 from ..scheduler import (
     DaemonScheduler,
@@ -66,8 +66,12 @@ class TurboBusDaemon:
         self._sessions: dict[str, Session] = {}
         self._reservations: dict[str, TransferReservation] = {}
         self._reservation_transfers: dict[str, str] = {}
+        self._transfer_intents: dict[str, TransferIntent] = {}
+        self._intent_transfers: dict[str, str] = {}
         self._transfer_plans: dict[str, dict[str, object]] = {}
         self._scheduling_decisions: dict[str, SchedulingDecision] = {}
+        self._execution_tickets: dict[str, ExecutionTicket] = {}
+        self._transfer_tickets: dict[str, str] = {}
         self._lease_tokens: dict[str, LeaseToken] = {}
         self._transfer_statuses: dict[str, TransferStatus] = {}
         self._cleanup_events: list[CleanupRequest] = []
@@ -402,6 +406,102 @@ class TurboBusDaemon:
             self._transfer_statuses[updated.transfer_id] = updated
             return DaemonResponse(ok=True, payload={"status": asdict(updated)})
 
+    def submit_transfer_intent(self, intent: TransferIntent) -> DaemonResponse:
+        if not isinstance(intent, TransferIntent):
+            return DaemonResponse(ok=False, error="intent must be a TransferIntent")
+        try:
+            chunk_bytes = _intent_chunk_bytes(intent)
+        except (TypeError, ValueError) as exc:
+            return DaemonResponse(ok=False, error=str(exc))
+        with self._lock:
+            existing_transfer_id = self._intent_transfers.get(intent.intent_id)
+            if existing_transfer_id is not None:
+                existing = self._transfer_intents.get(intent.intent_id)
+                if existing != intent:
+                    return DaemonResponse(
+                        ok=False,
+                        error="intent_id already belongs to a different transfer intent",
+                    )
+                try:
+                    receipt = self._receipt_for_intent_locked(intent.intent_id)
+                except ValueError as exc:
+                    return DaemonResponse(ok=False, error=str(exc))
+                ticket_id = self._transfer_tickets.get(existing_transfer_id)
+                return DaemonResponse(
+                    ok=True,
+                    payload={
+                        "receipt": asdict(receipt),
+                        "transfer_id": existing_transfer_id,
+                        "ticket": (
+                            None
+                            if ticket_id is None
+                            else asdict(self._execution_tickets[ticket_id])
+                        ),
+                    },
+                )
+
+        planned = self.plan_transfer(
+            session_id=intent.session_id,
+            total_bytes=intent.total_bytes,
+            chunk_bytes=chunk_bytes,
+            mode="auto",
+            direction=intent.direction,
+            job_id=intent.job_id,
+            buffer_ids=[intent.source_buffer_id, intent.destination_buffer_id],
+            ranges=intent.ranges,
+            intent_id=intent.intent_id,
+        )
+        if not planned.ok:
+            return planned
+
+        transfer_id = str(planned.payload["transfer_id"])
+        now = time.time()
+        with self._lock:
+            decision = self._scheduling_decisions.get(transfer_id)
+            if decision is None:
+                return DaemonResponse(ok=False, error="scheduling decision is unavailable")
+            ticket = self._execution_ticket_for_intent_locked(
+                intent=intent,
+                transfer_id=transfer_id,
+                decision=decision,
+                now=now,
+            )
+            self._transfer_intents[intent.intent_id] = intent
+            self._intent_transfers[intent.intent_id] = transfer_id
+            self._execution_tickets[ticket.ticket_id] = ticket
+            self._transfer_tickets[transfer_id] = ticket.ticket_id
+            receipt = self._receipt_for_intent_locked(intent.intent_id)
+            return DaemonResponse(
+                ok=True,
+                payload={
+                    "receipt": asdict(receipt),
+                    "transfer_id": transfer_id,
+                    "decision": asdict(decision),
+                    "ticket": asdict(ticket),
+                    "planning": planned.payload.get("planning", {}),
+                },
+            )
+
+    def wait_transfer_receipt(
+        self,
+        intent_id: str,
+        timeout_seconds: float | None = None,
+    ) -> DaemonResponse:
+        normalized_intent_id = str(intent_id)
+        timeout = 0.0 if timeout_seconds is None else max(0.0, float(timeout_seconds))
+        deadline = time.time() + timeout
+        while True:
+            with self._lock:
+                try:
+                    receipt = self._receipt_for_intent_locked(normalized_intent_id)
+                except ValueError as exc:
+                    return DaemonResponse(ok=False, error=str(exc))
+                if receipt.state in _TERMINAL_TRANSFER_STATES or timeout_seconds is None:
+                    return DaemonResponse(ok=True, payload={"receipt": asdict(receipt)})
+                if time.time() >= deadline:
+                    return DaemonResponse(ok=True, payload={"receipt": asdict(receipt)})
+            time.sleep(min(0.01, max(0.0, deadline - time.time())))
+
     def validate_lease(
         self,
         lease_id: str,
@@ -549,6 +649,8 @@ class TurboBusDaemon:
         job_id: str | None = None,
         buffer_ids: Iterable[str] | None = None,
         ranges: Iterable[dict[str, int]] | None = None,
+        intent_id: str | None = None,
+        topology_snapshot_id: str | None = None,
     ) -> DaemonResponse:
         now = time.time()
         try:
@@ -576,6 +678,7 @@ class TurboBusDaemon:
             )
             if self._topology_provider is None:
                 return _topology_unavailable_response()
+            snapshot_id = topology_snapshot_id or self._topology_snapshot_id_locked()
             plan_job_id = owner_job_id if owner_job_id is not None else job_id
             relay_eligibility = self._relay_eligibility_for_session_locked(session)
             planning_relays = tuple(
@@ -615,6 +718,8 @@ class TurboBusDaemon:
                 direction=direction,
                 now=now,
                 job_id=plan_job_id,
+                intent_id=intent_id,
+                topology_snapshot_id=snapshot_id,
             )
             transfer_id = str(uuid.uuid4())
             reservations = self._commit_scheduler_leases_locked(
@@ -817,6 +922,97 @@ class TurboBusDaemon:
             lease_ids=(authorization.lease_id,),
             metadata={"transfer_id": transfer_id},
         )
+
+    def _execution_ticket_for_intent_locked(
+        self,
+        *,
+        intent: TransferIntent,
+        transfer_id: str,
+        decision: SchedulingDecision,
+        now: float,
+    ) -> ExecutionTicket:
+        ticket_ranges = _ticket_ranges_for_plan(decision.plan, direction=intent.direction)
+        lease_ids = tuple(
+            reservation_id
+            for reservation_id, mapped_transfer_id in sorted(
+                self._reservation_transfers.items()
+            )
+            if mapped_transfer_id == transfer_id
+        )
+        expires_at = max(
+            [float(now) + 30.0]
+            + [
+                float(self._lease_tokens[lease_id].expires_at)
+                for lease_id in lease_ids
+                if lease_id in self._lease_tokens
+                and float(self._lease_tokens[lease_id].expires_at) > float(now)
+            ]
+        )
+        return ExecutionTicket(
+            ticket_id=f"ticket-{transfer_id}",
+            decision_id=decision.decision_id,
+            intent_id=intent.intent_id,
+            topology_snapshot_id=decision.topology_snapshot_id,
+            job_id=intent.job_id,
+            session_id=intent.session_id,
+            source_buffer_id=intent.source_buffer_id,
+            destination_buffer_id=intent.destination_buffer_id,
+            direction=intent.direction,
+            total_bytes=sum(item["bytes"] for item in ticket_ranges),
+            ranges=ticket_ranges,
+            plan=dict(decision.plan),
+            issued_at=float(now),
+            expires_at=expires_at,
+            lease_ids=lease_ids,
+            metadata={"transfer_id": transfer_id},
+        )
+
+    def _receipt_for_intent_locked(self, intent_id: str) -> TransferReceipt:
+        normalized_intent_id = str(intent_id)
+        transfer_id = self._intent_transfers.get(normalized_intent_id)
+        if transfer_id is None:
+            raise ValueError("unknown transfer intent")
+        intent = self._transfer_intents.get(normalized_intent_id)
+        status = self._transfer_statuses.get(transfer_id)
+        decision = self._scheduling_decisions.get(transfer_id)
+        ticket_id = self._transfer_tickets.get(transfer_id)
+        if intent is None:
+            raise ValueError("transfer intent is unavailable")
+        if status is None:
+            raise ValueError("transfer status is unavailable")
+        if decision is None:
+            raise ValueError("scheduling decision is unavailable")
+        if ticket_id is None or ticket_id not in self._execution_tickets:
+            raise ValueError("execution ticket is unavailable")
+        error = status.error
+        if status.state in {TransferStatusState.FAILED, TransferStatusState.CANCELED}:
+            error = error or f"transfer {status.state.value}"
+        return TransferReceipt(
+            receipt_id=f"receipt-{transfer_id}",
+            ticket_id=ticket_id,
+            intent_id=intent.intent_id,
+            decision_id=decision.decision_id,
+            topology_snapshot_id=decision.topology_snapshot_id,
+            job_id=intent.job_id,
+            session_id=intent.session_id,
+            state=status.state,
+            bytes_total=status.bytes_total,
+            bytes_completed=status.bytes_completed,
+            started_at=decision.issued_at,
+            path_stats=decision.path_summary,
+            error=error,
+            metadata={
+                "transfer_id": transfer_id,
+                "fallback_reason": decision.fallback_reason,
+            },
+        )
+
+    def _topology_snapshot_id_locked(self) -> str:
+        if self._topology_provider is None:
+            return "topology-unavailable"
+        inventory = self._topology_provider.snapshot()
+        source = str(inventory.source).replace(" ", "_")
+        return f"topology-{source}-{float(inventory.discovered_at):.6f}"
 
     def _issue_lease_token_locked(
         self,
@@ -1131,6 +1327,20 @@ class TurboBusDaemon:
                 job_id=str(payload["job_id"]) if "job_id" in payload else None,
                 buffer_ids=payload.get("buffer_ids"),
                 ranges=payload.get("ranges"),
+                intent_id=payload.get("intent_id"),
+                topology_snapshot_id=payload.get("topology_snapshot_id"),
+            )
+        if request.request_type == RequestType.SUBMIT_TRANSFER_INTENT:
+            payload = request.payload
+            intent_payload = payload.get("intent")
+            if not isinstance(intent_payload, dict):
+                return DaemonResponse(ok=False, error="intent is required")
+            return self.submit_transfer_intent(TransferIntent(**intent_payload))
+        if request.request_type == RequestType.WAIT_TRANSFER_RECEIPT:
+            payload = request.payload
+            return self.wait_transfer_receipt(
+                intent_id=str(payload["intent_id"]),
+                timeout_seconds=payload.get("timeout_seconds"),
             )
         if request.request_type == RequestType.RELEASE_TRANSFER:
             payload = request.payload
@@ -1658,6 +1868,20 @@ def _normalize_transfer_ranges(
             }
         )
     return tuple(normalized)
+
+
+def _intent_chunk_bytes(intent: TransferIntent) -> int:
+    for source in (intent.policy_hints, intent.metadata):
+        if not isinstance(source, dict):
+            continue
+        value = source.get("chunk_bytes")
+        if value is None:
+            continue
+        chunk_bytes = int(value)
+        if chunk_bytes <= 0:
+            raise ValueError("chunk_bytes must be positive")
+        return chunk_bytes
+    return max(1, int(intent.total_bytes))
 
 
 def _status_bytes_match(

@@ -9,6 +9,12 @@ from turbobus.daemon.protocol import (
     WorkerTransferAuthorizationRequest,
 )
 from turbobus.daemon.server import TurboBusDaemon
+from turbobus.schema import (
+    TransferIntent,
+    TransferReceipt,
+    TransferStatusState,
+    WorkloadKind,
+)
 from turbobus.topology import (
     DaemonResourceInventory,
     FabricLinkRecord,
@@ -2379,6 +2385,123 @@ class DaemonStateTest(unittest.TestCase):
 
         self.assertFalse(planned.ok)
         self.assertIn("unknown session", planned.error)
+
+    def test_submit_transfer_intent_returns_ticketed_receipt(self) -> None:
+        daemon = _daemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=1,
+            max_inflight_chunks_per_relay=8,
+        )
+        register = daemon.register_session(
+            target_gpu=0,
+            requested_relays=[1],
+            max_inflight_chunks=8,
+        )
+        session_id = register.payload["session"]["session_id"]
+        self.assertTrue(daemon.register_job(job_id="job-1", session_id=session_id).ok)
+        self.assertTrue(
+            daemon.register_buffer(
+                buffer_id="cpu-buffer",
+                job_id="job-1",
+                kind="cpu_pinned",
+                size_bytes=64,
+                pinned=True,
+            ).ok
+        )
+        self.assertTrue(
+            daemon.register_buffer(
+                buffer_id="gpu-buffer",
+                job_id="job-1",
+                kind="gpu",
+                size_bytes=64,
+                device_index=0,
+            ).ok
+        )
+        self.assertTrue(
+            daemon.put_profile(
+                target_gpu=0,
+                relay_gpus=[1],
+                profile={
+                    "target_device": 0,
+                    "direct_h2d_bw_gbps": 7.5,
+                    "direct_d2h_bw_gbps": 6.5,
+                    "relays": [
+                        {
+                            "relay_device": 1,
+                            "target_device": 0,
+                            "h2d_bw_gbps": 7.5,
+                            "d2h_bw_gbps": 6.5,
+                            "p2p_bw_gbps": 40.0,
+                            "effective_bw_gbps": 7.5,
+                            "effective_d2h_bw_gbps": 6.5,
+                            "p2p_enabled": True,
+                        }
+                    ],
+                },
+            ).ok
+        )
+        intent = TransferIntent(
+            intent_id="intent-1",
+            job_id="job-1",
+            session_id=session_id,
+            source_buffer_id="cpu-buffer",
+            destination_buffer_id="gpu-buffer",
+            direction="h2d",
+            total_bytes=64,
+            ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 64},),
+            workload_kind=WorkloadKind.MODEL_WEIGHTS,
+            policy_hints={"latency_sensitive": True},
+        )
+
+        submitted = daemon.submit_transfer_intent(intent)
+
+        self.assertTrue(submitted.ok)
+        receipt = TransferReceipt(**submitted.payload["receipt"])
+        ticket = submitted.payload["ticket"]
+        transfer_id = submitted.payload["transfer_id"]
+        self.assertEqual(receipt.intent_id, intent.intent_id)
+        self.assertEqual(receipt.state, TransferStatusState.SUBMITTED)
+        self.assertEqual(receipt.bytes_total, 64)
+        self.assertEqual(receipt.bytes_completed, 0)
+        self.assertEqual(receipt.ticket_id, ticket["ticket_id"])
+        self.assertEqual(ticket["intent_id"], intent.intent_id)
+        self.assertEqual(ticket["decision_id"], receipt.decision_id)
+        self.assertEqual(ticket["topology_snapshot_id"], receipt.topology_snapshot_id)
+        self.assertEqual(ticket["source_buffer_id"], "cpu-buffer")
+        self.assertEqual(ticket["destination_buffer_id"], "gpu-buffer")
+        self.assertTrue(receipt.path_stats)
+        self.assertTrue(receipt.topology_snapshot_id.startswith("topology-"))
+
+        self.assertTrue(
+            daemon.transfer_status(
+                transfer_id,
+                state="complete",
+                bytes_completed=64,
+            ).ok
+        )
+        waited = daemon.wait_transfer_receipt(intent.intent_id)
+
+        self.assertTrue(waited.ok)
+        completed = TransferReceipt(**waited.payload["receipt"])
+        self.assertEqual(completed.state, TransferStatusState.COMPLETE)
+        self.assertEqual(completed.bytes_completed, 64)
+        self.assertEqual(completed.decision_id, receipt.decision_id)
+
+    def test_submit_transfer_intent_rejects_physical_policy_hints(self) -> None:
+        daemon = _daemon(relay_gpus=[1])
+
+        with self.assertRaisesRegex(ValueError, "physical paths"):
+            TransferIntent(
+                intent_id="intent-1",
+                job_id="job-1",
+                session_id="session-1",
+                source_buffer_id="cpu-buffer",
+                destination_buffer_id="gpu-buffer",
+                direction="h2d",
+                total_bytes=64,
+                ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 64},),
+                policy_hints={"relay_gpus": [1]},
+            )
 
 
 if __name__ == "__main__":

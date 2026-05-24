@@ -107,9 +107,15 @@ Current item: Cut 7, Benchmark and example rewrite.
 
 6. Benchmark and example rewrite.
    - Status: current.
-   - Use public client APIs.
-   - Emit decision id, topology snapshot id, ticket id, bytes, timing, path
-     split, and fallback reason.
+   - Substage 7.1 complete: daemon `TransferIntent` submission now produces
+     `TransferReceipt` records with decision id, topology snapshot id,
+     execution ticket id, bytes, path split, and fallback reason. Benchmark
+     helper code can construct workload intent and format receipt traces
+     without physical path hints.
+   - Current substage: rewrite model-loading benchmark to submit through the
+     public client API and consume daemon receipts.
+   - Remaining substages: training-offload benchmark rewrite, then examples and
+     paper-validation command/output rewrite.
 
 7. Adapter thinning.
    - Update vLLM, model loading, and training adapters to submit TransferIntent.

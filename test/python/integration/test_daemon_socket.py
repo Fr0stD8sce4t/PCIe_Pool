@@ -8,6 +8,7 @@ import threading
 import time
 import unittest
 
+from turbobus.api import TurboBusClient
 from turbobus.daemon import TurboBusDaemonClient
 from turbobus.daemon.protocol import (
     DaemonResponse,
@@ -15,6 +16,11 @@ from turbobus.daemon.protocol import (
     WorkerTransferAuthorizationRequest,
 )
 from turbobus.daemon.server import TurboBusDaemon
+from turbobus.schema import (
+    TransferIntent,
+    TransferStatusState,
+    WorkloadKind,
+)
 from turbobus.topology import (
     DaemonResourceInventory,
     GpuInventoryRecord,
@@ -885,6 +891,119 @@ class DaemonSocketTest(unittest.TestCase):
                 tuple(authorized.payload["authorization"]["ranges"]),
                 expected_ranges,
             )
+
+    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
+    def test_public_client_submit_transfer_intent_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            socket_path = os.path.join(tmpdir, "turbobusd.sock")
+            daemon = TurboBusDaemon(
+                relay_gpus=[1],
+                max_sessions_per_relay=1,
+                max_inflight_chunks_per_relay=8,
+                topology_provider=StaticTopologyProvider.from_relay_gpus([1]),
+            )
+            thread = threading.Thread(
+                target=daemon.serve_forever,
+                args=(socket_path,),
+                daemon=True,
+            )
+            thread.start()
+
+            for _ in range(100):
+                if os.path.exists(socket_path):
+                    break
+                time.sleep(0.01)
+            self.assertTrue(os.path.exists(socket_path))
+
+            daemon_client = TurboBusDaemonClient(socket_path)
+            registered = daemon_client.register_session(
+                target_gpu=0,
+                relay_gpus=[1],
+                max_inflight_chunks=8,
+            )
+            self.assertTrue(registered.ok)
+            session_id = registered.payload["session"]["session_id"]
+            self.assertTrue(
+                daemon_client.register_job(job_id="job-1", session_id=session_id).ok
+            )
+            self.assertTrue(
+                daemon_client.register_buffer(
+                    buffer_id="cpu-buffer",
+                    job_id="job-1",
+                    kind="cpu_pinned",
+                    size_bytes=64,
+                    pinned=True,
+                ).ok
+            )
+            self.assertTrue(
+                daemon_client.register_buffer(
+                    buffer_id="gpu-buffer",
+                    job_id="job-1",
+                    kind="gpu",
+                    size_bytes=64,
+                    device_index=0,
+                ).ok
+            )
+            self.assertTrue(
+                daemon_client.put_profile(
+                    target_gpu=0,
+                    relay_gpus=[1],
+                    profile={
+                        "target_device": 0,
+                        "direct_h2d_bw_gbps": 7.5,
+                        "direct_d2h_bw_gbps": 6.5,
+                        "relays": [
+                            {
+                                "relay_device": 1,
+                                "target_device": 0,
+                                "h2d_bw_gbps": 7.5,
+                                "d2h_bw_gbps": 6.5,
+                                "p2p_bw_gbps": 40.0,
+                                "effective_bw_gbps": 7.5,
+                                "effective_d2h_bw_gbps": 6.5,
+                                "p2p_enabled": True,
+                            }
+                        ],
+                    },
+                ).ok
+            )
+            intent = TransferIntent(
+                intent_id="intent-1",
+                job_id="job-1",
+                session_id=session_id,
+                source_buffer_id="cpu-buffer",
+                destination_buffer_id="gpu-buffer",
+                direction="h2d",
+                total_bytes=64,
+                ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 64},),
+                workload_kind=WorkloadKind.MODEL_WEIGHTS,
+                metadata={"chunk_bytes": 16},
+            )
+
+            client = TurboBusClient(socket_path=socket_path)
+            receipt = client.submit_transfer_intent(intent)
+
+            self.assertEqual(receipt.intent_id, "intent-1")
+            self.assertEqual(receipt.state, TransferStatusState.SUBMITTED)
+            self.assertEqual(receipt.bytes_total, 64)
+            self.assertTrue(receipt.decision_id)
+            self.assertTrue(receipt.topology_snapshot_id.startswith("topology-"))
+            self.assertTrue(receipt.ticket_id.startswith("ticket-"))
+            self.assertTrue(receipt.path_stats)
+
+            transfer_id = receipt.metadata["transfer_id"]
+            self.assertTrue(
+                daemon_client.transfer_status(
+                    transfer_id,
+                    state="complete",
+                    bytes_completed=64,
+                ).ok
+            )
+            completed = client.wait_transfer_receipt("intent-1")
+
+            self.assertEqual(completed.state, TransferStatusState.COMPLETE)
+            self.assertEqual(completed.bytes_completed, 64)
+            self.assertEqual(completed.decision_id, receipt.decision_id)
 
 
 if __name__ == "__main__":

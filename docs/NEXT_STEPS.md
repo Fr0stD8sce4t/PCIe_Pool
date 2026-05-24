@@ -171,11 +171,43 @@ Expected output:
 
 Status: current.
 
-- Update examples to call the public client API.
-- Update benchmark configuration to request workload and policy, then read
-  actual path information from daemon decisions and receipts.
-- Require benchmark output to include decision id, topology snapshot id, ticket
-  id, bytes, timing, path split, and fallback reason.
+Cut 7 is intentionally split so benchmark work does not drift back into the
+old Runtime/direct/relay/pool path controls.
+
+Substage 7.1: public intent and receipt reporting contract.
+
+Status: complete.
+
+- Daemon accepts public `TransferIntent` submission and returns
+  `TransferReceipt`.
+- Benchmark support helpers build workload intent without physical path hints.
+- Receipt trace helpers report decision id, topology snapshot id, ticket id,
+  bytes, path split, and fallback reason.
+
+Substage 7.2: model-loading benchmark rewrite.
+
+Status: current.
+
+- Replace Runtime-owned physical mode selection with public client
+  `TransferIntent` submission.
+- Treat baseline policy as benchmark configuration metadata only.
+- Read actual path split from daemon receipt and decision data.
+
+Substage 7.3: training-offload benchmark rewrite.
+
+Status: pending.
+
+- Submit H2D prefetch and D2H offload intent through the public client API.
+- Report separate prefetch/offload receipt ids, decision ids, ticket ids, bytes,
+  path split, timing, and fallback reason.
+
+Substage 7.4: examples and paper-validation command rewrite.
+
+Status: pending.
+
+- Update examples to demonstrate daemon-first submission.
+- Update paper-validation command construction and output validation so it no
+  longer expects applications to choose physical transfer paths.
 
 Expected output:
 
