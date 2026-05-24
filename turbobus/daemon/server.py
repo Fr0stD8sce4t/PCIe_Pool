@@ -94,7 +94,13 @@ class TurboBusDaemon:
         if self._topology_provider is None:
             return _topology_unavailable_response()
         inventory = self._topology_provider.snapshot()
-        return DaemonResponse(ok=True, payload={"inventory": inventory.as_dict()})
+        return DaemonResponse(
+            ok=True,
+            payload={
+                "inventory": inventory.as_dict(),
+                "topology_snapshot": asdict(inventory.to_topology_snapshot()),
+            },
+        )
 
     def discover_relays(
         self,
@@ -1011,8 +1017,7 @@ class TurboBusDaemon:
         if self._topology_provider is None:
             return "topology-unavailable"
         inventory = self._topology_provider.snapshot()
-        source = str(inventory.source).replace(" ", "_")
-        return f"topology-{source}-{float(inventory.discovered_at):.6f}"
+        return inventory.topology_snapshot_id()
 
     def _issue_lease_token_locked(
         self,
@@ -1498,6 +1503,8 @@ class TurboBusDaemon:
             for relay_gpu in candidates
         ]
         return {
+            "topology_snapshot_id": inventory.topology_snapshot_id(),
+            "topology_version": inventory.version,
             "target_gpu": target_gpu,
             "requested_relays": list(candidates),
             "inventory_source": inventory.source,

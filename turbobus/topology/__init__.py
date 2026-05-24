@@ -9,6 +9,7 @@ class GpuInventoryRecord:
     device_id: int
     backend: str = "unknown"
     vendor: str = "unknown"
+    uuid: str | None = None
     pci_bus_id: str | None = None
     numa_node: int | None = None
     memory_bytes: int | None = None
@@ -32,6 +33,8 @@ class GpuInventoryRecord:
         object.__setattr__(self, "device_id", device_id)
         object.__setattr__(self, "backend", str(self.backend))
         object.__setattr__(self, "vendor", str(self.vendor))
+        if self.uuid is not None:
+            object.__setattr__(self, "uuid", str(self.uuid))
         if self.pci_bus_id is not None:
             object.__setattr__(self, "pci_bus_id", str(self.pci_bus_id))
         if self.numa_node is not None:
@@ -112,6 +115,8 @@ class DaemonResourceInventory:
     fabric_links: tuple[FabricLinkRecord, ...] = field(default_factory=tuple)
     source: str = "discovered"
     discovered_at: float = 0.0
+    snapshot_id: str | None = None
+    version: int = 0
     metadata: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -120,15 +125,62 @@ class DaemonResourceInventory:
         discovered_at = float(self.discovered_at)
         if discovered_at < 0.0:
             raise ValueError("discovered_at must be non-negative")
+        version = int(self.version)
+        if version < 0:
+            raise ValueError("version must be non-negative")
         object.__setattr__(self, "gpus", tuple(self.gpus))
         object.__setattr__(self, "pcie_paths", tuple(self.pcie_paths))
         object.__setattr__(self, "fabric_links", tuple(self.fabric_links))
         object.__setattr__(self, "source", str(self.source))
         object.__setattr__(self, "discovered_at", discovered_at)
+        if self.snapshot_id is not None:
+            snapshot_id = str(self.snapshot_id)
+            if not snapshot_id.strip():
+                raise ValueError("snapshot_id must be non-empty")
+            object.__setattr__(self, "snapshot_id", snapshot_id)
+        object.__setattr__(self, "version", version)
         object.__setattr__(self, "metadata", dict(self.metadata))
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
+
+    def topology_snapshot_id(self) -> str:
+        if self.snapshot_id is not None:
+            return self.snapshot_id
+        source = str(self.source).replace(" ", "_")
+        return f"topology-{source}-v{self.version}-{self.discovered_at:.6f}"
+
+    def to_topology_snapshot(self):
+        from ..schema import TopologySnapshot
+
+        return TopologySnapshot(
+            snapshot_id=self.topology_snapshot_id(),
+            source=self.source,
+            discovered_at=self.discovered_at,
+            version=self.version,
+            devices=tuple(
+                {
+                    "device_id": gpu.device_id,
+                    "kind": "gpu",
+                    "backend": gpu.backend,
+                    "vendor": gpu.vendor,
+                    "uuid": gpu.uuid,
+                    "pci_bus_id": gpu.pci_bus_id,
+                    "numa_node": gpu.numa_node,
+                    "memory_bytes": gpu.memory_bytes,
+                    "role": gpu.role,
+                    "visible": gpu.visible,
+                }
+                for gpu in self.gpus
+            ),
+            pcie_links=tuple(asdict(path) for path in self.pcie_paths),
+            fabric_links=tuple(asdict(link) for link in self.fabric_links),
+            metadata={
+                **dict(self.metadata),
+                "inventory_source": self.source,
+                "inventory_snapshot_id": self.topology_snapshot_id(),
+            },
+        )
 
     def eligible_relay_devices(
         self,
@@ -158,6 +210,15 @@ class DaemonResourceInventory:
             }
 
         filtered: list[dict[str, object]] = []
+        target = int(target_device)
+        candidates, removed = _partition_candidates(
+            candidates,
+            {gpu for gpu in candidates if gpu != target},
+        )
+        filtered.extend(
+            {"relay_gpu": gpu, "reason": "target gpu cannot relay"}
+            for gpu in removed
+        )
         if self.gpus:
             known_gpus = {gpu.device_id for gpu in self.gpus}
             candidates, removed = _partition_candidates(candidates, known_gpus)
@@ -173,7 +234,6 @@ class DaemonResourceInventory:
                 for gpu in removed
             )
         if self.fabric_links:
-            target = int(target_device)
             eligible = tuple(
                 gpu
                 for gpu in candidates

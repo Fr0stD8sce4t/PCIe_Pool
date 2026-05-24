@@ -111,6 +111,13 @@ The active target architecture is:
   physical mode control. `benchmarks/summarize_result.py` now summarizes only
   daemon-first model-loading, training-offload, and paper-validation JSON
   shapes and rejects old route-shaped benchmark JSON.
+- Phase 1 Cut 1 is complete. `turbobus.topology.cuda_nvml` now provides a
+  production CUDA/NVML topology provider using `nvidia-smi` probes. Topology
+  inventories now carry GPU UUIDs, versioned snapshot ids, and a conversion to
+  shared `TopologySnapshot`. Daemon startup now uses a production provider
+  through `create_production_daemon`, rejects synthetic fixture topology for
+  production startup, validates relay policy against discovered topology, and
+  reports topology snapshot ids in relay discovery.
 
 ## Active Phase
 
@@ -127,8 +134,8 @@ Phase 1 covers:
 
 ## Next Work Items
 
-Current item: Phase 1 Cut 1, topology provider boundary and production startup
-contract.
+Current item: Phase 1 Cut 2, complete GPU, PCIe, and fabric capability
+normalization.
 
 1. Shared schema layer.
    - Status: complete.
@@ -204,12 +211,14 @@ contract.
 
 9. Automatic topology discovery.
    - Status: current.
-   - Add or tighten daemon-owned topology provider interfaces.
-   - Make production startup use production providers rather than fixture
-     topology.
-   - Produce versioned `TopologySnapshot` objects for scheduler input.
-   - Add focused tests for provider selection, snapshot shape, and startup
-     failure when production discovery is unavailable or insufficient.
+   - Cut 1 complete: daemon-owned topology provider boundary, CUDA/NVML
+     provider, versioned topology snapshot ids, production startup provider
+     selection, fixture rejection, and startup relay policy validation.
+   - Cut 2 current: normalize GPU UUID, PCI bus id, NUMA, memory, PCIe link,
+     and fabric capability fields from production discovery.
+   - Later Phase 1 work: cache invalidation policy, daemon reporting of
+     eligible and filtered relay candidates for real machines, and clear
+     production failure paths when discovery cannot satisfy policy.
 
 ## Phase 0 Acceptance Criteria
 
@@ -227,18 +236,21 @@ Phase 0 is complete:
 
 ## Latest Validation
 
-Phase 0 Cut 9 validation:
+Phase 1 Cut 1 validation:
 
-- `python -m unittest test.python.e2e.test_summarize_result test.python.e2e.test_model_loading_benchmark test.python.e2e.test_training_offload_benchmark test.python.e2e.test_paper_validation`
-- `python -m compileall -q benchmarks\model_loading.py benchmarks\training_offload.py benchmarks\paper_validation.py benchmarks\summarize_result.py examples test\python\e2e\test_summarize_result.py`
-- `rg -n "Runtime\(|RuntimeOptions|--target-gpu\b|--relay-gpus\b|--mode\b|--modes\b|turbobus\.mode\b|min_pool_bytes\b|target_gpu=args\b|relay_gpus=args\b|transfer_mode\b|direct_over_pool\b|auto_resolved_mode\b|set_transfer_mode\b" examples benchmarks turbobus\adapters -g "*.py"`
-- `rg -n "bandwidth_pool|kv_offload|tune_transfer|vllm_turbobus_restore" examples benchmarks test\python -g "*.py"`
+- `python -m unittest test.python.unit.test_topology_provider test.python.unit.test_package_boundaries test.python.integration.test_daemon_state test.python.integration.test_daemon_socket`
+- `python -m compileall -q turbobus\topology turbobus\daemon test\python\unit\test_topology_provider.py test\python\unit\test_package_boundaries.py test\python\integration\test_daemon_state.py test\python\integration\test_daemon_socket.py`
+- `rg -n -g "*.py" -- "--relay-gpus|test_fixture_static|StaticTopologyProvider|synthetic topology|topology provider is required|topology_snapshot_id|CudaNvmlTopologyProvider|DaemonStartupConfig" turbobus\topology turbobus\daemon test\python\unit\test_topology_provider.py test\python\unit\test_package_boundaries.py`
 - `git diff --check`
 
-Remaining Phase 0 risk:
+Remaining Phase 1 risk:
 
-- none currently tracked. New work should proceed to Phase 1 without reviving
-  removed Runtime-shaped benchmark or example entry points.
+- the CUDA/NVML provider currently captures GPU identity, PCI bus id, memory,
+  versioned snapshots, and topology-matrix fabric reachability; PCIe generation,
+  negotiated width, NUMA node, measured bandwidth, and NVSwitch-specific fields
+  still need richer normalization in Cut 2.
+- Phase 1 is not complete until daemon discovery can report usable relay
+  candidates and filtered reasons from the local production machine.
 
 ## Upcoming Phases
 

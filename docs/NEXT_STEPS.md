@@ -112,6 +112,11 @@ Cut 9 is complete. The remaining legacy workload entry points
 removed. `benchmarks/summarize_result.py` now dispatches only daemon-first
 JSON result shapes for model loading, training offload, and paper validation.
 
+Phase 1 Cut 1 is complete. The daemon now has a production topology provider
+boundary, a CUDA/NVML provider backed by `nvidia-smi`, versioned topology
+snapshot ids, and production startup validation that rejects synthetic fixture
+topology or insufficient relay discovery.
+
 Current phase: Phase 1, automatic topology discovery.
 
 ## Phase 0 Code Cuts
@@ -370,8 +375,12 @@ Phase 0 is complete.
 
 ## Phase 1 Current Work
 
-Current item: Phase 1 Cut 1, topology provider boundary and production startup
-contract.
+Current item: Phase 1 Cut 2, complete GPU, PCIe, and fabric capability
+normalization.
+
+Cut 1: topology provider boundary and production startup contract.
+
+Status: complete.
 
 - Add a daemon-owned topology provider interface if the current provider shape
   is not sufficient.
@@ -387,6 +396,27 @@ Expected output:
 - daemon topology code has a clear production provider boundary;
 - tests protect that production startup cannot silently use fixture topology;
 - no application or benchmark code chooses relays or physical paths.
+
+Cut 2: complete GPU, PCIe, and fabric capability normalization.
+
+Status: current.
+
+- Normalize provider output for GPU UUID, PCI bus id, NUMA node, memory size,
+  visibility, and backend/vendor fields.
+- Add PCIe link generation, width, root complex, and bandwidth estimation where
+  the production provider can discover them.
+- Add CUDA P2P or NVLink/NVSwitch capability parsing with relay filtering
+  reasons preserved in daemon discovery output.
+- Keep missing capability fields explicit rather than inventing synthetic
+  defaults.
+- Add focused tests for normalized records and filtered relay explanations.
+
+Expected output:
+
+- `GET_INVENTORY` and relay discovery expose normalized GPU, PCIe, and fabric
+  fields with stable topology snapshot ids;
+- the daemon can explain why each candidate relay is eligible or filtered;
+- production startup still fails clearly when policy requirements are not met.
 
 ## After Phase 0
 
