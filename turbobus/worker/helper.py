@@ -1057,6 +1057,8 @@ def _require_daemon_worker_plan(request: WorkerTransferRequest) -> None:
             raise ValueError("daemon plan direction does not match worker request")
         if int(path.get("target_device", target_device)) != target_device:
             raise ValueError("daemon plan target does not match worker device")
+        if not bool(path.get("enabled", True)):
+            raise ValueError("daemon plan path is disabled")
         if path_kind == "direct":
             chunks = assignment.get("chunks", ()) or ()
         else:

@@ -911,6 +911,10 @@ phase:
      not match the authorized CUDA IPC source or destination handle before
      worker-local relay staging allocation. The helper path now binds the
      exact plan to the daemon-approved GPU buffer before opening resources.
+105. worker authorization now rejects disabled daemon plan paths before
+     worker-local relay staging allocation. A daemon-issued path marked
+     unavailable now cleans the reservation through the authorization-failure
+     path instead of reaching resource binding or CUDA execution.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
