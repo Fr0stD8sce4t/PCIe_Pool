@@ -918,9 +918,15 @@ def _require_worker_release_response_matches_request(
         )
     payload = response.get("payload")
     if not isinstance(payload, Mapping):
-        return
+        raise _WorkerCompletionEnvelopeError(
+            "worker daemon release response missing payload"
+        )
     reservation_id = payload.get("reservation_id")
-    if reservation_id is not None and str(reservation_id) != request.lease_id:
+    if reservation_id is None:
+        raise _WorkerCompletionEnvelopeError(
+            "worker daemon release response missing reservation id"
+        )
+    if str(reservation_id) != request.lease_id:
         raise _WorkerCompletionEnvelopeError(
             "worker daemon release response reservation mismatch"
         )

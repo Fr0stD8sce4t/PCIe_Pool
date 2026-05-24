@@ -329,6 +329,8 @@ Completed current code cut:
   daemon release response for the relay reservation. A helper response that
   reports copied bytes and daemon status but omits reservation release evidence
   is rejected before the client accepts the transfer as complete.
+- Require that daemon release evidence to include the released reservation id
+  and match the daemon-authorized lease before accepting helper completion.
 - Require complete worker/helper completion envelopes to include a matching
   inactive staging release record. A helper response that reports daemon
   completion and reservation release but does not prove the worker-local relay
@@ -418,6 +420,8 @@ Completed current code cut:
      execution.
    - Reject complete worker/helper completion envelopes that do not include a
      successful daemon release response for the relay reservation.
+   - Reject complete worker/helper completion envelopes whose daemon release
+     response does not name the authorized reservation.
    - Reject complete worker/helper completion envelopes that do not include a
      matching inactive worker staging release record.
    - Reject complete worker/helper completion envelopes that do not prove the

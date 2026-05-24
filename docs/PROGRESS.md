@@ -309,6 +309,10 @@ transfer request objects:
   reservation. A helper response that reports copied bytes and daemon status
   but omits reservation release evidence is rejected before the client accepts
   the transfer as complete.
+- worker-managed client completion handling now requires the helper's daemon
+  release response to include the released reservation id and match the
+  daemon-authorized lease, so an `ok` release response without concrete
+  reservation evidence is rejected and cleaned up.
 - worker-managed client completion handling now also requires complete helper
   envelopes to carry a matching inactive staging release record. A helper
   response that proves daemon completion and reservation release but omits
@@ -948,6 +952,10 @@ phase:
      before native execution. If the direct-only daemon plan's declared
      `total_bytes` does not match its assigned chunks, the transfer is recorded
      as failed before host registration or exact-plan submission.
+110. worker-managed client completion now requires daemon release evidence to
+     name the authorized reservation. Complete helper envelopes with an `ok`
+     release response but no payload reservation id are rejected and cleaned up
+     instead of being accepted as end-to-end completion.
 
 The next immediate goal has changed: stop extending the unsupported
 control-plane path and prepare the codebase for the first real
