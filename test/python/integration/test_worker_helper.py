@@ -195,6 +195,78 @@ def daemon_worker_plan(
     }
 
 
+def multi_relay_daemon_worker_plan(
+    *,
+    direction: str = "h2d",
+) -> dict[str, object]:
+    return {
+        "total_bytes": 96,
+        "chunk_bytes": 16,
+        "assignments": [
+            {
+                "path": {
+                    "kind": "direct",
+                    "direction": direction,
+                    "target_device": 0,
+                    "relay_device": -1,
+                    "enabled": True,
+                },
+                "chunks": [
+                    {"src_offset": 0, "dst_offset": 0, "bytes": 16},
+                    {"src_offset": 16, "dst_offset": 16, "bytes": 16},
+                ],
+                "bytes": 32,
+                "chunk_count": 2,
+            },
+            {
+                "path": {
+                    "kind": "relay",
+                    "direction": direction,
+                    "target_device": 0,
+                    "relay_device": 1,
+                    "enabled": True,
+                },
+                "chunks": [
+                    {"src_offset": 32, "dst_offset": 32, "bytes": 16},
+                    {"src_offset": 64, "dst_offset": 64, "bytes": 16},
+                ],
+                "bytes": 32,
+                "chunk_count": 2,
+            },
+            {
+                "path": {
+                    "kind": "relay",
+                    "direction": direction,
+                    "target_device": 0,
+                    "relay_device": 2,
+                    "enabled": True,
+                },
+                "chunks": [
+                    {"src_offset": 48, "dst_offset": 48, "bytes": 16},
+                    {"src_offset": 80, "dst_offset": 80, "bytes": 16},
+                ],
+                "bytes": 32,
+                "chunk_count": 2,
+            },
+        ],
+    }
+
+
+def relay_ranges_for_plan(
+    plan: dict[str, object],
+) -> tuple[dict[str, int], ...]:
+    return tuple(
+        {
+            "src_offset": int(chunk["src_offset"]),
+            "dst_offset": int(chunk["dst_offset"]),
+            "bytes": int(chunk["bytes"]),
+        }
+        for assignment in plan.get("assignments", ()) or ()
+        if assignment["path"]["kind"] == "relay"
+        for chunk in assignment.get("chunks", ()) or ()
+    )
+
+
 def scheduling_decision_payload(
     *,
     direction: str = "h2d",
@@ -268,22 +340,40 @@ def ticket_authorization_payload(
     direction: str = "h2d",
     ranges: tuple[dict[str, int], ...] = ({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
     relay_gpu: int = 1,
+    relay_gpus: tuple[int, ...] | None = None,
+    lease_ids: tuple[str, ...] | None = None,
     plan: dict[str, object] | None = None,
     plan_generation: int = 1,
     **ticket_overrides,
 ) -> dict:
+    planned_chunks = tuple(
+        chunk
+        for assignment in (plan or {}).get("assignments", ()) or ()
+        for chunk in assignment.get("chunks", ()) or ()
+    )
+    required_size = max(
+        [64]
+        + [
+            int(chunk["src_offset"]) + int(chunk["bytes"])
+            for chunk in planned_chunks
+        ]
+        + [
+            int(chunk["dst_offset"]) + int(chunk["bytes"])
+            for chunk in planned_chunks
+        ]
+    )
     if src_buffer is None:
         src_buffer = BufferRegistration(
             buffer_id="cpu-buffer",
             job_id="job-1",
             kind="cpu_pinned",
-            size_bytes=64,
+            size_bytes=required_size,
             pinned=True,
             handle_type="shared_pinned_cpu",
             metadata={
                 "shared_memory_name": "tb-job-1-src",
                 "offset_bytes": 0,
-                "shared_memory_size_bytes": 64,
+                "shared_memory_size_bytes": required_size,
             },
         )
     if dst_buffer is None:
@@ -291,13 +381,15 @@ def ticket_authorization_payload(
             buffer_id="gpu-buffer",
             job_id="job-1",
             kind="gpu",
-            size_bytes=64,
+            size_bytes=required_size,
             device_index=0,
             handle_type="cuda_ipc_device",
             metadata={"cuda_ipc_handle": (b"t" * 64).hex()},
         )
     if plan is None:
         plan = daemon_worker_plan(direction=direction, ranges=ranges, relay_gpu=relay_gpu)
+    resolved_relays = tuple(relay_gpus or (relay_gpu,))
+    resolved_leases = tuple(lease_ids or ("lease-1",))
     metadata = dict(ticket_overrides.pop("metadata", {}))
     metadata.setdefault("issuer", "turbobus-daemon")
     metadata.setdefault("transfer_id", "transfer-1")
@@ -310,6 +402,7 @@ def ticket_authorization_payload(
         "ranges": ranges,
         "plan": plan,
         "metadata": metadata,
+        "lease_ids": resolved_leases,
     }
     ticket_fields.update(ticket_overrides)
     ticket_payload = execution_ticket_payload(**ticket_fields)
@@ -324,7 +417,9 @@ def ticket_authorization_payload(
         "src_buffer": asdict(src_buffer),
         "dst_buffer": asdict(dst_buffer),
         "relay_gpu": relay_gpu,
+        "relay_gpus": resolved_relays,
         "lease_id": "lease-1",
+        "lease_ids": resolved_leases,
         "transfer_id": "transfer-1",
         "plan_generation": int(plan_generation),
     }
@@ -516,6 +611,37 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(request.authorization.dst_buffer.buffer_id, "gpu-buffer")
         self.assertEqual(request.authorization.ranges[0]["bytes"], 16)
         self.assertIsInstance(request.ticket, ExecutionTicket)
+
+    def test_worker_request_parses_multi_relay_daemon_ticket_payload(self) -> None:
+        plan = multi_relay_daemon_worker_plan()
+        payload = ticket_authorization_payload(
+            plan=plan,
+            ranges=relay_ranges_for_plan(plan),
+            relay_gpu=1,
+            relay_gpus=(1, 2),
+            lease_ids=("lease-1", "lease-2"),
+        )
+
+        request = WorkerTransferRequest.from_authorization_payload(payload)
+
+        self.assertEqual(request.data_plane.metadata["relay_gpus"], (1, 2))
+        self.assertEqual(request.data_plane.metadata["lease_ids"], ("lease-1", "lease-2"))
+        self.assertEqual(request.data_plane.ranges, relay_ranges_for_plan(plan))
+        self.assertEqual(request.ticket.lease_ids, ("lease-1", "lease-2"))
+        self.assertEqual(
+            request.data_plane.metadata["relay_ranges_by_gpu"][1],
+            (
+                {"src_offset": 32, "dst_offset": 32, "bytes": 16},
+                {"src_offset": 64, "dst_offset": 64, "bytes": 16},
+            ),
+        )
+        self.assertEqual(
+            request.data_plane.metadata["relay_ranges_by_gpu"][2],
+            (
+                {"src_offset": 48, "dst_offset": 48, "bytes": 16},
+                {"src_offset": 80, "dst_offset": 80, "bytes": 16},
+            ),
+        )
 
     def test_worker_request_builds_data_plane_request_from_execution_ticket(self) -> None:
         request = WorkerTransferRequest.from_authorization_payload(authorization_payload())

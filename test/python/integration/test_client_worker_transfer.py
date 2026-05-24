@@ -56,6 +56,98 @@ class CompleteExecutor:
         )
 
 
+class RecordingWorkerClient:
+    def __init__(self, daemon: TurboBusDaemon) -> None:
+        self.daemon = daemon
+        self.requests = []
+        self.completions: list[WorkerDataPlaneCompletionEnvelope] = []
+
+    def submit_report_cleanup_lifecycle(
+        self,
+        request,
+        cleanup_target_kind: str = "reservation",
+    ):
+        self.requests.append(request)
+        authorized = self.daemon.authorize_worker_transfer(request)
+        if not authorized.ok:
+            raise RuntimeError(authorized.error)
+        worker_request = WorkerTransferRequest.from_authorization_payload(
+            authorized.payload
+        )
+        lease_ids = tuple(worker_request.data_plane.metadata["lease_ids"])
+        relay_gpus = tuple(worker_request.data_plane.metadata["relay_gpus"])
+        bytes_completed = planned_bytes(worker_request)
+        completed = self.daemon.transfer_status(
+            worker_request.transfer_id,
+            state="complete",
+            bytes_completed=bytes_completed,
+        )
+        cleanup_payload = {"released": []}
+        for lease_id in lease_ids:
+            released = self.daemon.release_transfer(lease_id)
+            cleanup_payload["released"].append(released.payload)
+        completion = WorkerDataPlaneCompletionEnvelope(
+            ok=True,
+            transfer_id=worker_request.transfer_id,
+            lease_id=request.lease_id,
+            final_state="complete",
+            staging_slot={
+                "active": True,
+                "transfer_id": worker_request.transfer_id,
+                "lease_id": request.lease_id,
+                "slot_id": "staging-multi",
+            },
+            staging_release={
+                "active": False,
+                "transfer_id": worker_request.transfer_id,
+                "lease_id": request.lease_id,
+                "slot_id": "staging-multi",
+            },
+            worker_result={
+                "transfer_id": worker_request.transfer_id,
+                "lease_id": request.lease_id,
+                "state": "complete",
+                "bytes_completed": bytes_completed,
+                "metadata": {
+                    "relay_gpus": relay_gpus,
+                    "lease_ids": lease_ids,
+                },
+            },
+            daemon_status_update={
+                "transfer_id": worker_request.transfer_id,
+                "lease_id": request.lease_id,
+                "state": "complete",
+                "bytes_completed": bytes_completed,
+            },
+            daemon_status_response=as_daemon_response_dict(completed),
+            daemon_cleanup_response={
+                "ok": True,
+                "payload": {
+                    "reservation_id": request.lease_id,
+                    "released": cleanup_payload["released"],
+                },
+            },
+        )
+        self.completions.append(completion)
+        return type(
+            "Lifecycle",
+            (),
+            {
+                "final_state": "complete",
+                "error": None,
+                "completion_envelope": lambda self_: completion,
+            },
+        )()
+
+
+def as_daemon_response_dict(response: DaemonResponse) -> dict[str, object]:
+    return {
+        "ok": response.ok,
+        "payload": response.payload,
+        "error": response.error,
+    }
+
+
 class FakeCudaBackend:
     def export_device_ipc_handle(self, device_ptr: int) -> bytes:
         return b"g" * 64
@@ -219,6 +311,54 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
         profile = daemon.describe().payload
         self.assertEqual(profile["reservations"], {})
         self.assertEqual(profile["relay_quotas"][1]["active_chunks"], 0)
+
+    def test_fetch_shared_cpu_to_cuda_ipc_runs_multi_relay_ticketed_plan(self) -> None:
+        daemon = daemon_with_multi_relay_path()
+        worker_client = RecordingWorkerClient(daemon)
+        transfer_client = make_worker_managed_transfer_client(
+            daemon,
+            target_gpu=0,
+            relay_gpus=[1, 2],
+            worker_client=worker_client,
+            max_inflight_chunks=8,
+        )
+        allocator = SharedPinnedCpuBufferAllocator(name_prefix="tb-client-worker-test")
+
+        with allocator.allocate("cpu-buffer", "job-1", 128) as source:
+            target = CudaIpcDeviceBuffer.from_device_pointer(
+                buffer_id="gpu-buffer",
+                job_id="job-1",
+                device_index=0,
+                size_bytes=128,
+                device_ptr=1234,
+                backend=FakeCudaBackend(),
+            )
+
+            result = transfer_client.fetch_shared_cpu_to_cuda_ipc(
+                source,
+                target,
+                chunk_bytes=16,
+                mode="pool",
+                job_id="job-1",
+            )
+
+        self.assertEqual(result.state, "complete")
+        self.assertEqual(result.bytes_completed, 128)
+        self.assertEqual(len(result.lease_tokens), 2)
+        self.assertEqual(
+            {int(token["relay_gpu"]) for token in result.lease_tokens},
+            {1, 2},
+        )
+        self.assertEqual(len(worker_client.requests), 1)
+        self.assertEqual(worker_client.requests[0].ranges, ())
+        completion = worker_client.completions[0]
+        self.assertEqual(
+            set(completion.worker_result["metadata"]["relay_gpus"]),
+            {1, 2},
+        )
+        profile = daemon.describe().payload
+        self.assertEqual(profile["relay_quotas"][1]["active_chunks"], 0)
+        self.assertEqual(profile["relay_quotas"][2]["active_chunks"], 0)
         status = daemon.transfer_status(result.transfer_id)
         self.assertTrue(status.ok)
         self.assertEqual(status.payload["status"]["state"], "complete")
@@ -2165,6 +2305,71 @@ def daemon_with_relay_path(
                     "effective_d2h_bw_gbps": 7.0,
                     "p2p_enabled": True,
                 }
+            ],
+        },
+    )
+    return daemon
+
+
+def daemon_with_multi_relay_path() -> TurboBusDaemon:
+    daemon = TurboBusDaemon(
+        relay_gpus=[1, 2],
+        max_sessions_per_relay=1,
+        max_inflight_chunks_per_relay=8,
+        topology_provider=StaticTopologyProvider(
+            DaemonResourceInventory(
+                gpus=(
+                    GpuInventoryRecord(device_id=0, role="target"),
+                    GpuInventoryRecord(device_id=1, role="relay"),
+                    GpuInventoryRecord(device_id=2, role="relay"),
+                ),
+                pcie_paths=(PciePathRecord(device_id=1), PciePathRecord(device_id=2)),
+                fabric_links=(
+                    FabricLinkRecord(
+                        src_device_id=1,
+                        dst_device_id=0,
+                        fabric="nvlink",
+                        enabled=True,
+                    ),
+                    FabricLinkRecord(
+                        src_device_id=2,
+                        dst_device_id=0,
+                        fabric="nvlink",
+                        enabled=True,
+                    ),
+                ),
+                source="test",
+            )
+        ),
+    )
+    daemon.put_profile(
+        target_gpu=0,
+        relay_gpus=[1, 2],
+        profile={
+            "target_device": 0,
+            "direct_h2d_bw_gbps": 1.0,
+            "direct_d2h_bw_gbps": 1.0,
+            "relays": [
+                {
+                    "relay_device": 1,
+                    "target_device": 0,
+                    "h2d_bw_gbps": 8.0,
+                    "d2h_bw_gbps": 7.0,
+                    "p2p_bw_gbps": 40.0,
+                    "effective_bw_gbps": 8.0,
+                    "effective_d2h_bw_gbps": 7.0,
+                    "p2p_enabled": True,
+                },
+                {
+                    "relay_device": 2,
+                    "target_device": 0,
+                    "h2d_bw_gbps": 8.0,
+                    "d2h_bw_gbps": 7.0,
+                    "p2p_bw_gbps": 40.0,
+                    "effective_bw_gbps": 8.0,
+                    "effective_d2h_bw_gbps": 7.0,
+                    "p2p_enabled": True,
+                },
             ],
         },
     )

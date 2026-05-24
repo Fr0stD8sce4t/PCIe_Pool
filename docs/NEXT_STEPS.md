@@ -44,7 +44,7 @@ resource state, weighted scheduling inputs, relay admission state, delayed
 lease grants, plan expiration, and rescheduling state without giving
 applications or adapters physical path control.
 
-Current item: Phase 4 Cut 2, multi-relay worker execution.
+Current item: Phase 4 Cut 3, staging lifecycle and receipt semantics.
 
 ### Phase 3 Cut 1
 
@@ -108,7 +108,7 @@ Expected output:
 
 ## Phase 4 Current Work
 
-Current item: Phase 4 Cut 2, multi-relay worker execution.
+Current item: Phase 4 Cut 3, staging lifecycle and receipt semantics.
 
 Cut 1: data-plane plan boundary and worker input cleanup.
 
@@ -132,7 +132,7 @@ Completed output:
 
 Cut 2: multi-relay worker execution.
 
-Status: current.
+Status: complete.
 
 - Extend worker request construction so one daemon-issued `ExecutionTicket`
   can authorize multiple relay leases and relay GPU paths.
@@ -145,13 +145,34 @@ Status: current.
 - Add focused tests for H2D and D2H pooled plans containing direct chunks plus
   at least two relay paths.
 
-Expected output:
+Completed output:
 
 - workers can execute daemon-ticketed direct plus multi-relay pooled plans;
 - relay leases, ticket metadata, and worker staging records remain tied to the
   daemon plan generation;
 - applications and adapters still submit only `TransferIntent` and consume
   `TransferReceipt`.
+
+Cut 3: staging lifecycle and receipt semantics.
+
+Status: current.
+
+- Make daemon and worker cleanup deterministic for all relay leases and staging
+  records in one ticketed pooled transfer.
+- Share completion and cleanup semantics across H2D, D2H, and range transfers.
+- Ensure repeated submission, lease expiration, and partial worker failure do
+  not leave stale reservations or staging records.
+- Add focused correctness tests for direct, relay, pooled, and failure paths
+  without adding application-side route controls.
+
+Expected output:
+
+- daemon profile and audit state show all staging records for ticketed pooled
+  transfers and remove them deterministically;
+- `TransferReceipt` data remains traceable to decision id, topology snapshot
+  id, ticket id, bytes, path split, and failure state;
+- Phase 4 can be closed after focused non-GPU checks and GPU-server
+  correctness validation notes.
 
 ## Phase 0 Code Cuts
 

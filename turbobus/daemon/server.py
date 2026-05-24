@@ -871,10 +871,52 @@ class TurboBusDaemon:
             plan = self._transfer_plans.get(request.transfer_id)
             if plan is None:
                 return DaemonResponse(ok=False, error="transfer plan is unavailable")
+            related_leases = self._leases_for_worker_plan_locked(
+                request,
+                primary_lease=lease,
+            )
+            if len(related_leases) > 1:
+                related_lease_ids = {item.lease_id for item in related_leases}
+                admission_error = self._validate_transfer_admission_locked(
+                    request.transfer_id,
+                    lease_id=None,
+                    now=now,
+                )
+                if admission_error is not None:
+                    return DaemonResponse(ok=False, error=admission_error)
+                for related_lease in related_leases:
+                    if related_lease.lease_id == lease.lease_id:
+                        continue
+                    admission_error = self._validate_transfer_admission_locked(
+                        request.transfer_id,
+                        lease_id=related_lease.lease_id,
+                        now=now,
+                    )
+                    if admission_error is not None:
+                        return DaemonResponse(ok=False, error=admission_error)
+                    if related_lease.expires_at and now > related_lease.expires_at:
+                        self._release_expired_lease_locked(related_lease.lease_id)
+                        return DaemonResponse(ok=False, error="lease expired")
+                    if related_lease.lease_id not in self._reservations:
+                        return DaemonResponse(ok=False, error="lease is not active")
+                    if related_lease.session_id != request.session_id:
+                        return DaemonResponse(ok=False, error="lease session mismatch")
+                    if related_lease.job_id != request.job_id:
+                        return DaemonResponse(ok=False, error="lease job mismatch")
+                    if related_lease.buffer_ids != lease.buffer_ids:
+                        return DaemonResponse(ok=False, error="lease buffer mismatch")
+                admission = self._transfer_admissions.get(request.transfer_id, {})
+                admission_lease_ids = set(
+                    str(item) for item in admission.get("lease_ids", ()) or ()
+                )
+                if admission_lease_ids and admission_lease_ids != related_lease_ids:
+                    return DaemonResponse(ok=False, error="worker lease set mismatch")
+            else:
+                related_leases = (lease,)
             try:
                 authorized_ranges = _relay_ranges_from_plan(
                     plan,
-                    relay_gpu=lease.relay_gpu,
+                    relay_gpu=tuple(item.relay_gpu for item in related_leases),
                     direction=request.direction,
                 )
             except ValueError as exc:
@@ -882,7 +924,12 @@ class TurboBusDaemon:
             if request.ranges and request.ranges != authorized_ranges:
                 return DaemonResponse(ok=False, error="worker ranges do not match daemon plan")
             requested_bytes = sum(item["bytes"] for item in authorized_ranges)
-            if requested_bytes > reservation.bytes:
+            reservation_bytes = sum(
+                int(self._reservations[item.lease_id].bytes)
+                for item in related_leases
+                if item.lease_id in self._reservations
+            )
+            if requested_bytes > reservation_bytes:
                 return DaemonResponse(ok=False, error="authorization exceeds reservation bytes")
             required_buffers = (request.src_buffer_id, request.dst_buffer_id)
             if required_buffers != lease.buffer_ids:
@@ -914,34 +961,37 @@ class TurboBusDaemon:
                 relay_gpu=lease.relay_gpu,
                 plan=plan,
             )
-            staging_record = self._register_staging_record_locked(
-                lease=lease,
-                transfer_id=request.transfer_id,
-                direction=request.direction,
-                ranges=authorized_ranges,
-                requested_bytes=requested_bytes,
-                now=now,
-            )
             ticket = self._execution_ticket_for_worker_locked(
                 authorization,
-                lease=lease,
+                leases=related_leases,
                 transfer_id=request.transfer_id,
                 now=now,
             )
             self._execution_tickets[ticket.ticket_id] = ticket
             self._transfer_tickets[request.transfer_id] = ticket.ticket_id
-            self._append_audit_record_locked(
-                event_type="relay_authorized",
+            staging_records = self._register_worker_staging_records_locked(
+                leases=related_leases,
                 transfer_id=request.transfer_id,
-                reservation=reservation,
-                lease=lease,
-                staging_record=staging_record,
-                ticket=ticket,
-                state=status.state,
-                reason="worker_authorized",
-                bytes_completed=status.bytes_completed,
+                direction=request.direction,
+                plan=plan,
                 now=now,
             )
+            for related_lease in related_leases:
+                related_reservation = self._reservations.get(related_lease.lease_id)
+                if related_reservation is None:
+                    continue
+                self._append_audit_record_locked(
+                    event_type="relay_authorized",
+                    transfer_id=request.transfer_id,
+                    reservation=related_reservation,
+                    lease=related_lease,
+                    staging_record=staging_records[related_lease.lease_id],
+                    ticket=ticket,
+                    state=status.state,
+                    reason="worker_authorized",
+                    bytes_completed=status.bytes_completed,
+                    now=now,
+                )
             decision = self._scheduling_decisions.get(request.transfer_id)
             return DaemonResponse(
                 ok=True,
@@ -951,13 +1001,19 @@ class TurboBusDaemon:
                     "src_buffer": asdict(src_buffer),
                     "dst_buffer": asdict(dst_buffer),
                     "relay_gpu": lease.relay_gpu,
+                    "relay_gpus": tuple(item.relay_gpu for item in related_leases),
                     "lease_id": request.lease_id,
+                    "lease_ids": tuple(item.lease_id for item in related_leases),
                     "transfer_id": request.transfer_id,
                     "plan_generation": self._transfer_plan_generations.get(
                         request.transfer_id,
                         0,
                     ),
-                    "staging_record": dict(staging_record),
+                    "staging_record": dict(staging_records[lease.lease_id]),
+                    "staging_records": [
+                        dict(staging_records[item.lease_id])
+                        for item in related_leases
+                    ],
                 },
             )
 
@@ -2128,14 +2184,20 @@ class TurboBusDaemon:
         self,
         authorization: WorkerTransferAuthorization,
         *,
-        lease: LeaseToken,
+        leases: tuple[LeaseToken, ...],
         transfer_id: str,
         now: float,
     ) -> ExecutionTicket:
         decision = self._scheduling_decisions.get(str(transfer_id))
         if decision is None:
             raise ValueError("scheduling decision is unavailable")
-        expires_at = float(lease.expires_at or (float(now) + 30.0))
+        if not leases:
+            raise ValueError("worker ticket requires at least one lease")
+        lease_ids = tuple(lease.lease_id for lease in leases)
+        expires_at = min(
+            float(lease.expires_at or (float(now) + 30.0))
+            for lease in leases
+        )
         if expires_at <= float(now):
             raise ValueError("lease expired")
         return self._execution_ticket_for_plan_locked(
@@ -2145,8 +2207,72 @@ class TurboBusDaemon:
             destination_buffer_id=authorization.dst_buffer.buffer_id,
             now=now,
             expires_at=expires_at,
-            lease_ids=(authorization.lease_id,),
+            lease_ids=lease_ids,
         )
+
+    def _leases_for_worker_plan_locked(
+        self,
+        request: WorkerTransferAuthorizationRequest,
+        *,
+        primary_lease: LeaseToken,
+    ) -> tuple[LeaseToken, ...]:
+        if request.ranges:
+            return (primary_lease,)
+        plan = self._transfer_plans.get(request.transfer_id)
+        if plan is None:
+            return (primary_lease,)
+        relay_devices = _relay_devices_from_plan(plan, direction=request.direction)
+        if not relay_devices:
+            return (primary_lease,)
+        if primary_lease.relay_gpu not in relay_devices:
+            return (primary_lease,)
+        related: list[LeaseToken] = []
+        for lease_id, mapped_transfer_id in sorted(self._reservation_transfers.items()):
+            if mapped_transfer_id != request.transfer_id:
+                continue
+            lease = self._lease_tokens.get(lease_id)
+            if lease is None:
+                continue
+            if lease.relay_gpu in relay_devices:
+                related.append(lease)
+        if primary_lease.lease_id not in {lease.lease_id for lease in related}:
+            related.append(primary_lease)
+        found_relays = {lease.relay_gpu for lease in related}
+        if found_relays != relay_devices:
+            raise ValueError("worker relay lease set mismatch")
+        return tuple(
+            sorted(
+                related,
+                key=lambda item: (int(item.relay_gpu), str(item.lease_id)),
+            )
+        )
+
+    def _register_worker_staging_records_locked(
+        self,
+        *,
+        leases: tuple[LeaseToken, ...],
+        transfer_id: str,
+        direction: str,
+        plan: dict[str, object],
+        now: float,
+    ) -> dict[str, dict[str, object]]:
+        records: dict[str, dict[str, object]] = {}
+        for lease in leases:
+            ranges = _relay_ranges_from_plan(
+                plan,
+                relay_gpu=lease.relay_gpu,
+                direction=direction,
+            )
+            requested_bytes = sum(item["bytes"] for item in ranges)
+            records[lease.lease_id] = self._register_staging_record_locked(
+                lease=lease,
+                transfer_id=transfer_id,
+                direction=direction,
+                ranges=ranges,
+                requested_bytes=requested_bytes,
+                now=now,
+            )
+        return records
 
     def _execution_ticket_for_intent_locked(
         self,
@@ -3717,13 +3843,18 @@ def _relay_path_capabilities(
 def _relay_ranges_from_plan(
     plan: dict[str, object],
     *,
-    relay_gpu: int,
+    relay_gpu: int | Iterable[int],
     direction: str,
 ) -> tuple[dict[str, int], ...]:
     if not isinstance(plan, dict):
         raise ValueError("transfer plan is unavailable")
     ranges: list[dict[str, int]] = []
-    relay = int(relay_gpu)
+    if isinstance(relay_gpu, int):
+        relays = {int(relay_gpu)}
+    else:
+        relays = {int(gpu) for gpu in relay_gpu}
+    if not relays:
+        raise ValueError("daemon plan has no authorized relay chunks")
     requested_direction = str(direction).lower()
     for assignment in plan.get("assignments", ()) or ():
         if not isinstance(assignment, dict):
@@ -3735,7 +3866,7 @@ def _relay_ranges_from_plan(
             continue
         if str(path.get("direction", "")).lower() != requested_direction:
             continue
-        if int(path.get("relay_device", -1)) != relay:
+        if int(path.get("relay_device", -1)) not in relays:
             continue
         for chunk in assignment.get("chunks", ()) or ():
             if not isinstance(chunk, dict):
@@ -3750,6 +3881,30 @@ def _relay_ranges_from_plan(
     if not ranges:
         raise ValueError("daemon plan has no authorized relay chunks")
     return tuple(ranges)
+
+
+def _relay_devices_from_plan(
+    plan: dict[str, object],
+    *,
+    direction: str,
+) -> set[int]:
+    if not isinstance(plan, dict):
+        raise ValueError("transfer plan is unavailable")
+    relays: set[int] = set()
+    requested_direction = str(direction).lower()
+    for assignment in plan.get("assignments", ()) or ():
+        if not isinstance(assignment, dict):
+            raise ValueError("transfer plan assignment must be an object")
+        path = assignment.get("path")
+        if not isinstance(path, dict):
+            raise ValueError("transfer plan assignment path must be an object")
+        if str(path.get("kind", "")).lower() != "relay":
+            continue
+        if str(path.get("direction", "")).lower() != requested_direction:
+            continue
+        if assignment.get("chunks"):
+            relays.add(int(path.get("relay_device", -1)))
+    return relays
 
 
 def _ticket_ranges_for_plan(

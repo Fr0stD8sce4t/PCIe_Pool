@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Mapping
+from typing import Iterable, Mapping
 
 from ..schema import (
     BufferRegistration,
@@ -75,7 +75,9 @@ class WorkerTransferRequest:
             src_buffer=_buffer_from_payload(payload["src_buffer"]),
             dst_buffer=_buffer_from_payload(payload["dst_buffer"]),
             relay_gpu=payload.get("relay_gpu"),
+            relay_gpus=payload.get("relay_gpus"),
             lease_id=payload.get("lease_id"),
+            lease_ids=payload.get("lease_ids"),
             transfer_id=payload.get("transfer_id"),
             decision=(
                 None
@@ -103,7 +105,9 @@ class WorkerTransferRequest:
         src_buffer: BufferRegistration,
         dst_buffer: BufferRegistration,
         relay_gpu: int | None = None,
+        relay_gpus: Iterable[int] | None = None,
         lease_id: str | None = None,
+        lease_ids: Iterable[str] | None = None,
         transfer_id: str | None = None,
         decision: SchedulingDecision | None = None,
         plan_generation: object | None = None,
@@ -112,9 +116,23 @@ class WorkerTransferRequest:
         _validate_daemon_issued_ticket(ticket, plan_generation=plan_generation)
         if decision is not None:
             _validate_ticket_matches_decision(ticket, decision)
-        relay = _relay_gpu_for_ticket(ticket, relay_gpu)
-        ranges = _relay_ranges_from_ticket_plan(ticket, relay_gpu=relay)
-        resolved_lease_id = _lease_id_for_ticket(ticket, lease_id)
+        resolved_relays = _relay_gpus_for_ticket(
+            ticket,
+            relay_gpu=relay_gpu,
+            relay_gpus=relay_gpus,
+        )
+        relay = int(relay_gpu) if relay_gpu is not None else resolved_relays[0]
+        if relay not in resolved_relays:
+            raise ValueError("ticket relay does not match daemon plan")
+        ranges = _relay_ranges_from_ticket_plan(ticket, relay_gpus=resolved_relays)
+        resolved_lease_ids = _lease_ids_for_ticket(
+            ticket,
+            lease_id=lease_id,
+            lease_ids=lease_ids,
+        )
+        resolved_lease_id = (
+            str(lease_id) if lease_id is not None else resolved_lease_ids[0]
+        )
         resolved_transfer_id = _transfer_id_for_ticket(ticket, transfer_id)
         authorization = WorkerTransferAuthorization(
             transfer_id=resolved_transfer_id,
@@ -128,9 +146,22 @@ class WorkerTransferRequest:
             relay_gpu=relay,
             plan=dict(ticket.plan),
         )
+        data_plane = WorkerDataPlaneRequest.from_authorization(
+            authorization,
+            metadata={
+                "relay_gpus": resolved_relays,
+                "lease_ids": resolved_lease_ids,
+                "primary_relay_gpu": relay,
+                "primary_lease_id": resolved_lease_id,
+                "relay_ranges_by_gpu": _relay_ranges_by_gpu_for_ticket(
+                    ticket,
+                    relay_gpus=resolved_relays,
+                ),
+            },
+        )
         return cls(
             authorization=authorization,
-            data_plane=WorkerDataPlaneRequest.from_authorization(authorization),
+            data_plane=data_plane,
             ticket=ticket,
         )
 
@@ -165,7 +196,11 @@ class WorkerTransferRequest:
         if not isinstance(self.ticket, ExecutionTicket):
             raise TypeError("ticket must be an ExecutionTicket")
         _validate_daemon_issued_ticket(self.ticket)
-        _validate_ticket_matches_worker_request(self.ticket, self.authorization)
+        _validate_ticket_matches_worker_request(
+            self.ticket,
+            self.authorization,
+            data_plane,
+        )
         object.__setattr__(self, "data_plane", data_plane)
 
     @property
@@ -1058,7 +1093,7 @@ def _require_daemon_worker_plan(request: WorkerTransferRequest) -> None:
     if not assignments:
         raise ValueError("daemon worker authorization plan has no assignments")
 
-    relay_gpu = int(request.data_plane.relay_gpu)
+    relay_gpus = _authorized_relay_gpus_for_request(request)
     direction = request.data_plane.direction
     target_handle = (
         request.data_plane.dst_handle
@@ -1088,8 +1123,8 @@ def _require_daemon_worker_plan(request: WorkerTransferRequest) -> None:
         if path_kind == "direct":
             chunks = assignment.get("chunks", ()) or ()
         else:
-            if int(path.get("relay_device", -1)) != relay_gpu:
-                raise ValueError("daemon plan relay does not match worker lease")
+            if int(path.get("relay_device", -1)) not in relay_gpus:
+                raise ValueError("daemon plan relay is not authorized by worker ticket")
             chunks = assignment.get("chunks", ()) or ()
         for chunk in chunks:
             if not isinstance(chunk, Mapping):
@@ -1183,6 +1218,7 @@ def _validate_daemon_issued_ticket(
 def _validate_ticket_matches_worker_request(
     ticket: ExecutionTicket,
     authorization: WorkerTransferAuthorization,
+    data_plane: WorkerDataPlaneRequest | None = None,
 ) -> None:
     if ticket.job_id != authorization.job_id:
         raise ValueError("ticket job does not match worker authorization")
@@ -1196,17 +1232,25 @@ def _validate_ticket_matches_worker_request(
         raise ValueError("ticket direction does not match worker authorization")
     if dict(ticket.plan) != authorization.plan:
         raise ValueError("ticket plan does not match worker authorization")
-    relay = _relay_gpu_for_ticket(ticket, authorization.relay_gpu)
-    if relay != authorization.relay_gpu:
+    metadata_relays = None
+    if data_plane is not None:
+        metadata_relays = data_plane.metadata.get("relay_gpus")
+    relay_gpus = _relay_gpus_for_ticket(
+        ticket,
+        relay_gpu=authorization.relay_gpu,
+        relay_gpus=metadata_relays,
+    )
+    if authorization.relay_gpu not in relay_gpus:
         raise ValueError("ticket relay does not match worker authorization")
-    if _relay_ranges_from_ticket_plan(ticket, relay_gpu=relay) != authorization.ranges:
+    if _relay_ranges_from_ticket_plan(ticket, relay_gpus=relay_gpus) != authorization.ranges:
         raise ValueError("ticket ranges do not match worker authorization")
 
 
-def _relay_gpu_for_ticket(
+def _relay_gpus_for_ticket(
     ticket: ExecutionTicket,
-    relay_gpu: int | None,
-) -> int:
+    relay_gpu: int | None = None,
+    relay_gpus: Iterable[int] | None = None,
+) -> tuple[int, ...]:
     relay_devices = []
     for assignment in ticket.plan.get("assignments", ()) or ():
         if not isinstance(assignment, Mapping):
@@ -1216,26 +1260,53 @@ def _relay_gpu_for_ticket(
             raise ValueError("ticket plan assignment path must be an object")
         if str(path.get("kind", "")).lower() == "relay":
             relay_devices.append(int(path.get("relay_device", -1)))
-    relay_devices = sorted(set(relay_devices))
+    planned_relays = tuple(sorted(set(relay_devices)))
+    if not planned_relays:
+        raise ValueError("worker ticket requires at least one relay path")
+    requested_relays: tuple[int, ...] | None = None
+    if relay_gpus is not None:
+        requested_relays = tuple(sorted({int(gpu) for gpu in relay_gpus}))
+        if not requested_relays:
+            raise ValueError("worker ticket relay_gpus must not be empty")
     if relay_gpu is not None:
         relay = int(relay_gpu)
-        if relay not in relay_devices:
-            raise ValueError("ticket relay does not match daemon plan")
-        return relay
-    if len(relay_devices) != 1:
-        raise ValueError("worker ticket requires exactly one relay path")
-    return relay_devices[0]
+        if requested_relays is None:
+            requested_relays = (relay,)
+        elif relay not in requested_relays:
+            raise ValueError("ticket relay does not match requested relay_gpus")
+    if requested_relays is None:
+        return planned_relays
+    unknown_relays = sorted(set(requested_relays) - set(planned_relays))
+    if unknown_relays:
+        raise ValueError("ticket relay does not match daemon plan")
+    return requested_relays
 
 
-def _lease_id_for_ticket(ticket: ExecutionTicket, lease_id: str | None) -> str:
+def _lease_ids_for_ticket(
+    ticket: ExecutionTicket,
+    lease_id: str | None = None,
+    lease_ids: Iterable[str] | None = None,
+) -> tuple[str, ...]:
+    requested_ids: tuple[str, ...] | None = None
+    if lease_ids is not None:
+        requested_ids = tuple(str(item) for item in lease_ids)
+        if not requested_ids or any(not item.strip() for item in requested_ids):
+            raise ValueError("worker ticket lease_ids must be non-empty")
     if lease_id is not None:
         resolved = str(lease_id)
-        if ticket.lease_ids and resolved not in ticket.lease_ids:
-            raise ValueError("worker lease_id does not match ticket")
-        return resolved
-    if len(ticket.lease_ids) != 1:
-        raise ValueError("worker ticket requires exactly one lease id")
-    return ticket.lease_ids[0]
+        if requested_ids is None:
+            requested_ids = (resolved,)
+        elif resolved not in requested_ids:
+            raise ValueError("worker lease_id does not match requested lease_ids")
+    ticket_lease_ids = tuple(str(item) for item in ticket.lease_ids)
+    if not ticket_lease_ids:
+        raise ValueError("worker ticket requires at least one lease id")
+    if requested_ids is None:
+        return ticket_lease_ids
+    unknown_ids = sorted(set(requested_ids) - set(ticket_lease_ids))
+    if unknown_ids:
+        raise ValueError("worker lease_id does not match ticket")
+    return requested_ids
 
 
 def _transfer_id_for_ticket(ticket: ExecutionTicket, transfer_id: str | None) -> str:
@@ -1250,9 +1321,12 @@ def _transfer_id_for_ticket(ticket: ExecutionTicket, transfer_id: str | None) ->
 def _relay_ranges_from_ticket_plan(
     ticket: ExecutionTicket,
     *,
-    relay_gpu: int,
+    relay_gpus: Iterable[int],
 ) -> tuple[dict[str, int], ...]:
     ranges: list[dict[str, int]] = []
+    authorized_relays = {int(gpu) for gpu in relay_gpus}
+    if not authorized_relays:
+        raise ValueError("ticket relay_gpus must not be empty")
     for assignment in ticket.plan.get("assignments", ()) or ():
         if not isinstance(assignment, Mapping):
             raise ValueError("ticket plan assignment must be an object")
@@ -1261,7 +1335,7 @@ def _relay_ranges_from_ticket_plan(
             raise ValueError("ticket plan assignment path must be an object")
         if str(path.get("kind", "")).lower() != "relay":
             continue
-        if int(path.get("relay_device", -1)) != int(relay_gpu):
+        if int(path.get("relay_device", -1)) not in authorized_relays:
             continue
         if str(path.get("direction", "")).lower() != ticket.direction:
             raise ValueError("ticket plan direction does not match ticket")
@@ -1283,6 +1357,31 @@ def _relay_ranges_from_ticket_plan(
     return tuple(ranges)
 
 
+def _relay_ranges_by_gpu_for_ticket(
+    ticket: ExecutionTicket,
+    *,
+    relay_gpus: Iterable[int],
+) -> dict[int, tuple[dict[str, int], ...]]:
+    return {
+        int(relay): _relay_ranges_from_ticket_plan(ticket, relay_gpus=(int(relay),))
+        for relay in relay_gpus
+    }
+
+
+def _authorized_relay_gpus_for_request(
+    request: WorkerTransferRequest,
+) -> tuple[int, ...]:
+    metadata_relays = request.data_plane.metadata.get("relay_gpus")
+    if metadata_relays is None:
+        return (int(request.data_plane.relay_gpu),)
+    relays = tuple(sorted({int(gpu) for gpu in metadata_relays}))
+    if not relays:
+        raise ValueError("worker request has no authorized relay GPUs")
+    if int(request.data_plane.relay_gpu) not in relays:
+        raise ValueError("worker request primary relay is not authorized")
+    return relays
+
+
 def _failed_worker_result_from_exception(
     worker_request: WorkerTransferRequest,
     staging_slot: WorkerStagingSlot,
@@ -1295,6 +1394,7 @@ def _failed_worker_result_from_exception(
         bytes_completed=0,
         metadata={
             "relay_gpu": worker_request.authorization.relay_gpu,
+            "relay_gpus": _authorized_relay_gpus_for_request(worker_request),
             "src_buffer_id": worker_request.authorization.src_buffer.buffer_id,
             "dst_buffer_id": worker_request.authorization.dst_buffer.buffer_id,
             "staging_slot_id": staging_slot.slot_id,

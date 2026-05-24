@@ -71,7 +71,7 @@ class CudaWorkerExecutor:
             self.backend.initialize_runtime(
                 runtime,
                 int(target_device),
-                [request.data_plane.relay_gpu],
+                _relay_gpus_for_request(request),
             )
             if request.data_plane.direction == "h2d":
                 handle = self.backend.fetch_plan_to_gpu(
@@ -121,6 +121,7 @@ class CudaWorkerExecutor:
                 ),
                 "plan_source": "daemon",
                 "relay_gpu": request.data_plane.relay_gpu,
+                "relay_gpus": _relay_gpus_for_request(request),
                 "target_device": int(target_device),
                 "src_buffer_id": request.data_plane.src_handle.buffer_id,
                 "dst_buffer_id": request.data_plane.dst_handle.buffer_id,
@@ -178,7 +179,7 @@ def _relay_scoped_daemon_plan_payload(
     assignments: list[dict[str, object]] = []
     relay_ranges: list[dict[str, int]] = []
     total_bytes = 0
-    relay_gpu = int(request.data_plane.relay_gpu)
+    relay_gpus = set(_relay_gpus_for_request(request))
     for assignment in source_plan.get("assignments", ()) or ():
         if not isinstance(assignment, dict):
             raise ValueError("daemon plan assignment must be a mapping")
@@ -196,8 +197,9 @@ def _relay_scoped_daemon_plan_payload(
         if not bool(plan_path.get("enabled", True)):
             raise ValueError("daemon plan path is disabled")
         if path_kind == "relay":
-            if int(plan_path.get("relay_device", -1)) != relay_gpu:
-                raise ValueError("daemon plan relay does not match worker lease")
+            relay_gpu = int(plan_path.get("relay_device", -1))
+            if relay_gpu not in relay_gpus:
+                raise ValueError("daemon plan relay is not authorized by worker ticket")
             plan_path["relay_device"] = relay_gpu
         else:
             plan_path["relay_device"] = -1
@@ -267,6 +269,18 @@ def _assignment_byte_count(plan_payload: dict[str, object], path_kind: str) -> i
             if isinstance(chunk, dict):
                 total += int(chunk.get("bytes", 0))
     return total
+
+
+def _relay_gpus_for_request(request: WorkerTransferRequest) -> list[int]:
+    relays = request.data_plane.metadata.get("relay_gpus")
+    if relays is None:
+        return [int(request.data_plane.relay_gpu)]
+    resolved = sorted({int(relay) for relay in relays})
+    if not resolved:
+        raise ValueError("worker request has no relay GPUs")
+    if int(request.data_plane.relay_gpu) not in resolved:
+        raise ValueError("worker request primary relay is not authorized")
+    return resolved
 
 
 def _metadata_path(*, direction: str, direct_chunks: int) -> str:

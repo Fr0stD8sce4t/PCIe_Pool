@@ -32,6 +32,22 @@ class FakePoolStats:
     relay_chunks = 3
 
 
+class FakeMultiRelayPoolStats:
+    bytes = 96
+    direct_bytes = 32
+    direct_chunks = 2
+    relay_bytes = 64
+    relay_chunks = 4
+
+
+class FakeD2HMultiRelayPoolStats:
+    bytes = 96
+    direct_bytes = 32
+    direct_chunks = 2
+    relay_bytes = 64
+    relay_chunks = 4
+
+
 class FakePoolStatsWithoutPathBytes:
     bytes = 64
     direct_chunks = 1
@@ -192,14 +208,83 @@ def pool_plan() -> dict[str, object]:
     }
 
 
+def multi_relay_pool_plan(direction: str = "h2d") -> dict[str, object]:
+    return {
+        "total_bytes": 96,
+        "chunk_bytes": 16,
+        "assignments": [
+            {
+                "path": {
+                    "kind": "direct",
+                    "direction": direction,
+                    "target_device": 0,
+                    "relay_device": -1,
+                    "enabled": True,
+                },
+                "chunks": [
+                    {"src_offset": 0, "dst_offset": 0, "bytes": 16},
+                    {"src_offset": 16, "dst_offset": 16, "bytes": 16},
+                ],
+                "bytes": 32,
+                "chunk_count": 2,
+            },
+            {
+                "path": {
+                    "kind": "relay",
+                    "direction": direction,
+                    "target_device": 0,
+                    "relay_device": 1,
+                    "enabled": True,
+                },
+                "chunks": [
+                    {"src_offset": 32, "dst_offset": 32, "bytes": 16},
+                    {"src_offset": 64, "dst_offset": 64, "bytes": 16},
+                ],
+                "bytes": 32,
+                "chunk_count": 2,
+            },
+            {
+                "path": {
+                    "kind": "relay",
+                    "direction": direction,
+                    "target_device": 0,
+                    "relay_device": 2,
+                    "enabled": True,
+                },
+                "chunks": [
+                    {"src_offset": 48, "dst_offset": 48, "bytes": 16},
+                    {"src_offset": 80, "dst_offset": 80, "bytes": 16},
+                ],
+                "bytes": 32,
+                "chunk_count": 2,
+            },
+        ],
+    }
+
+
 def worker_request(
     direction: str = "h2d",
     *,
     plan: dict[str, object] | None = None,
     ranges=({"src_offset": 4, "dst_offset": 8, "bytes": 16},),
+    relay_gpus=(1,),
+    lease_ids=("lease-1",),
 ) -> WorkerTransferRequest:
     if plan is None:
         plan = relay_plan(direction)
+    buffer_size = max(
+        64,
+        *(
+            int(chunk["src_offset"]) + int(chunk["bytes"])
+            for assignment in plan.get("assignments", ()) or ()
+            for chunk in assignment.get("chunks", ()) or ()
+        ),
+        *(
+            int(chunk["dst_offset"]) + int(chunk["bytes"])
+            for assignment in plan.get("assignments", ()) or ()
+            for chunk in assignment.get("chunks", ()) or ()
+        ),
+    )
     authorization = WorkerTransferAuthorization(
         transfer_id="transfer-1",
         lease_id="lease-1",
@@ -209,14 +294,14 @@ def worker_request(
             buffer_id="cpu-buffer" if direction == "h2d" else "gpu-buffer",
             job_id="job-1",
             kind="cpu_pinned" if direction == "h2d" else "gpu",
-            size_bytes=64,
+            size_bytes=buffer_size,
             device_index=None if direction == "h2d" else 0,
             pinned=direction == "h2d",
             handle_type="shared_pinned_cpu" if direction == "h2d" else "cuda_ipc_device",
             metadata={
                 "shared_memory_name": "tb-job-1-src",
                 "offset_bytes": 0,
-                "shared_memory_size_bytes": 64,
+                "shared_memory_size_bytes": buffer_size,
             }
             if direction == "h2d"
             else {"cuda_ipc_handle": (b"t" * 64).hex()},
@@ -225,7 +310,7 @@ def worker_request(
             buffer_id="gpu-buffer" if direction == "h2d" else "cpu-buffer",
             job_id="job-1",
             kind="gpu" if direction == "h2d" else "cpu_pinned",
-            size_bytes=64,
+            size_bytes=buffer_size,
             device_index=0 if direction == "h2d" else None,
             pinned=direction == "d2h",
             handle_type="cuda_ipc_device" if direction == "h2d" else "shared_pinned_cpu",
@@ -234,12 +319,12 @@ def worker_request(
             else {
                 "shared_memory_name": "tb-job-1-dst",
                 "offset_bytes": 0,
-                "shared_memory_size_bytes": 64,
+                "shared_memory_size_bytes": buffer_size,
             },
         ),
         direction=direction,
         ranges=ranges,
-        relay_gpu=1,
+        relay_gpu=int(tuple(relay_gpus)[0]),
         plan=plan,
     )
     ticket = ExecutionTicket(
@@ -257,7 +342,7 @@ def worker_request(
         plan=plan,
         issued_at=1.0,
         expires_at=10.0,
-        lease_ids=("lease-1",),
+        lease_ids=tuple(lease_ids),
         metadata={
             "issuer": "turbobus-daemon",
             "transfer_id": "transfer-1",
@@ -268,8 +353,10 @@ def worker_request(
         ticket,
         src_buffer=authorization.src_buffer,
         dst_buffer=authorization.dst_buffer,
-        relay_gpu=1,
-        lease_id="lease-1",
+        relay_gpu=int(tuple(relay_gpus)[0]),
+        relay_gpus=tuple(relay_gpus),
+        lease_id=tuple(lease_ids)[0],
+        lease_ids=tuple(lease_ids),
         transfer_id="transfer-1",
     )
 
@@ -406,6 +493,48 @@ class CudaWorkerExecutorTest(unittest.TestCase):
         self.assertEqual(backend.plan_payloads, [pool_plan()])
         self.assertEqual(backend.initialize_calls[0][1:], (0, [1]))
 
+    def test_executor_runs_h2d_multi_relay_pool_plan_and_waits(self) -> None:
+        request = worker_request(
+            plan=multi_relay_pool_plan(),
+            ranges=(
+                {"src_offset": 32, "dst_offset": 32, "bytes": 16},
+                {"src_offset": 64, "dst_offset": 64, "bytes": 16},
+                {"src_offset": 48, "dst_offset": 48, "bytes": 16},
+                {"src_offset": 80, "dst_offset": 80, "bytes": 16},
+            ),
+            relay_gpus=(1, 2),
+            lease_ids=("lease-1", "lease-2"),
+        )
+        slot = WorkerStagingPool(slot_id_factory=lambda: "staging-1").allocate(
+            request.data_plane
+        )
+        resources = WorkerDataPlaneResources(
+            request=request.data_plane,
+            cpu_buffer=FakeCpuBuffer(),
+            device_ptr=2000,
+            device_bytes=128,
+            cuda_host_registered=True,
+        )
+        backend = FakeBackend()
+        backend.stats_result = FakeMultiRelayPoolStats()
+
+        result = CudaWorkerExecutor(backend=backend).execute_bound(
+            request,
+            slot,
+            resources,
+        )
+
+        self.assertEqual(result.state, WorkerTransferState.COMPLETE)
+        self.assertEqual(result.bytes_completed, 96)
+        self.assertEqual(result.metadata["path"], "pool_h2d")
+        self.assertEqual(result.metadata["relay_gpus"], [1, 2])
+        self.assertEqual(result.metadata["direct_bytes"], 32)
+        self.assertEqual(result.metadata["direct_chunks"], 2)
+        self.assertEqual(result.metadata["relay_bytes"], 64)
+        self.assertEqual(result.metadata["relay_chunks"], 4)
+        self.assertEqual(backend.plan_payloads, [multi_relay_pool_plan()])
+        self.assertEqual(backend.initialize_calls[0][1:], (0, [1, 2]))
+
     def test_executor_derives_pool_byte_split_from_daemon_plan(self) -> None:
         request = worker_request(
             plan=pool_plan(),
@@ -473,6 +602,50 @@ class CudaWorkerExecutorTest(unittest.TestCase):
             (2000, 64, 1000, 64, "native-plan"),
         )
         self.assertEqual(backend.wait_calls[0][1], "handle-2")
+
+    def test_executor_runs_d2h_multi_relay_pool_plan_and_waits(self) -> None:
+        request = worker_request(
+            direction="d2h",
+            plan=multi_relay_pool_plan(direction="d2h"),
+            ranges=(
+                {"src_offset": 32, "dst_offset": 32, "bytes": 16},
+                {"src_offset": 64, "dst_offset": 64, "bytes": 16},
+                {"src_offset": 48, "dst_offset": 48, "bytes": 16},
+                {"src_offset": 80, "dst_offset": 80, "bytes": 16},
+            ),
+            relay_gpus=(1, 2),
+            lease_ids=("lease-1", "lease-2"),
+        )
+        slot = WorkerStagingPool().allocate(request.data_plane)
+        resources = WorkerDataPlaneResources(
+            request=request.data_plane,
+            cpu_buffer=FakeCpuBuffer(),
+            device_ptr=2000,
+            device_bytes=128,
+        )
+        backend = FakeBackend()
+        backend.stats_result = FakeD2HMultiRelayPoolStats()
+
+        result = CudaWorkerExecutor(backend=backend).execute_bound(
+            request,
+            slot,
+            resources,
+        )
+
+        self.assertEqual(result.state, WorkerTransferState.COMPLETE)
+        self.assertEqual(result.metadata["path"], "pool_d2h")
+        self.assertEqual(result.metadata["relay_gpus"], [1, 2])
+        self.assertEqual(result.metadata["relay_bytes"], 64)
+        self.assertEqual(result.metadata["relay_chunks"], 4)
+        self.assertEqual(
+            backend.plan_payloads,
+            [multi_relay_pool_plan(direction="d2h")],
+        )
+        self.assertEqual(backend.initialize_calls[0][1:], (0, [1, 2]))
+        self.assertEqual(
+            backend.offload_calls[0][1:],
+            (2000, 128, 1000, 64, "native-plan"),
+        )
 
 
 if __name__ == "__main__":

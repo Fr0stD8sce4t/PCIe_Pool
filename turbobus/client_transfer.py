@@ -36,6 +36,7 @@ class WorkerManagedTransferResult:
     worker_lifecycle: WorkerTransferLifecycleRecord | None
     final_status: Mapping[str, object]
     worker_completion: WorkerDataPlaneCompletionEnvelope | None = None
+    lease_tokens: tuple[Mapping[str, object], ...] = ()
 
     @property
     def bytes_completed(self) -> int:
@@ -196,27 +197,28 @@ class WorkerManagedTransferClient:
                 source=source,
                 target=target,
             )
-        lease_token = _single_lease_token(self.daemon_client, planned)
+        lease_tokens = _worker_lease_tokens(self.daemon_client, planned)
+        primary_lease_token = lease_tokens[0]
         try:
-            _require_single_relay_worker_plan(
+            _require_worker_plan_matches_leases(
                 planned.payload,
-                lease_token,
+                lease_tokens,
                 direction=direction,
             )
         except Exception:
-            _cleanup_planned_relay_lease(self.daemon_client, lease_token)
+            _cleanup_planned_relay_leases(self.daemon_client, lease_tokens)
             raise
         authorization_request = WorkerTransferAuthorizationRequest(
             transfer_id=str(planned.payload["transfer_id"]),
-            lease_id=str(lease_token["lease_id"]),
-            token=str(lease_token["token"]),
+            lease_id=str(primary_lease_token["lease_id"]),
+            token=str(primary_lease_token["token"]),
             session_id=session_id,
             job_id=job,
             src_buffer_id=source.buffer_id,
             dst_buffer_id=target.buffer_id,
             direction=direction,
             ranges=(),
-            relay_gpu=int(lease_token["relay_gpu"]),
+            relay_gpu=int(primary_lease_token["relay_gpu"]),
         )
         try:
             worker_execution = _submit_worker_execution(
@@ -225,17 +227,17 @@ class WorkerManagedTransferClient:
                 expected_bytes=transfer_request.total_bytes,
             )
         except _WorkerCompletionEnvelopeError:
-            _cleanup_planned_relay_lease(
+            _cleanup_planned_relay_leases(
                 self.daemon_client,
-                lease_token,
+                lease_tokens,
                 reason="worker_completion_invalid",
                 strict=False,
             )
             raise
         except Exception:
-            _cleanup_planned_relay_lease(
+            _cleanup_planned_relay_leases(
                 self.daemon_client,
-                lease_token,
+                lease_tokens,
                 reason="worker_execution_exception",
                 strict=False,
             )
@@ -247,17 +249,17 @@ class WorkerManagedTransferClient:
             _require_ok(status, "daemon transfer status query failed")
             final_status = dict(status.payload["status"])
         except Exception:
-            _cleanup_planned_relay_lease(
+            _cleanup_planned_relay_leases(
                 self.daemon_client,
-                lease_token,
+                lease_tokens,
                 reason="daemon_status_query_failed",
                 strict=False,
             )
             raise
         if worker_execution.final_state != "complete":
-            _cleanup_planned_relay_lease(
+            _cleanup_planned_relay_leases(
                 self.daemon_client,
-                lease_token,
+                lease_tokens,
                 reason="worker_completion_not_complete",
                 strict=False,
             )
@@ -272,9 +274,9 @@ class WorkerManagedTransferClient:
                 expected_bytes=transfer_request.total_bytes,
             )
         except Exception:
-            _cleanup_planned_relay_lease(
+            _cleanup_planned_relay_leases(
                 self.daemon_client,
-                lease_token,
+                lease_tokens,
                 reason="daemon_completion_mismatch",
                 strict=False,
             )
@@ -286,7 +288,8 @@ class WorkerManagedTransferClient:
             source_buffer_id=source.buffer_id,
             target_buffer_id=target.buffer_id,
             plan=planned.payload,
-            lease_token=lease_token,
+            lease_token=primary_lease_token,
+            lease_tokens=lease_tokens,
             authorization_request=authorization_request,
             worker_lifecycle=worker_execution.lifecycle,
             worker_completion=worker_execution.completion,
@@ -428,6 +431,7 @@ def _execute_direct_fallback_transfer(
         target_buffer_id=target.buffer_id,
         plan=planned_payload,
         lease_token=None,
+        lease_tokens=(),
         authorization_request=None,
         worker_lifecycle=None,
         worker_completion=None,
@@ -698,27 +702,31 @@ def _require_device_pointer(buffer: CudaIpcDeviceBuffer) -> None:
         raise ValueError("direct fallback requires a local CUDA device pointer")
 
 
-def _single_lease_token(daemon_client, response: DaemonResponse) -> Mapping[str, object]:
+def _worker_lease_tokens(
+    daemon_client,
+    response: DaemonResponse,
+) -> tuple[Mapping[str, object], ...]:
     lease_tokens = response.payload.get("lease_tokens") or ()
-    if len(lease_tokens) != 1:
-        for lease_token in lease_tokens:
-            _cleanup_planned_relay_lease(daemon_client, lease_token)
-        raise RuntimeError("worker-managed transfer requires exactly one relay lease")
-    return dict(lease_tokens[0])
+    if not lease_tokens:
+        raise RuntimeError("worker-managed transfer requires relay leases")
+    return tuple(dict(lease_token) for lease_token in lease_tokens)
 
 
-def _require_single_relay_worker_plan(
+def _require_worker_plan_matches_leases(
     plan_payload: Mapping[str, object],
-    lease_token: Mapping[str, object],
+    lease_tokens: Iterable[Mapping[str, object]],
     *,
     direction: str,
 ) -> None:
     plan = plan_payload.get("plan")
     if not isinstance(plan, Mapping):
         raise RuntimeError("daemon response did not include a transfer plan")
-    relay_gpu = int(lease_token["relay_gpu"])
+    lease_relays = {int(lease_token["relay_gpu"]) for lease_token in lease_tokens}
+    if not lease_relays:
+        raise RuntimeError("worker-managed transfer requires relay leases")
     expected_direction = str(direction).lower()
     found_relay_chunks = False
+    plan_relays: set[int] = set()
     for assignment in plan.get("assignments", ()) or ():
         if not isinstance(assignment, Mapping):
             raise RuntimeError("daemon transfer plan assignment must be a mapping")
@@ -734,15 +742,18 @@ def _require_single_relay_worker_plan(
             )
         if path_kind == "direct":
             continue
-        if path_kind != "relay" or assignment_relay != relay_gpu:
+        if path_kind != "relay" or assignment_relay not in lease_relays:
             raise RuntimeError(
-                "worker-managed transfer currently supports direct chunks "
-                "plus the leased relay only"
+                "worker-managed transfer requires daemon lease coverage for "
+                "every relay path"
             )
         if assignment.get("chunks"):
+            plan_relays.add(assignment_relay)
             found_relay_chunks = True
     if not found_relay_chunks:
         raise RuntimeError("daemon relay plan did not include worker chunks")
+    if plan_relays != lease_relays:
+        raise RuntimeError("daemon relay leases do not match worker plan")
 
 
 def _cleanup_planned_relay_lease(
@@ -763,6 +774,22 @@ def _cleanup_planned_relay_lease(
     )
     if strict:
         _require_ok(response, "daemon reservation cleanup failed")
+
+
+def _cleanup_planned_relay_leases(
+    daemon_client,
+    lease_tokens: Iterable[Mapping[str, object]],
+    *,
+    reason: str = "unsupported_worker_plan",
+    strict: bool = True,
+) -> None:
+    for lease_token in lease_tokens:
+        _cleanup_planned_relay_lease(
+            daemon_client,
+            lease_token,
+            reason=reason,
+            strict=strict,
+        )
 
 
 def _require_daemon_transfer_complete(

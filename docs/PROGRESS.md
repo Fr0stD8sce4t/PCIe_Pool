@@ -236,9 +236,19 @@ Daemon worker authorization returns ticket, decision, source buffer,
 destination buffer, lease, transfer id, plan generation, and staging record
 data without exposing a separate executable authorization plan.
 
+Phase 4 Cut 2 is complete. Worker request construction can now derive one
+worker data-plane request from a daemon-issued `ExecutionTicket` that contains
+multiple relay leases and relay GPU paths. The CUDA worker initializes every
+relay GPU named by the ticketed plan, preserves direct plus multi-relay path
+stats, and still feeds the exact daemon plan into `fetch_plan_to_gpu` or
+`offload_plan_to_cpu`. Daemon worker authorization now returns the full relay
+lease set and per-relay staging records for one ticketed pooled transfer, while
+applications and adapters still submit only transfer intent and consume
+receipts.
+
 ## Next Work Items
 
-Current item: Phase 4 Cut 2, multi-relay worker execution.
+Current item: Phase 4 Cut 3, staging lifecycle and receipt semantics.
 
 1. Shared schema layer.
    - Status: complete.
@@ -348,8 +358,10 @@ Current item: Phase 4 Cut 2, multi-relay worker execution.
    - Status: current.
    - Cut 1 complete: audit and tighten worker/data-plane execution entry points
      so production paths execute only daemon-issued `ExecutionTicket` plans.
-   - Cut 2 current: extend worker-managed execution from one relay lease to
+   - Cut 2 complete: extend worker-managed execution from one relay lease to
      daemon-ticketed direct plus multi-relay pooled plans.
+   - Cut 3 current: make staging cleanup and receipt semantics deterministic
+     across H2D, D2H, range, direct, relay, pooled, and failure paths.
    - Keep direct, relay, and pooled paths as scheduler outcomes and data-plane
      behaviors, not app-side controls.
 
@@ -369,10 +381,10 @@ Phase 0 is complete:
 
 ## Latest Validation
 
-Phase 4 Cut 1 validation:
+Phase 4 Cut 2 validation:
 
-- `python -m unittest test.python.integration.test_client_worker_transfer test.python.integration.test_worker_helper test.python.unit.test_worker_cuda_executor test.python.integration.test_daemon_state test.python.integration.test_daemon_socket`
-- `python -m compileall -q turbobus\worker turbobus\data_plane turbobus\daemon turbobus\client_transfer.py test\python\integration\test_worker_helper.py test\python\unit\test_worker_cuda_executor.py test\python\integration\test_client_worker_transfer.py test\python\integration\test_daemon_state.py test\python\integration\test_daemon_socket.py`
+- `python -m unittest test.python.unit.test_worker_cuda_executor test.python.integration.test_worker_helper test.python.integration.test_client_worker_transfer test.python.integration.test_daemon_state`
+- `python -m compileall -q turbobus\worker turbobus\daemon turbobus\client_transfer.py test\python\unit\test_worker_cuda_executor.py test\python\integration\test_worker_helper.py test\python\integration\test_client_worker_transfer.py test\python\integration\test_daemon_state.py`
 - `git diff --check`
 
 Remaining risk:
@@ -384,19 +396,19 @@ Remaining risk:
   relay admission, delayed lease grants, plan expiration, and rescheduling in
   non-GPU control-plane tests. Production behavior still needs to be exercised
   on a real multi-GPU CUDA server under concurrent workload pressure.
-- Phase 4 Cut 1 tightened worker-managed direct, relay, and pooled execution
-  entry points around exact daemon-issued tickets. The legacy `turbobus.runtime`
-  module still contains importable Runtime-local execution code and must be
-  removed, demoted to explicit legacy-internal tests, or routed through
-  daemon-issued tickets before Phase 4 is considered complete.
-- Phase 4 still needs multi-relay worker execution, daemon/worker staging
-  lifecycle ownership, shared H2D/D2H/range receipt semantics, and GPU
-  correctness coverage.
+- Phase 4 Cut 2 added ticketed multi-relay worker execution in non-GPU tests.
+  It still needs to be exercised on a real multi-GPU CUDA server.
+- The legacy `turbobus.runtime` module still contains importable Runtime-local
+  execution code and must be removed, demoted to explicit legacy-internal
+  tests, or routed through daemon-issued tickets before Phase 4 is considered
+  complete.
+- Phase 4 still needs daemon/worker staging lifecycle ownership, shared
+  H2D/D2H/range receipt semantics, and GPU correctness coverage.
 
 Latest validation:
 
-- `python -m unittest test.python.integration.test_client_worker_transfer test.python.integration.test_worker_helper test.python.unit.test_worker_cuda_executor test.python.integration.test_daemon_state test.python.integration.test_daemon_socket`
-- `python -m compileall -q turbobus\\worker turbobus\\data_plane turbobus\\daemon turbobus\\client_transfer.py test\\python\\integration\\test_worker_helper.py test\\python\\unit\\test_worker_cuda_executor.py test\\python\\integration\\test_client_worker_transfer.py test\\python\\integration\\test_daemon_state.py test\\python\\integration\\test_daemon_socket.py`
+- `python -m unittest test.python.unit.test_worker_cuda_executor test.python.integration.test_worker_helper test.python.integration.test_client_worker_transfer test.python.integration.test_daemon_state`
+- `python -m compileall -q turbobus\\worker turbobus\\daemon turbobus\\client_transfer.py test\\python\\unit\\test_worker_cuda_executor.py test\\python\\integration\\test_worker_helper.py test\\python\\integration\\test_client_worker_transfer.py test\\python\\integration\\test_daemon_state.py`
 - `git diff --check`
 
 ## Upcoming Phases

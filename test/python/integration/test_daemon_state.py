@@ -88,6 +88,36 @@ def _relay_profile() -> dict:
     }
 
 
+def _multi_relay_profile() -> dict:
+    return {
+        "target_device": 0,
+        "direct_h2d_bw_gbps": 1.0,
+        "direct_d2h_bw_gbps": 1.0,
+        "relays": [
+            {
+                "relay_device": 1,
+                "target_device": 0,
+                "h2d_bw_gbps": 8.0,
+                "d2h_bw_gbps": 7.0,
+                "p2p_bw_gbps": 40.0,
+                "effective_bw_gbps": 8.0,
+                "effective_d2h_bw_gbps": 7.0,
+                "p2p_enabled": True,
+            },
+            {
+                "relay_device": 2,
+                "target_device": 0,
+                "h2d_bw_gbps": 8.0,
+                "d2h_bw_gbps": 7.0,
+                "p2p_bw_gbps": 40.0,
+                "effective_bw_gbps": 8.0,
+                "effective_d2h_bw_gbps": 7.0,
+                "p2p_enabled": True,
+            },
+        ],
+    }
+
+
 def _authorized_relay_transfer(daemon: TurboBusDaemon):
     register = daemon.register_session(
         target_gpu=0,
@@ -3939,6 +3969,154 @@ class DaemonStateTest(unittest.TestCase):
         )
         self.assertFalse(stale_authorized.ok)
         self.assertIn("unknown lease", stale_authorized.error)
+
+    def test_worker_authorization_issues_multi_relay_execution_ticket(self) -> None:
+        daemon = _daemon(
+            relay_gpus=[1, 2],
+            max_sessions_per_relay=1,
+            max_inflight_chunks_per_relay=8,
+            topology_provider=StaticTopologyProvider(
+                DaemonResourceInventory(
+                    gpus=(
+                        GpuInventoryRecord(device_id=0, role="target"),
+                        GpuInventoryRecord(device_id=1, role="relay"),
+                        GpuInventoryRecord(device_id=2, role="relay"),
+                    ),
+                    pcie_paths=(
+                        PciePathRecord(device_id=1),
+                        PciePathRecord(device_id=2),
+                    ),
+                    fabric_links=(
+                        FabricLinkRecord(
+                            src_device_id=1,
+                            dst_device_id=0,
+                            fabric="nvlink",
+                            enabled=True,
+                        ),
+                        FabricLinkRecord(
+                            src_device_id=2,
+                            dst_device_id=0,
+                            fabric="nvlink",
+                            enabled=True,
+                        ),
+                    ),
+                    source="test",
+                )
+            ),
+        )
+        register = daemon.register_session(
+            target_gpu=0,
+            requested_relays=[1, 2],
+            max_inflight_chunks=8,
+        )
+        session_id = register.payload["session"]["session_id"]
+        daemon.register_job(job_id="job-1", session_id=session_id)
+        daemon.register_buffer(
+            buffer_id="cpu-buffer",
+            job_id="job-1",
+            kind="cpu_pinned",
+            size_bytes=128,
+            pinned=True,
+            handle_type="shared_pinned_cpu",
+            metadata={
+                "shared_memory_name": "tb-job-1-src",
+                "offset_bytes": 0,
+                "shared_memory_size_bytes": 128,
+            },
+        )
+        daemon.register_buffer(
+            buffer_id="gpu-buffer",
+            job_id="job-1",
+            kind="gpu",
+            size_bytes=128,
+            device_index=0,
+            handle_type="cuda_ipc_device",
+            metadata={"cuda_ipc_handle": CUDA_IPC_TARGET_HANDLE},
+        )
+        self.assertTrue(
+            daemon.put_profile(
+                target_gpu=0,
+                relay_gpus=[1, 2],
+                profile=_multi_relay_profile(),
+            ).ok
+        )
+        planned = daemon.plan_transfer(
+            session_id=session_id,
+            total_bytes=128,
+            chunk_bytes=16,
+            mode="pool",
+            direction="h2d",
+            job_id="job-1",
+            buffer_ids=["cpu-buffer", "gpu-buffer"],
+        )
+        self.assertTrue(planned.ok)
+        self.assertEqual(len(planned.payload["lease_tokens"]), 2)
+        self.assertEqual(
+            {int(token["relay_gpu"]) for token in planned.payload["lease_tokens"]},
+            {1, 2},
+        )
+        primary = planned.payload["lease_tokens"][0]
+
+        authorized = daemon.authorize_worker_transfer(
+            WorkerTransferAuthorizationRequest(
+                transfer_id=planned.payload["transfer_id"],
+                lease_id=primary["lease_id"],
+                token=primary["token"],
+                session_id=session_id,
+                job_id="job-1",
+                src_buffer_id="cpu-buffer",
+                dst_buffer_id="gpu-buffer",
+                direction="h2d",
+                relay_gpu=primary["relay_gpu"],
+            )
+        )
+
+        self.assertTrue(authorized.ok)
+        ticket = authorized.payload["ticket"]
+        self.assertEqual(
+            set(ticket["lease_ids"]),
+            {token["lease_id"] for token in planned.payload["lease_tokens"]},
+        )
+        self.assertEqual(set(authorized.payload["relay_gpus"]), {1, 2})
+        self.assertEqual(
+            set(authorized.payload["lease_ids"]),
+            {token["lease_id"] for token in planned.payload["lease_tokens"]},
+        )
+        self.assertEqual(ticket["ranges"], _all_plan_ranges(planned.payload["plan"]))
+        self.assertEqual(
+            authorized.payload["decision"]["decision_id"],
+            planned.payload["decision_id"],
+        )
+        staging_records = authorized.payload["staging_records"]
+        self.assertEqual(len(staging_records), 2)
+        self.assertEqual(
+            {record["relay_gpu"] for record in staging_records},
+            {1, 2},
+        )
+        self.assertEqual(
+            {
+                record["requested_bytes"]
+                for record in staging_records
+            },
+            {
+                sum(item["bytes"] for item in _relay_ranges(planned.payload["plan"], 1)),
+                sum(item["bytes"] for item in _relay_ranges(planned.payload["plan"], 2)),
+            },
+        )
+        profile = daemon.describe().payload
+        self.assertEqual(len(profile["staging_records"]), 2)
+        expected_chunks = {
+            int(reservation["relay_gpu"]): int(reservation["chunks"])
+            for reservation in planned.payload["reservations"]
+        }
+        self.assertEqual(
+            profile["relay_quotas"][1]["active_chunks"],
+            expected_chunks[1],
+        )
+        self.assertEqual(
+            profile["relay_quotas"][2]["active_chunks"],
+            expected_chunks[2],
+        )
 
     def test_runtime_state_tracks_relay_staging_and_terminal_updates(self) -> None:
         daemon = _daemon(
