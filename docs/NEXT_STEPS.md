@@ -12,7 +12,7 @@ new architecture rather than preserve application-side route selection.
 
 ## Immediate Functional Target
 
-Begin Phase 3: Cross-Job Dynamic Scheduling.
+Begin Phase 4: Daemon-Plan Data Plane.
 
 Phase 0 is complete. The public examples and benchmarks now use daemon-first
 client APIs, and the old Runtime-shaped benchmark/example entry points have
@@ -24,27 +24,27 @@ snapshots, supports explicit topology invalidation, reports relay eligibility
 with path capabilities, and fails production startup clearly when discovery
 cannot satisfy policy.
 
-Phase 2 daemon-owned resource authority is complete. The next target is
-Phase 3 cross-job dynamic scheduling:
+Phase 2 daemon-owned resource authority is complete. Phase 3 cross-job
+dynamic scheduling is complete. The next target is Phase 4 daemon-plan data
+plane:
 
-1. Add a global daemon transfer queue.
-2. Track active H2D, D2H, P2P, staging, and transfer state.
-3. Schedule from topology, measured bandwidth, current load, request size,
-   workload kind, job weight, and fairness policy.
-4. Add weighted fair sharing across jobs.
-5. Add relay admission control, delayed lease grants, plan expiration, and
-   rescheduling while keeping direct fallback as a scheduler outcome.
+1. Make exact daemon-issued plans the only production data-plane input.
+2. Keep `fetch_plan_to_gpu` and `offload_plan_to_cpu` as backend primitives.
+3. Extend worker-managed execution to multiple relay paths in one plan.
+4. Track staging buffers through daemon or worker lifecycle.
+5. Share ticket and receipt semantics across H2D, D2H, and range transfers.
+6. Add correctness tests for direct, relay, pooled, and failure paths.
 
 ## Current
 
-Phase 3: Cross-Job Dynamic Scheduling.
+Phase 4: Daemon-Plan Data Plane.
 
-Phase 3 is now the active implementation target. Cut 1 is complete. The
-daemon-owned transfer queue and scheduler-readable runtime resource state now
-let later fairness, admission control, and delayed lease decisions reason
-about queued and active work across jobs.
+Phase 3 is complete. The daemon now keeps cross-job queue state, runtime
+resource state, weighted scheduling inputs, relay admission state, delayed
+lease grants, plan expiration, and rescheduling state without giving
+applications or adapters physical path control.
 
-Current item: Phase 3 Cut 3, relay admission control and rescheduling.
+Current item: Phase 4 Cut 1, exact daemon-issued data-plane plan boundary.
 
 ### Phase 3 Cut 1
 
@@ -90,7 +90,7 @@ Expected output:
 
 ### Phase 3 Cut 3
 
-Status: current.
+Status: complete.
 
 - Add daemon-owned relay admission control and delayed lease grants.
 - Add plan expiration and rescheduling when topology, load, or leases change.
@@ -105,6 +105,30 @@ Expected output:
 - queued work can be delayed or replanned instead of forcing immediate lease
   allocation;
 - expired or stale plans cannot be executed by workers.
+
+## Phase 4 Current Work
+
+Current item: Phase 4 Cut 1, exact daemon-issued data-plane plan boundary.
+
+Cut 1: data-plane plan boundary and worker input cleanup.
+
+Status: current.
+
+- Audit current worker and data-plane entry points that execute transfer plans.
+- Remove or rewrite any production path that can execute a plan not issued by
+  the daemon as an `ExecutionTicket`.
+- Keep `fetch_plan_to_gpu` and `offload_plan_to_cpu` as backend execution
+  primitives, but make their production callers consume exact ticketed plans.
+- Add focused tests proving workers and data-plane helpers reject missing,
+  stale, mismatched, or non-daemon-issued plans.
+
+Expected output:
+
+- workers and data-plane helpers execute only daemon-issued `ExecutionTicket`
+  plans in production paths;
+- direct, relay, and pooled paths remain scheduling outcomes, not app controls;
+- Phase 4 can add multi-relay pooled execution without widening application
+  APIs.
 
 ## Phase 0 Code Cuts
 
@@ -549,7 +573,7 @@ Phase 2 is complete.
 
 ## Phase 3 Current Work
 
-Current item: Phase 3 Cut 3, relay admission control and rescheduling.
+Phase 3 is complete.
 
 Cut 1: global queue and runtime resource state.
 
@@ -593,7 +617,7 @@ Expected output:
 
 Cut 3: relay admission control and rescheduling.
 
-Status: current.
+Status: complete.
 
 - Add daemon-owned delayed lease grant behavior.
 - Add plan expiration and rescheduling when runtime state changes.
@@ -605,8 +629,8 @@ Proceed in this order:
 
 1. Automatic topology discovery.
 2. Privileged daemon control plane. Complete.
-3. Cross-job dynamic scheduling. Current.
-4. Daemon-plan data plane.
+3. Cross-job dynamic scheduling. Complete.
+4. Daemon-plan data plane. Current.
 5. vLLM KV end-to-end workload.
 6. Model loading and training offload.
 7. Paper evaluation and hardening.

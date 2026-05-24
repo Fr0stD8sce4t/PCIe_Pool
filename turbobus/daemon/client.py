@@ -208,6 +208,21 @@ class TurboBusDaemonClient:
             )
         )
 
+    def reschedule_transfer(
+        self,
+        transfer_id: str,
+        now: float | None = None,
+    ) -> DaemonResponse:
+        payload: dict[str, object] = {"transfer_id": str(transfer_id)}
+        if now is not None:
+            payload["now"] = float(now)
+        return self.send(
+            DaemonRequest(
+                request_type=RequestType.RESCHEDULE_TRANSFER,
+                payload=payload,
+            )
+        )
+
     def release_transfer(self, reservation_id: str) -> DaemonResponse:
         return self.send(
             DaemonRequest(

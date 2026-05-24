@@ -139,6 +139,57 @@ def _authorized_relay_transfer(daemon: TurboBusDaemon):
     return session_id, planned, lease_token, authorized
 
 
+def _register_intent_job(
+    daemon: TurboBusDaemon,
+    *,
+    job_id: str,
+    intent_id: str,
+    session_id: str | None = None,
+) -> tuple[str, TransferIntent]:
+    if session_id is None:
+        register = daemon.register_session(
+            target_gpu=0,
+            requested_relays=[1],
+            max_inflight_chunks=8,
+        )
+        assert register.ok
+        session_id = register.payload["session"]["session_id"]
+    assert daemon.register_job(job_id=job_id, session_id=session_id).ok
+    assert daemon.register_buffer(
+        buffer_id=f"{job_id}-cpu",
+        job_id=job_id,
+        kind="cpu_pinned",
+        size_bytes=64,
+        pinned=True,
+        handle_type="shared_pinned_cpu",
+        metadata={
+            "shared_memory_name": f"tb-{job_id}-src",
+            "offset_bytes": 0,
+            "shared_memory_size_bytes": 64,
+        },
+    ).ok
+    assert daemon.register_buffer(
+        buffer_id=f"{job_id}-gpu",
+        job_id=job_id,
+        kind="gpu",
+        size_bytes=64,
+        device_index=0,
+        handle_type="cuda_ipc_device",
+        metadata={"cuda_ipc_handle": CUDA_IPC_TARGET_HANDLE},
+    ).ok
+    return session_id, TransferIntent(
+        intent_id=intent_id,
+        job_id=job_id,
+        session_id=session_id,
+        source_buffer_id=f"{job_id}-cpu",
+        destination_buffer_id=f"{job_id}-gpu",
+        direction="h2d",
+        total_bytes=64,
+        ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 64},),
+        workload_kind=WorkloadKind.KV_CACHE,
+    )
+
+
 def _audit_record(
     profile: dict,
     *,
@@ -3716,6 +3767,9 @@ class DaemonStateTest(unittest.TestCase):
             ).ok
         )
 
+        self.assertTrue(
+            daemon.put_profile(target_gpu=0, relay_gpus=[1], profile=_relay_profile()).ok
+        )
         second_submit = daemon.submit_transfer_intent(
             TransferIntent(
                 intent_id="avoids-busy-relay",
@@ -3727,14 +3781,145 @@ class DaemonStateTest(unittest.TestCase):
                 total_bytes=64,
                 ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 64},),
                 workload_kind=WorkloadKind.KV_CACHE,
+                policy_hints={"chunk_bytes": 16},
             )
         )
 
         self.assertTrue(second_submit.ok)
         decision = second_submit.payload["decision"]
-        self.assertEqual(decision["metadata"]["stats"]["resolved_mode"], "direct")
-        self.assertEqual(decision["metadata"]["policy"]["busy_relays"], (1,))
-        self.assertIn("no daemon-approved relay path", decision["fallback_reason"])
+        self.assertEqual(decision["metadata"]["stats"]["resolved_mode"], "pool")
+        self.assertEqual(second_submit.payload["admission"]["state"], "delayed")
+        self.assertIn(
+            "active relay path",
+            second_submit.payload["admission"]["reason"],
+        )
+        self.assertEqual(second_submit.payload["lease_tokens"], [])
+        receipt = TransferReceipt(**second_submit.payload["receipt"])
+        self.assertEqual(receipt.metadata["admission_state"], "delayed")
+        runtime = daemon.describe().payload["runtime_resource_state"]
+        delayed = [
+            item
+            for item in runtime["queued_transfers"]
+            if item["intent_id"] == "avoids-busy-relay"
+        ][0]
+        self.assertEqual(delayed["admission_state"], "delayed")
+
+    def test_delayed_relay_admission_reschedules_after_resource_release(self) -> None:
+        daemon = _daemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=2,
+            max_inflight_chunks_per_relay=8,
+        )
+        _, first_planned, first_lease, _ = _authorized_relay_transfer(daemon)
+        first_transfer_id = first_planned.payload["transfer_id"]
+        self.assertTrue(
+            daemon.transfer_status(
+                first_transfer_id,
+                state="running",
+                bytes_completed=16,
+            ).ok
+        )
+        _session_id, intent = _register_intent_job(
+            daemon,
+            job_id="job-delayed",
+            intent_id="intent-delayed",
+        )
+        intent = TransferIntent(
+            **{
+                **intent.__dict__,
+                "policy_hints": {"chunk_bytes": 16},
+            }
+        )
+
+        submitted = daemon.submit_transfer_intent(intent)
+
+        self.assertTrue(submitted.ok)
+        delayed_transfer_id = submitted.payload["transfer_id"]
+        self.assertEqual(submitted.payload["admission"]["state"], "delayed")
+        self.assertEqual(submitted.payload["lease_tokens"], [])
+        self.assertIsNone(submitted.payload["ticket"])
+
+        self.assertTrue(
+            daemon.transfer_status(
+                first_transfer_id,
+                state="complete",
+                bytes_completed=64,
+            ).ok
+        )
+        self.assertTrue(daemon.release_transfer(first_lease["lease_id"]).ok)
+        rescheduled = daemon.reschedule_transfer(delayed_transfer_id)
+
+        self.assertTrue(rescheduled.ok)
+        self.assertEqual(rescheduled.payload["admission"]["state"], "admitted")
+        self.assertEqual(rescheduled.payload["stats"]["resolved_mode"], "pool")
+        self.assertEqual(len(rescheduled.payload["lease_tokens"]), 1)
+        self.assertGreater(rescheduled.payload["plan_generation"], 1)
+        waited = daemon.wait_transfer_receipt(intent.intent_id)
+        self.assertTrue(waited.ok)
+        receipt = TransferReceipt(**waited.payload["receipt"])
+        self.assertEqual(receipt.metadata["admission_state"], "admitted")
+        self.assertTrue(receipt.ticket_id.startswith("ticket-"))
+
+    def test_worker_rejects_expired_or_stale_plans_before_data_movement(self) -> None:
+        daemon = _daemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=2,
+            max_inflight_chunks_per_relay=8,
+        )
+        session_id, planned, lease_token, _ = _authorized_relay_transfer(daemon)
+        transfer_id = planned.payload["transfer_id"]
+
+        expired = daemon.validate_lease(
+            lease_id=lease_token["lease_id"],
+            token=lease_token["token"],
+            session_id=session_id,
+            relay_gpu=1,
+            job_id="job-1",
+            now=planned.payload["plan_expires_at"] + 1.0,
+        )
+        self.assertFalse(expired.ok)
+        self.assertIn("expired", expired.error)
+
+        stale_daemon = _daemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=1,
+            max_inflight_chunks_per_relay=8,
+        )
+        self.assertTrue(
+            stale_daemon.put_profile(target_gpu=0, relay_gpus=[1], profile=_relay_profile()).ok
+        )
+        _session_id, intent = _register_intent_job(
+            stale_daemon,
+            job_id="job-stale",
+            intent_id="intent-stale",
+        )
+        intent = TransferIntent(
+            **{
+                **intent.__dict__,
+                "policy_hints": {"chunk_bytes": 16},
+            }
+        )
+        submitted = stale_daemon.submit_transfer_intent(intent)
+        self.assertTrue(submitted.ok)
+        active_lease = submitted.payload["lease_tokens"][0]
+        stale_transfer_id = submitted.payload["transfer_id"]
+        rescheduled = stale_daemon.reschedule_transfer(stale_transfer_id)
+        self.assertTrue(rescheduled.ok)
+        stale_authorized = stale_daemon.authorize_worker_transfer(
+            WorkerTransferAuthorizationRequest(
+                transfer_id=stale_transfer_id,
+                lease_id=active_lease["lease_id"],
+                token=active_lease["token"],
+                session_id=intent.session_id,
+                job_id=intent.job_id,
+                src_buffer_id=intent.source_buffer_id,
+                dst_buffer_id=intent.destination_buffer_id,
+                direction="h2d",
+                relay_gpu=1,
+            )
+        )
+        self.assertFalse(stale_authorized.ok)
+        self.assertIn("unknown lease", stale_authorized.error)
 
     def test_runtime_state_tracks_relay_staging_and_terminal_updates(self) -> None:
         daemon = _daemon(

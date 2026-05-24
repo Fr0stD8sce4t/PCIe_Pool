@@ -4,11 +4,11 @@
 
 The active project plan has been reset to paper-parity execution.
 
-Phase 0 realignment, Phase 1 automatic topology discovery, and Phase 2
-privileged daemon control plane are complete. The next work is Phase 3,
-cross-job dynamic scheduling, which turns daemon-owned topology, leases,
-resource state, and audit records into a shared PCIe bandwidth pool across
-jobs.
+Phase 0 realignment, Phase 1 automatic topology discovery, Phase 2
+privileged daemon control plane, and Phase 3 cross-job dynamic scheduling are
+complete. The next work is Phase 4, daemon-plan data plane, which makes exact
+daemon-issued execution tickets the only production input to workers and
+backend data movement.
 
 The active target architecture is:
 
@@ -178,10 +178,17 @@ The active target architecture is:
   planning. Scheduler decisions now consume runtime state to avoid busy relay
   paths, compute weighted fair-share policy metadata, and prefer direct
   fallback when the requesting job already exceeds its weighted share.
+- Phase 3 Cut 3 is complete. The daemon now separates scheduler planning from
+  relay admission, tracks per-transfer admission state, plan generation, and
+  plan expiration, delays relay lease grants when active relay paths or quotas
+  make admission unsafe, and can reschedule queued work after runtime state
+  changes. Workers and lease validation now reject delayed, expired, or stale
+  plans before data movement, while applications and adapters still submit
+  only `TransferIntent` and consume `TransferReceipt`.
 
 ## Active Phase
 
-Phase 3: Cross-Job Dynamic Scheduling.
+Phase 4: Daemon-Plan Data Plane.
 
 Phase 1 is complete:
 
@@ -200,7 +207,7 @@ Phase 2 is complete:
 - transfer state, lease, reservation, and staging lifecycle cleanup;
 - audit records for relay use and failures.
 
-Phase 3 covers:
+Phase 3 is complete:
 
 - global daemon transfer queue;
 - runtime state for H2D, D2H, P2P, relay staging, and active transfers;
@@ -211,9 +218,17 @@ Phase 3 covers:
   rescheduling;
 - direct fallback as a scheduler outcome.
 
+Phase 4 covers:
+
+- exact daemon-issued plans as the only production data-plane input;
+- worker-managed direct, relay, and pooled execution from `ExecutionTicket`;
+- staging buffer lifecycle through daemon or worker cleanup;
+- shared ticket and receipt semantics for H2D, D2H, and range transfers;
+- correctness tests for direct, relay, pooled, and failure paths.
+
 ## Next Work Items
 
-Current item: Phase 3 Cut 3, relay admission control and rescheduling.
+Current item: Phase 4 Cut 1, exact daemon-issued data-plane plan boundary.
 
 1. Shared schema layer.
    - Status: complete.
@@ -310,14 +325,21 @@ Current item: Phase 3 Cut 3, relay admission control and rescheduling.
      bytes, duration, cleanup, and failures.
 
 11. Cross-job dynamic scheduling.
-   - Status: current.
+   - Status: complete.
    - Cut 1 complete: add a global daemon transfer queue and scheduler-readable
      runtime resource state for queued and active work.
    - Cut 2 complete: feed scheduler decisions from daemon runtime state,
      workload kind, priority, job weight, queue depth, and active resource
      usage; avoid busy relays and explain weighted fairness fallback.
-   - Cut 3 current: add relay admission control, delayed lease grants, plan
+   - Cut 3 complete: add relay admission control, delayed lease grants, plan
      expiration, and rescheduling.
+
+12. Daemon-plan data plane.
+   - Status: current.
+   - Cut 1 current: audit and tighten worker/data-plane execution entry points
+     so production paths execute only daemon-issued `ExecutionTicket` plans.
+   - Keep direct, relay, and pooled paths as scheduler outcomes and data-plane
+     behaviors, not app-side controls.
 
 ## Phase 0 Acceptance Criteria
 
@@ -346,18 +368,17 @@ Remaining risk:
 - Phase 1 implementation is complete, but production topology behavior still
   needs to be exercised on a real multi-GPU CUDA server with `nvidia-smi topo
   -m` available.
-- Phase 2 now rejects cross-peer buffer registration and transfer use,
-  cleans stale resources after timeout, disconnect, worker failure, and
-  mismatch, and exposes daemon-owned audit records for relay use and failures.
-  Phase 3 Cut 1 and Cut 2 are complete, but delayed relay admission,
-  rescheduling, and plan expiration still need implementation before real
-  cross-job PCIe pooling is available.
+- Phase 3 now covers queue state, weighted scheduling inputs, daemon-owned
+  relay admission, delayed lease grants, plan expiration, and rescheduling in
+  non-GPU control-plane tests. Production behavior still needs to be exercised
+  on a real multi-GPU CUDA server under concurrent workload pressure.
+- Phase 4 has not yet tightened every worker and backend data-plane execution
+  entry point around exact daemon-issued tickets.
 
 Latest validation:
 
-- `python -m unittest test.python.integration.test_daemon_state test.python.integration.test_daemon_socket`
-- `python -m unittest test.python.unit.test_daemon_scheduler test.python.unit.test_schema test.python.unit.test_contract_schema`
-- `python -m compileall -q turbobus\\daemon turbobus\\scheduler test\\python\\integration\\test_daemon_state.py test\\python\\integration\\test_daemon_socket.py`
+- `python -m unittest test.python.unit.test_daemon_scheduler test.python.unit.test_schema test.python.unit.test_contract_schema test.python.integration.test_daemon_state test.python.integration.test_daemon_socket`
+- `python -m compileall -q turbobus\\schema.py turbobus\\daemon turbobus\\scheduler test\\python\\unit\\test_daemon_scheduler.py test\\python\\integration\\test_daemon_state.py test\\python\\integration\\test_daemon_socket.py`
 - `git diff --check`
 
 ## Upcoming Phases
@@ -366,8 +387,8 @@ After Phase 0, proceed in order:
 
 1. Automatic topology discovery.
 2. Privileged daemon control plane. Complete.
-3. Cross-job dynamic scheduling. Current.
-4. Daemon-plan data plane.
+3. Cross-job dynamic scheduling. Complete.
+4. Daemon-plan data plane. Current.
 5. vLLM KV end-to-end workload.
 6. Model loading and training offload.
 7. Paper evaluation and hardening.

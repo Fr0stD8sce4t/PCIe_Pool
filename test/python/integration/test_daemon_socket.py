@@ -149,6 +149,19 @@ class DaemonSocketTest(unittest.TestCase):
         self.assertEqual(client.requests[0].request_type, RequestType.REAP_EXPIRED_LEASES)
         self.assertEqual(client.requests[0].payload, {"now": 12.5})
 
+    def test_client_reschedule_transfer_uses_daemon_control_request(self) -> None:
+        client = RecordingDaemonClient()
+
+        response = client.reschedule_transfer("transfer-1", now=20.0)
+
+        self.assertTrue(response.ok)
+        self.assertEqual(len(client.requests), 1)
+        self.assertEqual(client.requests[0].request_type, RequestType.RESCHEDULE_TRANSFER)
+        self.assertEqual(
+            client.requests[0].payload,
+            {"transfer_id": "transfer-1", "now": 20.0},
+        )
+
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
     def test_socket_register_job_rejects_unknown_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

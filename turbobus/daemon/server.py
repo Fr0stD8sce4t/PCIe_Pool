@@ -42,6 +42,13 @@ _TERMINAL_TRANSFER_STATES = {
     TransferStatusState.FAILED,
     TransferStatusState.CANCELED,
 }
+_ADMISSION_ADMITTED = "admitted"
+_ADMISSION_DELAYED = "delayed"
+_ADMISSION_EXPIRED = "expired"
+_DEFAULT_PLAN_TTL_SECONDS = 30.0
+_TOPOLOGY_UNAVAILABLE_ERROR = (
+    "topology provider is required; synthetic topology is test fixture only"
+)
 
 
 class TurboBusDaemon:
@@ -75,6 +82,11 @@ class TurboBusDaemon:
         self._transfer_queue: list[str] = []
         self._transfer_queue_records: dict[str, dict[str, object]] = {}
         self._runtime_state_version = 0
+        self._transfer_plan_requests: dict[str, dict[str, object]] = {}
+        self._transfer_plan_generations: dict[str, int] = {}
+        self._transfer_plan_expirations: dict[str, float] = {}
+        self._transfer_admissions: dict[str, dict[str, object]] = {}
+        self._lease_plan_generations: dict[str, int] = {}
         self._transfer_plans: dict[str, dict[str, object]] = {}
         self._scheduling_decisions: dict[str, SchedulingDecision] = {}
         self._execution_tickets: dict[str, ExecutionTicket] = {}
@@ -669,6 +681,7 @@ class TurboBusDaemon:
             workload_kind=intent.workload_kind.value,
             priority=intent.priority,
             peer_identity=peer_identity,
+            allow_delayed_admission=True,
         )
         if not planned.ok:
             return planned
@@ -679,16 +692,19 @@ class TurboBusDaemon:
             decision = self._scheduling_decisions.get(transfer_id)
             if decision is None:
                 return DaemonResponse(ok=False, error="scheduling decision is unavailable")
-            ticket = self._execution_ticket_for_intent_locked(
-                intent=intent,
-                transfer_id=transfer_id,
-                decision=decision,
-                now=now,
-            )
             self._transfer_intents[intent.intent_id] = intent
             self._intent_transfers[intent.intent_id] = transfer_id
-            self._execution_tickets[ticket.ticket_id] = ticket
-            self._transfer_tickets[transfer_id] = ticket.ticket_id
+            ticket = None
+            admission = self._transfer_admissions.get(transfer_id, {})
+            if admission.get("state") == _ADMISSION_ADMITTED:
+                ticket = self._execution_ticket_for_intent_locked(
+                    intent=intent,
+                    transfer_id=transfer_id,
+                    decision=decision,
+                    now=now,
+                )
+                self._execution_tickets[ticket.ticket_id] = ticket
+                self._transfer_tickets[transfer_id] = ticket.ticket_id
             self._refresh_transfer_queue_record_locked(transfer_id, now=now)
             receipt = self._receipt_for_intent_locked(intent.intent_id)
             return DaemonResponse(
@@ -697,7 +713,12 @@ class TurboBusDaemon:
                     "receipt": asdict(receipt),
                     "transfer_id": transfer_id,
                     "decision": asdict(decision),
-                    "ticket": asdict(ticket),
+                    "ticket": None if ticket is None else asdict(ticket),
+                    "admission": planned.payload.get("admission", {}),
+                    "plan_generation": planned.payload.get("plan_generation", 0),
+                    "plan_expires_at": planned.payload.get("plan_expires_at"),
+                    "reservations": planned.payload.get("reservations", []),
+                    "lease_tokens": planned.payload.get("lease_tokens", []),
                     "planning": planned.payload.get("planning", {}),
                 },
             )
@@ -780,6 +801,18 @@ class TurboBusDaemon:
                 return DaemonResponse(ok=False, error="lease is not active")
             transfer_id = self._reservation_transfers.get(lease.lease_id)
             if transfer_id is not None:
+                ticket_id = self._transfer_tickets.get(transfer_id)
+                if ticket_id is not None:
+                    ticket = self._execution_tickets.get(ticket_id)
+                    if ticket is not None and checked_at > ticket.expires_at:
+                        return DaemonResponse(ok=False, error="execution ticket expired")
+                admission_error = self._validate_transfer_admission_locked(
+                    transfer_id,
+                    lease_id=lease.lease_id,
+                    now=checked_at,
+                )
+                if admission_error is not None:
+                    return DaemonResponse(ok=False, error=admission_error)
                 status = self._transfer_statuses.get(transfer_id)
                 if status is not None and status.state in _TERMINAL_TRANSFER_STATES:
                     return DaemonResponse(ok=False, error="transfer is terminal")
@@ -825,6 +858,13 @@ class TurboBusDaemon:
                 return DaemonResponse(ok=False, error="lease expired")
             if lease.lease_id not in self._reservations:
                 return DaemonResponse(ok=False, error="lease is not active")
+            admission_error = self._validate_transfer_admission_locked(
+                request.transfer_id,
+                lease_id=lease.lease_id,
+                now=now,
+            )
+            if admission_error is not None:
+                return DaemonResponse(ok=False, error=admission_error)
             reservation = self._reservations[lease.lease_id]
             if reservation.direction not in {"unknown", request.direction}:
                 return DaemonResponse(ok=False, error="reservation direction mismatch")
@@ -933,6 +973,7 @@ class TurboBusDaemon:
         workload_kind: str = "generic",
         priority: int = 0,
         peer_identity: PeerIdentity | None = None,
+        allow_delayed_admission: bool = False,
     ) -> DaemonResponse:
         now = time.time()
         try:
@@ -950,85 +991,55 @@ class TurboBusDaemon:
             self._reap_stale_sessions_locked(now)
             self._reap_expired_leases_locked(now)
             self._purge_stale_profiles_locked(now)
-            session = self._sessions.get(session_id)
-            if session is None or not session.active:
-                return DaemonResponse(ok=False, error="unknown session")
             try:
-                buffer_ids_tuple, owner_job_id = self._validate_transfer_buffers_locked(
-                    buffer_ids,
+                (
+                    session,
+                    decision,
+                    buffer_ids_tuple,
+                    plan_job_id,
+                    relay_eligibility,
+                    planning_relays,
+                    snapshot_id,
+                ) = self._scheduler_decision_for_transfer_locked(
+                    session_id=session_id,
+                    total_bytes=total_bytes,
+                    chunk_bytes=chunk_bytes,
+                    mode=mode,
+                    direction=direction,
                     job_id=job_id,
-                    session_id=session.session_id,
+                    buffer_ids=buffer_ids,
+                    normalized_ranges=normalized_ranges,
+                    intent_id=intent_id,
+                    topology_snapshot_id=topology_snapshot_id,
+                    workload_kind=workload_kind,
+                    priority=priority,
                     peer_identity=peer_identity,
+                    now=now,
+                    defer_relay_admission=allow_delayed_admission,
                 )
-                if buffer_ids_tuple == () and job_id is not None:
-                    self._validate_peer_owns_job_locked(
-                        job_id=str(job_id),
-                        peer_identity=peer_identity,
-                    )
             except ValueError as exc:
+                if str(exc) == _TOPOLOGY_UNAVAILABLE_ERROR:
+                    return _topology_unavailable_response()
                 return DaemonResponse(ok=False, error=str(exc))
-            if self._topology_provider is None:
-                return _topology_unavailable_response()
-            snapshot_id = topology_snapshot_id or self._topology_snapshot_id_locked()
-            plan_job_id = owner_job_id if owner_job_id is not None else job_id
-            intent = (
-                None
-                if intent_id is None
-                else self._transfer_intents.get(str(intent_id))
-            )
-            relay_eligibility = self._relay_eligibility_for_session_locked(session)
-            planning_relays = tuple(
-                item["relay_gpu"] for item in relay_eligibility["eligible_relays"]
-            )
-
-            profile_entry = self._profile_cache.get(
-                self._profile_key(session.target_gpu, planning_relays)
-            )
-            if profile_entry is None and planning_relays != tuple(session.relay_gpus):
-                profile_entry = self._profile_cache.get(
-                    self._profile_key(session.target_gpu, session.relay_gpus)
-                )
-            planning_session = (
-                session
-                if planning_relays == tuple(session.relay_gpus)
-                else Session(
-                    session_id=session.session_id,
-                    target_gpu=session.target_gpu,
-                    relay_gpus=list(planning_relays),
-                    max_inflight_chunks=session.max_inflight_chunks,
-                    active_chunks=session.active_chunks,
-                    active=session.active,
-                    created_at=session.created_at,
-                    last_seen=session.last_seen,
-                    closed_at=session.closed_at,
-                )
-            )
-            decision = self._scheduler.plan_transfer(
-                session=planning_session,
-                profile_entry=profile_entry,
-                relay_quotas=self._relay_quotas,
-                runtime_state=self._runtime_resource_state_locked(now=now),
-                total_bytes=total_bytes,
-                chunk_bytes=chunk_bytes,
-                ranges=normalized_ranges,
-                mode=mode,
-                direction=direction,
-                workload_kind=(
-                    workload_kind if intent is None else intent.workload_kind
-                ),
-                priority=priority if intent is None else intent.priority,
-                now=now,
-                job_id=plan_job_id,
-                intent_id=intent_id,
-                topology_snapshot_id=snapshot_id,
-            )
             transfer_id = str(uuid.uuid4())
-            reservations = self._commit_scheduler_leases_locked(
-                session,
+            self._transfer_plan_generations[transfer_id] = 1
+            admission = self._admission_for_decision_locked(
                 decision,
-                transfer_id=transfer_id,
-                buffer_ids=buffer_ids_tuple,
+                session=session,
+                allow_delayed=allow_delayed_admission,
+                now=now,
             )
+            reservations = []
+            if admission["state"] == _ADMISSION_ADMITTED:
+                reservations = self._commit_scheduler_leases_locked(
+                    session,
+                    decision,
+                    transfer_id=transfer_id,
+                    buffer_ids=buffer_ids_tuple,
+                )
+                admission["lease_ids"] = tuple(
+                    reservation.reservation_id for reservation in reservations
+                )
             status = TransferStatus(
                 transfer_id=transfer_id,
                 job_id=str(plan_job_id or session.session_id),
@@ -1040,6 +1051,29 @@ class TurboBusDaemon:
             self._transfer_statuses[transfer_id] = status
             self._transfer_plans[transfer_id] = dict(decision.plan)
             self._scheduling_decisions[transfer_id] = decision
+            self._transfer_plan_requests[transfer_id] = {
+                "session_id": session.session_id,
+                "total_bytes": int(total_bytes),
+                "chunk_bytes": int(chunk_bytes),
+                "mode": str(mode),
+                "direction": str(direction).lower(),
+                "job_id": None if plan_job_id is None else str(plan_job_id),
+                "buffer_ids": buffer_ids_tuple,
+                "ranges": normalized_ranges,
+                "intent_id": None if intent_id is None else str(intent_id),
+                "topology_snapshot_id": topology_snapshot_id,
+                "workload_kind": str(workload_kind),
+                "priority": int(priority),
+            }
+            self._transfer_plan_expirations[transfer_id] = (
+                self._plan_expires_at_for_decision(decision, now=now)
+            )
+            admission = {
+                **admission,
+                "plan_generation": 1,
+                "plan_expires_at": self._transfer_plan_expirations[transfer_id],
+            }
+            self._transfer_admissions[transfer_id] = admission
             self._record_planned_transfer_locked(
                 transfer_id=transfer_id,
                 status=status,
@@ -1053,31 +1087,145 @@ class TurboBusDaemon:
                 now=now,
             )
             self._touch_session_locked(session.session_id, now)
-            payload = {
-                "decision": asdict(decision),
-                "decision_id": decision.decision_id,
-                "topology_snapshot_id": decision.topology_snapshot_id,
-                "plan": dict(decision.plan),
-                "path_summary": list(decision.path_summary),
-                "stats": scheduling_decision_stats(decision).as_dict(),
-                "leases": [
-                    lease.as_dict() for lease in scheduling_decision_leases(decision)
-                ],
-            }
-            payload["transfer_id"] = transfer_id
-            payload["transfer_status"] = asdict(status)
-            payload["planning"] = {
-                "target_gpu": session.target_gpu,
-                "profile_key": self._profile_key(session.target_gpu, planning_relays),
-                "relay_eligibility": relay_eligibility,
-            }
-            payload["reservations"] = [asdict(reservation) for reservation in reservations]
-            payload["lease_tokens"] = [
-                asdict(self._lease_tokens[reservation.reservation_id])
-                for reservation in reservations
-                if reservation.reservation_id in self._lease_tokens
-            ]
+            payload = self._planned_transfer_payload_locked(
+                transfer_id=transfer_id,
+                decision=decision,
+                status=status,
+                session=session,
+                planning_relays=planning_relays,
+                relay_eligibility=relay_eligibility,
+                reservations=reservations,
+            )
             return DaemonResponse(ok=True, payload=payload)
+
+    def reschedule_transfer(
+        self,
+        transfer_id: str,
+        now: float | None = None,
+    ) -> DaemonResponse:
+        checked_at = time.time() if now is None else float(now)
+        with self._lock:
+            normalized_transfer_id = str(transfer_id)
+            self._reap_stale_sessions_locked(checked_at)
+            self._reap_expired_leases_locked(checked_at)
+            self._purge_stale_profiles_locked(checked_at)
+            status = self._transfer_statuses.get(normalized_transfer_id)
+            if status is None:
+                return DaemonResponse(ok=False, error="unknown transfer")
+            if status.state in _TERMINAL_TRANSFER_STATES:
+                return DaemonResponse(ok=False, error="transfer is terminal")
+            request = self._transfer_plan_requests.get(normalized_transfer_id)
+            if request is None:
+                return DaemonResponse(ok=False, error="transfer plan request is unavailable")
+            _merge_removed(
+                _empty_removed_summary(),
+                self._release_reservations_for_transfer_locked(
+                    normalized_transfer_id,
+                    final_state=TransferStatusState.CANCELED,
+                    cleanup_reason="reschedule",
+                    mark_terminal=False,
+                ),
+            )
+            try:
+                (
+                    session,
+                    decision,
+                    buffer_ids_tuple,
+                    _plan_job_id,
+                    relay_eligibility,
+                    planning_relays,
+                    _snapshot_id,
+                ) = self._scheduler_decision_for_transfer_locked(
+                    session_id=str(request["session_id"]),
+                    total_bytes=int(request["total_bytes"]),
+                    chunk_bytes=int(request["chunk_bytes"]),
+                    mode=str(request["mode"]),
+                    direction=str(request["direction"]),
+                    job_id=(
+                        None
+                        if request.get("job_id") is None
+                        else str(request["job_id"])
+                    ),
+                    buffer_ids=request.get("buffer_ids"),
+                    normalized_ranges=request.get("ranges"),
+                    intent_id=request.get("intent_id"),
+                    topology_snapshot_id=request.get("topology_snapshot_id"),
+                    workload_kind=str(request.get("workload_kind", "generic")),
+                    priority=int(request.get("priority", 0) or 0),
+                    peer_identity=None,
+                    now=checked_at,
+                    exclude_transfer_id=normalized_transfer_id,
+                    defer_relay_admission=True,
+                )
+            except ValueError as exc:
+                return DaemonResponse(ok=False, error=str(exc))
+            generation = int(self._transfer_plan_generations.get(normalized_transfer_id, 0)) + 1
+            self._transfer_plan_generations[normalized_transfer_id] = generation
+            self._transfer_plans[normalized_transfer_id] = dict(decision.plan)
+            self._scheduling_decisions[normalized_transfer_id] = decision
+            self._transfer_plan_expirations[normalized_transfer_id] = (
+                self._plan_expires_at_for_decision(decision, now=checked_at)
+            )
+            admission = self._admission_for_decision_locked(
+                decision,
+                session=session,
+                allow_delayed=True,
+                now=checked_at,
+            )
+            reservations = []
+            if admission["state"] == _ADMISSION_ADMITTED:
+                reservations = self._commit_scheduler_leases_locked(
+                    session,
+                    decision,
+                    transfer_id=normalized_transfer_id,
+                    buffer_ids=buffer_ids_tuple,
+                )
+                admission["lease_ids"] = tuple(
+                    reservation.reservation_id for reservation in reservations
+                )
+            admission = {
+                **admission,
+                "plan_generation": generation,
+                "plan_expires_at": self._transfer_plan_expirations[normalized_transfer_id],
+                "rescheduled_at": float(checked_at),
+            }
+            self._transfer_admissions[normalized_transfer_id] = admission
+            self._execution_tickets.pop(
+                self._transfer_tickets.pop(normalized_transfer_id, ""),
+                None,
+            )
+            intent_id = request.get("intent_id")
+            intent = (
+                None
+                if intent_id is None
+                else self._transfer_intents.get(str(intent_id))
+            )
+            if intent is not None and admission["state"] == _ADMISSION_ADMITTED:
+                ticket = self._execution_ticket_for_intent_locked(
+                    intent=intent,
+                    transfer_id=normalized_transfer_id,
+                    decision=decision,
+                    now=checked_at,
+                )
+                self._execution_tickets[ticket.ticket_id] = ticket
+                self._transfer_tickets[normalized_transfer_id] = ticket.ticket_id
+            self._refresh_transfer_queue_record_locked(
+                normalized_transfer_id,
+                now=checked_at,
+            )
+            self._touch_session_locked(session.session_id, checked_at)
+            return DaemonResponse(
+                ok=True,
+                payload=self._planned_transfer_payload_locked(
+                    transfer_id=normalized_transfer_id,
+                    decision=decision,
+                    status=status,
+                    session=session,
+                    planning_relays=planning_relays,
+                    relay_eligibility=relay_eligibility,
+                    reservations=reservations,
+                ),
+            )
 
     def get_profile(self, target_gpu: int, relay_gpus: Iterable[int]) -> DaemonResponse:
         key = self._profile_key(target_gpu, relay_gpus)
@@ -1137,6 +1285,7 @@ class TurboBusDaemon:
         reservation_id: str,
         final_state: TransferStatusState = TransferStatusState.COMPLETE,
         cleanup_reason: str | None = None,
+        mark_terminal: bool = True,
     ) -> TransferReservation | None:
         reservation_key = str(reservation_id)
         reservation = self._reservations.get(reservation_key)
@@ -1164,6 +1313,7 @@ class TurboBusDaemon:
             )
         self._reservations.pop(reservation_key, None)
         self._lease_tokens.pop(reservation_key, None)
+        self._lease_plan_generations.pop(reservation_key, None)
         self._staging_records.pop(reservation_key, None)
         transfer_id = self._reservation_transfers.pop(reservation_key, None)
         session = self._sessions.get(reservation.session_id)
@@ -1172,7 +1322,7 @@ class TurboBusDaemon:
         quota = self._relay_quotas.get(reservation.relay_gpu)
         if quota is not None:
             quota.active_chunks = max(0, quota.active_chunks - reservation.chunks)
-        if transfer_id is not None:
+        if transfer_id is not None and mark_terminal:
             self._mark_transfer_terminal_if_unblocked_locked(transfer_id, final_state)
         if cleanup_reason is not None:
             self._system_cleanup_events.append(
@@ -1190,6 +1340,7 @@ class TurboBusDaemon:
         reservation_id: str,
         final_state: TransferStatusState,
         cleanup_reason: str | None = None,
+        mark_terminal: bool = True,
     ) -> dict[str, int]:
         removed = _empty_removed_summary()
         transfer_id = self._reservation_transfers.get(str(reservation_id))
@@ -1201,6 +1352,7 @@ class TurboBusDaemon:
             str(reservation_id),
             final_state=final_state,
             cleanup_reason=cleanup_reason,
+            mark_terminal=mark_terminal,
         )
         if reservation is not None:
             removed["reservations"] += 1
@@ -1217,6 +1369,7 @@ class TurboBusDaemon:
         transfer_id: str,
         final_state: TransferStatusState,
         cleanup_reason: str | None = None,
+        mark_terminal: bool = True,
     ) -> dict[str, int]:
         removed = _empty_removed_summary()
         for reservation_id, mapped_transfer_id in list(self._reservation_transfers.items()):
@@ -1228,9 +1381,287 @@ class TurboBusDaemon:
                     reservation_id,
                     final_state=final_state,
                     cleanup_reason=cleanup_reason,
+                    mark_terminal=mark_terminal,
                 ),
             )
         return removed
+
+    def _scheduler_decision_for_transfer_locked(
+        self,
+        *,
+        session_id: str,
+        total_bytes: int,
+        chunk_bytes: int,
+        mode: str,
+        direction: str,
+        job_id: str | None,
+        buffer_ids: Iterable[str] | None,
+        normalized_ranges: Iterable[dict[str, int]] | None,
+        intent_id: str | None,
+        topology_snapshot_id: str | None,
+        workload_kind: str,
+        priority: int,
+        peer_identity: PeerIdentity | None,
+        now: float,
+        exclude_transfer_id: str | None = None,
+        defer_relay_admission: bool = False,
+    ) -> tuple[
+        Session,
+        SchedulingDecision,
+        tuple[str, ...],
+        str | None,
+        dict[str, object],
+        tuple[int, ...],
+        str,
+    ]:
+        session = self._sessions.get(str(session_id))
+        if session is None or not session.active:
+            raise ValueError("unknown session")
+        buffer_ids_tuple, owner_job_id = self._validate_transfer_buffers_locked(
+            buffer_ids,
+            job_id=job_id,
+            session_id=session.session_id,
+            peer_identity=peer_identity,
+        )
+        if buffer_ids_tuple == () and job_id is not None:
+            self._validate_peer_owns_job_locked(
+                job_id=str(job_id),
+                peer_identity=peer_identity,
+            )
+        if self._topology_provider is None:
+            raise ValueError(_TOPOLOGY_UNAVAILABLE_ERROR)
+        snapshot_id = topology_snapshot_id or self._topology_snapshot_id_locked()
+        plan_job_id = owner_job_id if owner_job_id is not None else job_id
+        intent = (
+            None
+            if intent_id is None
+            else self._transfer_intents.get(str(intent_id))
+        )
+        relay_eligibility = self._relay_eligibility_for_session_locked(session)
+        planning_relays = tuple(
+            item["relay_gpu"] for item in relay_eligibility["eligible_relays"]
+        )
+        profile_entry = self._profile_cache.get(
+            self._profile_key(session.target_gpu, planning_relays)
+        )
+        if profile_entry is None and planning_relays != tuple(session.relay_gpus):
+            profile_entry = self._profile_cache.get(
+                self._profile_key(session.target_gpu, session.relay_gpus)
+            )
+        planning_session = (
+            session
+            if planning_relays == tuple(session.relay_gpus)
+            else Session(
+                session_id=session.session_id,
+                target_gpu=session.target_gpu,
+                relay_gpus=list(planning_relays),
+                max_inflight_chunks=session.max_inflight_chunks,
+                active_chunks=session.active_chunks,
+                active=session.active,
+                created_at=session.created_at,
+                last_seen=session.last_seen,
+                closed_at=session.closed_at,
+            )
+        )
+        runtime_state = self._runtime_resource_state_locked(now=now)
+        if exclude_transfer_id is not None:
+            runtime_state = _runtime_state_without_transfer(
+                runtime_state,
+                transfer_id=str(exclude_transfer_id),
+            )
+        decision = self._scheduler.plan_transfer(
+            session=planning_session,
+            profile_entry=profile_entry,
+            relay_quotas=self._relay_quotas,
+            runtime_state=runtime_state,
+            total_bytes=total_bytes,
+            chunk_bytes=chunk_bytes,
+            ranges=(
+                None
+                if normalized_ranges is None
+                else tuple(dict(item) for item in normalized_ranges)
+            ),
+            mode=mode,
+            direction=direction,
+            workload_kind=(
+                workload_kind if intent is None else intent.workload_kind
+            ),
+            priority=priority if intent is None else intent.priority,
+            now=now,
+            job_id=plan_job_id,
+            intent_id=intent_id,
+            topology_snapshot_id=snapshot_id,
+            defer_relay_admission=defer_relay_admission,
+        )
+        return (
+            session,
+            decision,
+            buffer_ids_tuple,
+            plan_job_id,
+            relay_eligibility,
+            planning_relays,
+            snapshot_id,
+        )
+
+    def _admission_for_decision_locked(
+        self,
+        decision: SchedulingDecision,
+        *,
+        session: Session,
+        allow_delayed: bool,
+        now: float,
+    ) -> dict[str, object]:
+        leases = scheduling_decision_leases(decision)
+        if not leases:
+            return {
+                "state": _ADMISSION_ADMITTED,
+                "reason": "direct_or_fallback_plan",
+                "requested_lease_count": 0,
+                "requested_chunks": 0,
+                "lease_ids": (),
+                "admitted_at": float(now),
+            }
+        requested_chunks = sum(lease.chunk_limit for lease in leases)
+        reason = self._relay_admission_blocked_reason_locked(
+            session=session,
+            leases=leases,
+        )
+        if reason is None:
+            return {
+                "state": _ADMISSION_ADMITTED,
+                "reason": "relay_resources_available",
+                "requested_lease_count": len(leases),
+                "requested_chunks": requested_chunks,
+                "lease_ids": (),
+                "admitted_at": float(now),
+            }
+        if allow_delayed:
+            return {
+                "state": _ADMISSION_DELAYED,
+                "reason": reason,
+                "requested_lease_count": len(leases),
+                "requested_chunks": requested_chunks,
+                "lease_ids": (),
+                "delayed_at": float(now),
+            }
+        return {
+            "state": _ADMISSION_ADMITTED,
+            "reason": "scheduler_fallback_or_rejection",
+            "requested_lease_count": 0,
+            "requested_chunks": 0,
+            "lease_ids": (),
+            "admitted_at": float(now),
+        }
+
+    def _relay_admission_blocked_reason_locked(
+        self,
+        *,
+        session: Session,
+        leases,
+    ) -> str | None:
+        total_chunks = sum(lease.chunk_limit for lease in leases)
+        if session.active_chunks + total_chunks > session.max_inflight_chunks:
+            return "session relay admission is delayed by chunk quota"
+        busy_relays = _busy_relays_from_runtime_state(
+            self._runtime_resource_state_locked()
+        )
+        for lease in leases:
+            if lease.relay_device not in session.relay_gpus:
+                return "relay admission is delayed by session relay ownership"
+            quota = self._relay_quotas.get(lease.relay_device)
+            if quota is None:
+                return "relay admission is delayed by missing relay quota"
+            if not quota.can_reserve(lease.chunk_limit):
+                return "relay admission is delayed by relay chunk quota"
+            if int(lease.relay_device) in busy_relays:
+                return "relay admission is delayed by active relay path"
+        return None
+
+    def _plan_expires_at_for_decision(
+        self,
+        decision: SchedulingDecision,
+        *,
+        now: float,
+    ) -> float:
+        expires_at = [
+            float(lease.expires_at)
+            for lease in scheduling_decision_leases(decision)
+            if float(lease.expires_at) > float(now)
+        ]
+        if expires_at:
+            return min(expires_at)
+        return float(now) + _DEFAULT_PLAN_TTL_SECONDS
+
+    def _planned_transfer_payload_locked(
+        self,
+        *,
+        transfer_id: str,
+        decision: SchedulingDecision,
+        status: TransferStatus,
+        session: Session,
+        planning_relays: tuple[int, ...],
+        relay_eligibility: dict[str, object],
+        reservations: list[TransferReservation],
+    ) -> dict[str, object]:
+        admission = dict(self._transfer_admissions.get(str(transfer_id), {}))
+        payload = {
+            "decision": asdict(decision),
+            "decision_id": decision.decision_id,
+            "topology_snapshot_id": decision.topology_snapshot_id,
+            "plan": dict(decision.plan),
+            "path_summary": list(decision.path_summary),
+            "stats": scheduling_decision_stats(decision).as_dict(),
+            "leases": [
+                lease.as_dict() for lease in scheduling_decision_leases(decision)
+            ],
+            "admission": admission,
+            "plan_generation": self._transfer_plan_generations.get(str(transfer_id), 0),
+            "plan_expires_at": self._transfer_plan_expirations.get(str(transfer_id)),
+            "transfer_id": str(transfer_id),
+            "transfer_status": asdict(status),
+            "planning": {
+                "target_gpu": session.target_gpu,
+                "profile_key": self._profile_key(session.target_gpu, planning_relays),
+                "relay_eligibility": relay_eligibility,
+            },
+            "reservations": [asdict(reservation) for reservation in reservations],
+        }
+        payload["lease_tokens"] = [
+            asdict(self._lease_tokens[reservation.reservation_id])
+            for reservation in reservations
+            if reservation.reservation_id in self._lease_tokens
+        ]
+        return payload
+
+    def _validate_transfer_admission_locked(
+        self,
+        transfer_id: str,
+        *,
+        lease_id: str | None,
+        now: float,
+    ) -> str | None:
+        normalized_transfer_id = str(transfer_id)
+        admission = self._transfer_admissions.get(normalized_transfer_id)
+        if admission is None:
+            return "transfer admission state is unavailable"
+        if admission.get("state") == _ADMISSION_DELAYED:
+            return "transfer admission is delayed"
+        if admission.get("state") == _ADMISSION_EXPIRED:
+            return "transfer plan expired"
+        expires_at = self._transfer_plan_expirations.get(normalized_transfer_id)
+        if expires_at is not None and float(now) > float(expires_at):
+            admission["state"] = _ADMISSION_EXPIRED
+            admission["expired_at"] = float(now)
+            self._refresh_transfer_queue_record_locked(normalized_transfer_id, now=now)
+            return "transfer plan expired"
+        if lease_id is not None:
+            lease_generation = self._lease_plan_generations.get(str(lease_id))
+            plan_generation = self._transfer_plan_generations.get(normalized_transfer_id)
+            if lease_generation is None:
+                return "lease plan generation is unavailable"
+            if lease_generation != plan_generation:
+                return "stale execution plan"
+        return None
 
     def _commit_scheduler_leases_locked(
         self,
@@ -1260,6 +1691,10 @@ class TurboBusDaemon:
                 issued_at=lease.granted_at,
                 expires_at=lease.expires_at,
             )
+            if transfer_id is not None:
+                self._lease_plan_generations[reservation.reservation_id] = (
+                    self._transfer_plan_generations.get(str(transfer_id), 0)
+                )
             session.active_chunks += reservation.chunks
             quota = self._relay_quotas.get(reservation.relay_gpu)
             if quota is not None:
@@ -1283,6 +1718,7 @@ class TurboBusDaemon:
         decision: SchedulingDecision,
         now: float,
     ) -> None:
+        admission = self._transfer_admissions.get(str(transfer_id), {})
         self._transfer_queue.append(str(transfer_id))
         self._transfer_queue_records[str(transfer_id)] = {
             "transfer_id": str(transfer_id),
@@ -1304,6 +1740,10 @@ class TurboBusDaemon:
             "priority": 0,
             "queued_at": float(now),
             "planned_at": decision.issued_at,
+            "admission_state": admission.get("state", _ADMISSION_ADMITTED),
+            "admission_reason": admission.get("reason"),
+            "plan_generation": self._transfer_plan_generations.get(str(transfer_id), 0),
+            "plan_expires_at": self._transfer_plan_expirations.get(str(transfer_id)),
             "started_at": None,
             "completed_at": None,
             "fallback_reason": decision.fallback_reason,
@@ -1330,12 +1770,32 @@ class TurboBusDaemon:
             record.get("destination_buffer_id"),
             record.get("workload_kind"),
             int(record.get("priority", 0) or 0),
+            record.get("admission_state"),
+            int(record.get("plan_generation", 0) or 0),
+            record.get("plan_expires_at"),
             record.get("started_at"),
             record.get("completed_at"),
         )
         state = status.state.value
         record["state"] = state
         record["bytes_completed"] = status.bytes_completed
+        admission = self._transfer_admissions.get(str(transfer_id), {})
+        if admission:
+            record["admission_state"] = admission.get("state", record.get("admission_state"))
+            record["admission_reason"] = admission.get("reason")
+        record["plan_generation"] = self._transfer_plan_generations.get(
+            str(transfer_id),
+            int(record.get("plan_generation", 0) or 0),
+        )
+        record["plan_expires_at"] = self._transfer_plan_expirations.get(
+            str(transfer_id),
+            record.get("plan_expires_at"),
+        )
+        decision = self._scheduling_decisions.get(str(transfer_id))
+        if decision is not None:
+            record["decision_id"] = decision.decision_id
+            record["topology_snapshot_id"] = decision.topology_snapshot_id
+            record["fallback_reason"] = decision.fallback_reason
         if status.error is not None:
             record["error"] = status.error
         if status.state is TransferStatusState.RUNNING and record.get("started_at") is None:
@@ -1362,6 +1822,9 @@ class TurboBusDaemon:
             record.get("destination_buffer_id"),
             record.get("workload_kind"),
             int(record.get("priority", 0) or 0),
+            record.get("admission_state"),
+            int(record.get("plan_generation", 0) or 0),
+            record.get("plan_expires_at"),
             record.get("started_at"),
             record.get("completed_at"),
         )
@@ -1593,6 +2056,9 @@ class TurboBusDaemon:
         records: list[dict[str, object]] = []
         summary: dict[str, dict[str, int]] = {}
         for transfer_id in sorted(transfer_ids):
+            admission = self._transfer_admissions.get(transfer_id, {})
+            if admission.get("state") != _ADMISSION_ADMITTED:
+                continue
             decision = self._scheduling_decisions.get(transfer_id)
             if decision is None:
                 continue
@@ -1730,14 +2196,18 @@ class TurboBusDaemon:
             raise ValueError("transfer status is unavailable")
         if decision is None:
             raise ValueError("scheduling decision is unavailable")
-        if ticket_id is None or ticket_id not in self._execution_tickets:
-            raise ValueError("execution ticket is unavailable")
+        ticket = None if ticket_id is None else self._execution_tickets.get(ticket_id)
         error = status.error
         if status.state in {TransferStatusState.FAILED, TransferStatusState.CANCELED}:
             error = error or f"transfer {status.state.value}"
+        admission = dict(self._transfer_admissions.get(transfer_id, {}))
         return TransferReceipt(
             receipt_id=f"receipt-{transfer_id}",
-            ticket_id=ticket_id,
+            ticket_id=(
+                ticket.ticket_id
+                if ticket is not None
+                else f"ticket-pending-{transfer_id}"
+            ),
             intent_id=intent.intent_id,
             decision_id=decision.decision_id,
             topology_snapshot_id=decision.topology_snapshot_id,
@@ -1752,6 +2222,10 @@ class TurboBusDaemon:
             metadata={
                 "transfer_id": transfer_id,
                 "fallback_reason": decision.fallback_reason,
+                "admission_state": admission.get("state", _ADMISSION_ADMITTED),
+                "admission_reason": admission.get("reason"),
+                "plan_generation": self._transfer_plan_generations.get(transfer_id, 0),
+                "plan_expires_at": self._transfer_plan_expirations.get(transfer_id),
             },
         )
 
@@ -2570,6 +3044,12 @@ class TurboBusDaemon:
                 intent_id=str(payload["intent_id"]),
                 timeout_seconds=payload.get("timeout_seconds"),
             )
+        if request.request_type == RequestType.RESCHEDULE_TRANSFER:
+            payload = request.payload
+            return self.reschedule_transfer(
+                transfer_id=str(payload["transfer_id"]),
+                now=payload.get("now"),
+            )
         if request.request_type == RequestType.RELEASE_TRANSFER:
             payload = request.payload
             reservation_id = payload.get("reservation_id")
@@ -3029,7 +3509,7 @@ def reserve_socket(path: str) -> socket.socket:
 def _topology_unavailable_response() -> DaemonResponse:
     return DaemonResponse(
         ok=False,
-        error="topology provider is required; synthetic topology is test fixture only",
+        error=_TOPOLOGY_UNAVAILABLE_ERROR,
     )
 
 
@@ -3250,6 +3730,118 @@ def _ticket_ranges_for_plan(
     if not ranges:
         raise ValueError("daemon plan has no authorized chunks")
     return tuple(ranges)
+
+
+def _runtime_state_without_transfer(
+    runtime_state: dict[str, object],
+    *,
+    transfer_id: str,
+) -> dict[str, object]:
+    normalized = str(transfer_id)
+    filtered = dict(runtime_state)
+    for key in (
+        "transfers",
+        "queued_transfers",
+        "running_transfers",
+        "active_transfers",
+        "active_paths",
+    ):
+        value = filtered.get(key)
+        if isinstance(value, list | tuple):
+            filtered[key] = [
+                dict(item)
+                for item in value
+                if isinstance(item, Mapping)
+                and str(item.get("transfer_id")) != normalized
+            ]
+    order = filtered.get("transfer_order")
+    if isinstance(order, list | tuple):
+        filtered["transfer_order"] = tuple(
+            str(item) for item in order if str(item) != normalized
+        )
+    summary = filtered.get("summary")
+    if isinstance(summary, Mapping):
+        summary_copy = dict(summary)
+        summary_copy["queued_transfer_count"] = len(filtered.get("queued_transfers", ()))
+        summary_copy["running_transfer_count"] = len(filtered.get("running_transfers", ()))
+        summary_copy["active_transfer_count"] = len(filtered.get("active_transfers", ()))
+        filtered["summary"] = summary_copy
+    job_runtime_state = filtered.get("job_runtime_state")
+    transfers = filtered.get("transfers", ())
+    if isinstance(job_runtime_state, Mapping) and isinstance(transfers, list | tuple):
+        filtered_jobs = {
+            str(job_id): {
+                "job_id": str(job_id),
+                "weight": float(
+                    record.get("weight", 1.0)
+                    if isinstance(record, Mapping)
+                    else 1.0
+                ),
+                "queued_transfer_count": 0,
+                "running_transfer_count": 0,
+                "active_transfer_count": 0,
+                "active_bytes_total": 0,
+                "active_bytes_remaining": 0,
+            }
+            for job_id, record in job_runtime_state.items()
+        }
+        for item in transfers:
+            if not isinstance(item, Mapping) or item.get("job_id") is None:
+                continue
+            job_id = str(item["job_id"])
+            job_record = filtered_jobs.setdefault(
+                job_id,
+                {
+                    "job_id": job_id,
+                    "weight": 1.0,
+                    "queued_transfer_count": 0,
+                    "running_transfer_count": 0,
+                    "active_transfer_count": 0,
+                    "active_bytes_total": 0,
+                    "active_bytes_remaining": 0,
+                },
+            )
+            state = str(item.get("state", ""))
+            if state == TransferStatusState.SUBMITTED.value:
+                job_record["queued_transfer_count"] += 1
+            elif state == TransferStatusState.RUNNING.value:
+                job_record["running_transfer_count"] += 1
+            if state in {
+                TransferStatusState.SUBMITTED.value,
+                TransferStatusState.RUNNING.value,
+            }:
+                bytes_total = int(item.get("bytes_total", 0) or 0)
+                bytes_completed = int(item.get("bytes_completed", 0) or 0)
+                job_record["active_transfer_count"] += 1
+                job_record["active_bytes_total"] += bytes_total
+                job_record["active_bytes_remaining"] += max(
+                    0,
+                    bytes_total - bytes_completed,
+                )
+        filtered["job_runtime_state"] = dict(sorted(filtered_jobs.items()))
+        if isinstance(filtered.get("summary"), Mapping):
+            filtered["summary"] = {
+                **dict(filtered["summary"]),
+                "job_runtime_state": filtered["job_runtime_state"],
+            }
+    return filtered
+
+
+def _busy_relays_from_runtime_state(runtime_state: Mapping[str, object]) -> set[int]:
+    busy: set[int] = set()
+    active_paths = runtime_state.get("active_paths", ())
+    if not isinstance(active_paths, list | tuple):
+        return busy
+    for item in active_paths:
+        if not isinstance(item, Mapping):
+            continue
+        if str(item.get("kind", "")).lower() != "relay":
+            continue
+        relay_device = item.get("relay_device")
+        if relay_device is None:
+            continue
+        busy.add(int(relay_device))
+    return busy
 
 
 def _normalize_transfer_ranges(

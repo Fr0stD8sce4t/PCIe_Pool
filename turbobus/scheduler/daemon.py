@@ -105,6 +105,7 @@ class DaemonScheduler:
         job_id: str | None = None,
         intent_id: str | None = None,
         topology_snapshot_id: str | None = None,
+        defer_relay_admission: bool = False,
     ) -> SchedulingDecision:
         total_bytes = int(total_bytes)
         chunk_bytes = int(chunk_bytes)
@@ -138,6 +139,7 @@ class DaemonScheduler:
             relay_quotas=relay_quotas,
             direction=direction,
             runtime_view=runtime_view,
+            defer_relay_admission=defer_relay_admission,
         )
         if (
             fallback_reason is None
@@ -162,6 +164,7 @@ class DaemonScheduler:
             direction=direction,
             now=now,
             job_id=job_id,
+            defer_relay_admission=defer_relay_admission,
         )
         fairness_fallback = _fairness_fallback_for_plan(
             plan=plan,
@@ -224,6 +227,7 @@ class DaemonScheduler:
         relay_quotas: Mapping[int, RelayQuota],
         direction: str,
         runtime_view: "_RuntimeView",
+        defer_relay_admission: bool,
     ) -> tuple[_Profile, str | None]:
         payload = _profile_payload(profile_entry)
         if payload is None:
@@ -237,9 +241,12 @@ class DaemonScheduler:
             relay_device = int(relay["relay_device"])
             if relay_device not in allowed_relays:
                 continue
-            if not _relay_has_capacity(session, relay_quotas.get(relay_device)):
+            if (
+                not defer_relay_admission
+                and not _relay_has_capacity(session, relay_quotas.get(relay_device))
+            ):
                 continue
-            if relay_device in runtime_view.busy_relays:
+            if not defer_relay_admission and relay_device in runtime_view.busy_relays:
                 continue
             relays.append(
                 _RelayProfile(
@@ -350,6 +357,7 @@ class DaemonScheduler:
         direction: str,
         now: float,
         job_id: str | None,
+        defer_relay_admission: bool,
     ) -> tuple[tuple[PlannerLease, ...], str | None]:
         lease_specs: list[tuple[int, int, int]] = []
         for assignment in plan.assignments:
@@ -366,7 +374,10 @@ class DaemonScheduler:
             return (), None
 
         total_chunks = sum(chunks for _, chunks, _ in lease_specs)
-        if session.active_chunks + total_chunks > session.max_inflight_chunks:
+        if (
+            not defer_relay_admission
+            and session.active_chunks + total_chunks > session.max_inflight_chunks
+        ):
             return (), "session chunk quota is unavailable"
 
         leases: list[PlannerLease] = []
@@ -374,7 +385,9 @@ class DaemonScheduler:
             if relay_device not in session.relay_gpus:
                 return (), "relay GPU is not assigned to this session"
             quota = relay_quotas.get(relay_device)
-            if quota is None or not quota.can_reserve(chunks):
+            if quota is None:
+                return (), "relay chunk quota is unavailable"
+            if not defer_relay_admission and not quota.can_reserve(chunks):
                 return (), "relay chunk quota is unavailable"
             leases.append(
                 PlannerLease(
