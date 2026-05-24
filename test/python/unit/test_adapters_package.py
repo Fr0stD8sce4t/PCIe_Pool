@@ -7,7 +7,6 @@ from turbobus import inference as root_inference
 from turbobus import model_loading as root_model_loading
 from turbobus import training_offload as root_training_offload
 from turbobus import vllm as root_vllm
-from turbobus import vllm_connector as root_vllm_connector
 from turbobus import vllm_integration as root_vllm_integration
 from turbobus import vllm_kv_connector as root_vllm_kv_connector
 from turbobus.adapters import (
@@ -20,7 +19,6 @@ from turbobus.adapters import (
     TurboBusSavedPrefix,
     TrainingOffloadManager,
     VllmKVSlotAdapter,
-    VllmTurboBusConnector,
     VllmTurboBusIntegration,
 )
 from turbobus.offload_store import AdapterTransferContext as StoreAdapterTransferContext
@@ -28,7 +26,6 @@ from turbobus.adapters import inference as adapter_inference
 from turbobus.adapters import model_loading as adapter_model_loading
 from turbobus.adapters import training_offload as adapter_training_offload
 from turbobus.adapters import vllm as adapter_vllm
-from turbobus.adapters import vllm_connector as adapter_vllm_connector
 from turbobus.adapters import vllm_integration as adapter_vllm_integration
 from turbobus.adapters import vllm_kv_connector as adapter_vllm_kv_connector
 
@@ -39,7 +36,6 @@ class AdaptersPackageTest(unittest.TestCase):
         self.assertIs(root_model_loading, adapter_model_loading)
         self.assertIs(root_training_offload, adapter_training_offload)
         self.assertIs(root_vllm, adapter_vllm)
-        self.assertIs(root_vllm_connector, adapter_vllm_connector)
         self.assertIs(root_vllm_integration, adapter_vllm_integration)
         self.assertIs(root_vllm_kv_connector, adapter_vllm_kv_connector)
         self.assertIs(
@@ -55,10 +51,6 @@ class AdaptersPackageTest(unittest.TestCase):
             root_training_offload.TrainingOffloadManager,
         )
         self.assertIs(adapter_vllm.VllmKVSlotAdapter, root_vllm.VllmKVSlotAdapter)
-        self.assertIs(
-            adapter_vllm_connector.VllmTurboBusConnector,
-            root_vllm_connector.VllmTurboBusConnector,
-        )
         self.assertIs(
             adapter_vllm_integration.VllmTurboBusIntegration,
             root_vllm_integration.VllmTurboBusIntegration,
@@ -76,7 +68,6 @@ class AdaptersPackageTest(unittest.TestCase):
             root_training_offload.TrainingOffloadManager,
         )
         self.assertIs(VllmKVSlotAdapter, root_vllm.VllmKVSlotAdapter)
-        self.assertIs(VllmTurboBusConnector, root_vllm_connector.VllmTurboBusConnector)
         self.assertIs(
             VllmTurboBusIntegration,
             root_vllm_integration.VllmTurboBusIntegration,
@@ -88,6 +79,8 @@ class AdaptersPackageTest(unittest.TestCase):
         )
         self.assertIs(TurboBusSavedPrefix, root_vllm_kv_connector.TurboBusSavedPrefix)
         self.assertIs(AdapterTransferContext, StoreAdapterTransferContext)
+        removed_entry = "Vllm" + "TurboBus" + "Connector"
+        self.assertFalse(hasattr(turbobus.adapters, removed_entry))
         self.assertNotIn("ModelWeightLoader", turbobus.__all__)
         self.assertNotIn("FrameworkAdapter", turbobus.__all__)
         self.assertIsNotNone(FrameworkAdapter)

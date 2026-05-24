@@ -99,6 +99,12 @@ The active target architecture is:
   connector example and sweep now use public daemon-first identity arguments
   and daemon receipt output instead of application-side direct, relay, or pool
   choices.
+- Phase 0 Cut 8 Substage 8.3 is complete. The old non-KV
+  `vllm_connector` experiment, root wrapper, adapter re-export, route-shaped
+  example, and old test have been removed. Adapter-facing exports now protect
+  the daemon-first vLLM KV connector, vLLM mapping, vLLM integration, intent
+  fields, receipt handling, and public package boundaries instead of the old
+  Runtime route-selection surface.
 
 ## Active Phase
 
@@ -116,8 +122,7 @@ Phase 0 covers:
 
 ## Next Work Items
 
-Current item: Cut 8 Substage 8.3, adapter exports and old Runtime test
-cleanup.
+Current item: Cut 9, remaining legacy benchmark and example cleanup.
 
 1. Shared schema layer.
    - Status: complete.
@@ -175,8 +180,19 @@ cleanup.
    - Substage 8.2 complete: rewrite `vllm_kv_connector` so it removes Runtime,
      target GPU, relay GPU, transfer mode, and min-pool-byte configuration from
      the adapter surface and reports daemon receipt ids and path split instead.
-   - Substage 8.3 current: clean adapter-facing exports/tests that still only
+   - Substage 8.3 complete: clean adapter-facing exports/tests that still only
      protect old Runtime route-selection behavior.
+
+8. Remaining legacy benchmark and example cleanup.
+   - Status: current.
+   - Resolve active examples and benchmarks that still construct `Runtime` or
+     expose target GPU, relay GPU, or physical mode selection for workload
+     submission.
+   - Known files: `examples/vllm_turbobus_restore.py`,
+     `benchmarks/bandwidth_pool.py`, `benchmarks/kv_offload.py`, and
+     `benchmarks/tune_transfer.py`.
+   - Keep direct, relay, and pooled path coverage inside scheduler, worker, or
+     data-plane tests where daemon decisions and tickets are authoritative.
 
 ## Phase 0 Acceptance Criteria
 
@@ -194,18 +210,19 @@ Phase 0 is done when:
 
 ## Latest Validation
 
-Phase 0 Cut 8 Substage 8.2 validation:
+Phase 0 Cut 8 Substage 8.3 validation:
 
-- `python -m unittest test.python.e2e.test_vllm_kv_connector test.python.e2e.test_vllm_kv_connector_example test.python.e2e.test_vllm_kv_connector_sweep test.python.unit.test_adapters_package`
-- `python -m compileall -q turbobus\adapters\vllm_kv_connector.py examples\vllm_turbobus_kv_connector.py examples\vllm_turbobus_kv_connector_sweep.py test\python\e2e\test_vllm_kv_connector.py test\python\e2e\test_vllm_kv_connector_example.py test\python\e2e\test_vllm_kv_connector_sweep.py`
-- `rg -n "\bRuntime\b|RuntimeOptions|_make_runtime|turbobus\.target_gpu|turbobus\.relay_gpus|turbobus\.mode|min_pool_bytes|--modes|--target-gpu|--relay-gpus|auto_resolved_mode|auto_reason|daemon_reserved|daemon_reservation|direct_over_pool" turbobus\adapters\vllm_kv_connector.py examples\vllm_turbobus_kv_connector.py examples\vllm_turbobus_kv_connector_sweep.py test\python\e2e\test_vllm_kv_connector.py test\python\e2e\test_vllm_kv_connector_example.py test\python\e2e\test_vllm_kv_connector_sweep.py`
+- `python -m unittest test.python.unit.test_adapters_package test.python.e2e.test_vllm_integration test.python.e2e.test_vllm_kv_connector`
+- `python -m compileall -q turbobus\adapters turbobus\vllm.py turbobus\vllm_integration.py turbobus\vllm_kv_connector.py test\python\unit\test_adapters_package.py test\python\e2e\test_vllm_integration.py test\python\e2e\test_vllm_kv_connector.py`
+- `rg -n "vllm_connector|VllmTurboBusConnector|VllmConnectorEvent|vllm_turbobus_connector" turbobus examples test\python -g "*.py"`
 - `git diff --check`
 
 Remaining Phase 0 risk:
 
-- Adapter-facing exports and some old Runtime tests still need a final cleanup
-  pass so they protect framework mapping, intent fields, receipt handling, and
-  package boundaries instead of the old route-selection API.
+- `examples/vllm_turbobus_restore.py`, `benchmarks/bandwidth_pool.py`,
+  `benchmarks/kv_offload.py`, and `benchmarks/tune_transfer.py` still expose
+  old Runtime or route-shaped workload entry points. Phase 0 must resolve
+  these before moving to Phase 1.
 
 ## Upcoming Phases
 

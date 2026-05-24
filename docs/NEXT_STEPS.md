@@ -100,8 +100,13 @@ flow through `AdapterTransferContext`, `TurboBusClient`, and
 receipt ids, decision ids, topology snapshot ids, ticket ids, bytes, path
 split, and fallback reason.
 
-Current substage: Cut 8 Substage 8.3, adapter exports and old Runtime test
-cleanup.
+Cut 8 Substage 8.3 is complete. The old non-KV vLLM connector experiment,
+its root wrapper, its adapter re-export, its route-shaped example, and its
+test have been removed. Adapter-facing exports now protect the daemon-first
+KV connector, vLLM mapping, vLLM integration, intent fields, receipt handling,
+and package boundaries.
+
+Current cut: Cut 9, remaining legacy benchmark and example cleanup.
 
 ## Phase 0 Code Cuts
 
@@ -295,7 +300,7 @@ Status: complete.
 
 Substage 8.3: adapter exports and old Runtime test cleanup.
 
-Status: current.
+Status: complete.
 
 - Remove or demote adapter-facing tests that only protect the old Runtime
   direct/relay/pool route-selection surface.
@@ -308,6 +313,41 @@ Expected output:
 
 - adapter tests assert TransferIntent construction and receipt handling;
 - no adapter owns path selection policy.
+
+### Cut 9: Remaining Legacy Benchmark And Example Cleanup
+
+Status: current.
+
+Phase 0 is not complete until remaining examples and benchmarks stop presenting
+old Runtime, target GPU, relay GPU, and physical mode controls as active
+application-facing workflows.
+
+- Remove or rewrite legacy examples that still construct `Runtime` or expose
+  target GPU, relay GPU, or physical mode selection.
+- Remove or rewrite legacy benchmarks that still construct `Runtime` or sweep
+  direct, relay, or pool as application-side modes.
+- Keep benchmark policy labels only as experiment metadata; physical path
+  outcomes must come from daemon decisions and receipts.
+- Keep any exact-plan direct, relay, or pooled coverage inside scheduler,
+  worker, or data-plane tests where daemon decisions and tickets are the
+  authority.
+
+Current known files to resolve:
+
+- `examples/vllm_turbobus_restore.py`;
+- `benchmarks/bandwidth_pool.py`;
+- `benchmarks/kv_offload.py`;
+- `benchmarks/tune_transfer.py`;
+- tests that only guard rejection of removed benchmark/example route-shaped
+  arguments should either move to Cut 9 validation or be removed with the
+  old entry points.
+
+Expected output:
+
+- public examples and benchmarks call daemon-first APIs;
+- no active example or benchmark constructs `Runtime` for workload submission;
+- route-shaped controls remain only in scheduler, worker, data-plane, or
+  explicit legacy-internal tests.
 
 ## Phase 0 Done Criteria
 

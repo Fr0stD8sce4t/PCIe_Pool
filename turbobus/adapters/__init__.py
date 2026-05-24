@@ -20,7 +20,6 @@ from .vllm import (
     make_vllm_layer_range_refs_from_ids,
     vllm_block_name,
 )
-from .vllm_connector import VllmConnectorEvent, VllmTurboBusConnector
 from .vllm_integration import (
     VllmAllocationEvent,
     VllmIntegrationState,
@@ -57,8 +56,6 @@ __all__ = [
     "VllmAllocationEvent",
     "VllmIntegrationState",
     "VllmTurboBusIntegration",
-    "VllmConnectorEvent",
-    "VllmTurboBusConnector",
     "TurboBusConnector",
     "TurboBusConnectorConfig",
     "TurboBusConnectorMetadata",
