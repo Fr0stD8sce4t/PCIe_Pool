@@ -75,8 +75,14 @@ API, treats benchmark policy as metadata instead of physical path selection,
 and reports separate receipt ids, decision ids, topology snapshot ids,
 execution ticket ids, bytes, timing, path split, and fallback reason.
 
-Current substage: Cut 7 Substage 7.4, examples and paper-validation command
-rewrite.
+Cut 7 Substage 7.4 is complete. Paper validation now builds daemon-first
+commands for the rewritten model-loading and training-offload benchmarks using
+session ids and registered buffer ids instead of target GPU, relay GPU, or
+physical transfer mode arguments. Paper metrics now come from daemon receipt
+trace ids and path split fields. `examples/torch_tensor_fetch.py` now
+demonstrates public `TransferIntent` submission and receipt reporting.
+
+Current cut: Cut 8, Adapter Thinning.
 
 ## Phase 0 Code Cuts
 
@@ -187,7 +193,7 @@ Expected output:
 
 ### Cut 7: Benchmarks And Examples Rewrite
 
-Status: current.
+Status: complete.
 
 Cut 7 is intentionally split so benchmark work does not drift back into the
 old Runtime/direct/relay/pool path controls.
@@ -221,7 +227,7 @@ Status: complete.
 
 Substage 7.4: examples and paper-validation command rewrite.
 
-Status: current.
+Status: complete.
 
 - Update examples to demonstrate daemon-first submission.
 - Update paper-validation command construction and output validation so it no
@@ -233,6 +239,8 @@ Expected output:
 - benchmarks no longer encode transfer path policy in application code.
 
 ### Cut 8: Adapter Thinning
+
+Status: current.
 
 - Update vLLM, model loading, and training adapters to submit TransferIntent.
 - Make adapters consume TransferReceipt for stats and state transitions.

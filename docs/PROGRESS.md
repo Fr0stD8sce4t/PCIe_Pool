@@ -74,6 +74,13 @@ The active target architecture is:
   through `TurboBusClient`, stores benchmark policy as metadata, and reads
   separate receipt ids, decision ids, topology snapshot ids, execution ticket
   ids, bytes, timing, path split, and fallback reason from daemon receipts.
+- Phase 0 Cut 7 Substage 7.4 is complete. `benchmarks/paper_validation.py` now
+  builds daemon-first commands for model-loading and training-offload using
+  session ids and registered buffer ids instead of target GPU, relay GPU, or
+  physical transfer mode arguments. Paper validation metrics now come from
+  daemon receipt trace ids and path split fields. `examples/torch_tensor_fetch.py`
+  demonstrates public `TransferIntent` submission and `TransferReceipt`
+  reporting instead of constructing a `Runtime`.
 
 ## Active Phase
 
@@ -91,7 +98,7 @@ Phase 0 covers:
 
 ## Next Work Items
 
-Current item: Cut 7, Benchmark and example rewrite.
+Current item: Cut 8, Adapter thinning.
 
 1. Shared schema layer.
    - Status: complete.
@@ -124,7 +131,7 @@ Current item: Cut 7, Benchmark and example rewrite.
    - Mark GPU-required tests clearly.
 
 6. Benchmark and example rewrite.
-   - Status: current.
+   - Status: complete.
    - Substage 7.1 complete: daemon `TransferIntent` submission now produces
      `TransferReceipt` records with decision id, topology snapshot id,
      execution ticket id, bytes, path split, and fallback reason. Benchmark
@@ -136,12 +143,12 @@ Current item: Cut 7, Benchmark and example rewrite.
    - Substage 7.3 complete: training-offload benchmark submission now goes
      through the public client API for paired H2D prefetch and D2H offload
      intent and consumes daemon receipts for both directions.
-   - Current substage: rewrite examples and paper-validation command/output
-     handling so they no longer expect applications to choose physical transfer
-     paths.
-   - Remaining substages: examples and paper-validation command/output rewrite.
+   - Substage 7.4 complete: examples and paper-validation command/output
+     handling no longer expect applications to choose physical transfer paths
+     for the rewritten model-loading and training-offload benchmarks.
 
 7. Adapter thinning.
+   - Status: current.
    - Update vLLM, model loading, and training adapters to submit TransferIntent.
    - Consume TransferReceipt for stats and state transitions.
 
@@ -161,16 +168,17 @@ Phase 0 is done when:
 
 ## Latest Validation
 
-Phase 0 Cut 7 Substage 7.3 validation:
+Phase 0 Cut 7 Substage 7.4 validation:
 
-- `python -m unittest test.python.e2e.test_training_offload_benchmark test.python.e2e.test_benchmark_daemon_support test.python.unit.test_public_client_api`
-- `python -m compileall -q benchmarks\training_offload.py benchmarks\daemon_support.py test\python\e2e\test_training_offload_benchmark.py`
+- `python -m unittest test.python.e2e.test_paper_validation test.python.e2e.test_public_intent_example test.python.e2e.test_benchmark_daemon_support test.python.unit.test_public_client_api`
+- `python -m compileall -q benchmarks\paper_validation.py examples\torch_tensor_fetch.py test\python\e2e\test_paper_validation.py test\python\e2e\test_public_intent_example.py`
 - `git diff --check`
 
 Remaining Phase 0 risk:
 
-- examples, paper-validation command construction, and adapters still need the
-  same daemon-first rewrite before Phase 0 can be marked complete.
+- adapters still need the same daemon-first rewrite before Phase 0 can be
+  marked complete. vLLM KV paper validation remains deferred until the vLLM
+  adapter submits `TransferIntent` and consumes `TransferReceipt`.
 
 ## Upcoming Phases
 

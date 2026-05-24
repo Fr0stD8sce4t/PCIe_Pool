@@ -11,10 +11,12 @@ from daemon_support import add_daemon_options
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BENCHMARKS = REPO_ROOT / "benchmarks"
-EXAMPLES = REPO_ROOT / "examples"
 
-WORKLOADS = ("model-loading", "vllm-kv", "training-offload")
-OUTPUT_FILE_KEYS = ("json", "summary", "cases_json", "cases_csv")
+WORKLOADS = ("model-loading", "training-offload")
+DEFERRED_WORKLOADS = {
+    "vllm-kv": "vLLM KV paper validation waits for the daemon-first adapter cut",
+}
+OUTPUT_FILE_KEYS = ("json", "summary")
 
 
 def parse_csv(value: str) -> list[str]:
@@ -25,16 +27,14 @@ def selected_workloads(value: str) -> list[str]:
     items = parse_csv(value)
     if not items or items == ["all"]:
         return list(WORKLOADS)
+    deferred = [item for item in items if item in DEFERRED_WORKLOADS]
+    if deferred:
+        reasons = ", ".join(f"{item}: {DEFERRED_WORKLOADS[item]}" for item in deferred)
+        raise ValueError(f"workloads are not daemon-first paper-validation targets yet: {reasons}")
     unknown = [item for item in items if item not in WORKLOADS]
     if unknown:
         raise ValueError(f"unknown workloads: {unknown}")
     return items
-
-
-def mode_list(mode: str) -> str:
-    if mode == "all":
-        return "auto,direct,relay,pool"
-    return mode
 
 
 def output_paths(output_dir: Path, workload: str) -> dict[str, Path]:
@@ -42,14 +42,7 @@ def output_paths(output_dir: Path, workload: str) -> dict[str, Path]:
     return {
         "json": output_dir / f"{safe}.json",
         "summary": output_dir / f"{safe}_summary.txt",
-        "cases_json": output_dir / f"{safe}_cases.json",
-        "cases_csv": output_dir / f"{safe}_cases.csv",
-        "log_dir": output_dir / f"{safe}_logs",
     }
-
-
-def data_path_for_workload(workload: str, paths: dict[str, Path]) -> Path:
-    return paths["cases_json"] if workload == "vllm-kv" else paths["json"]
 
 
 def clear_workload_outputs(paths: dict[str, Path]) -> None:
@@ -75,10 +68,14 @@ def build_model_loading_command(args, paths: dict[str, Path]) -> list[str]:
     command = [
         sys.executable,
         str(BENCHMARKS / "model_loading.py"),
-        "--target-gpu",
-        str(args.target_gpu),
-        "--relay-gpus",
-        args.relay_gpus,
+        "--session-id",
+        args.session_id,
+        "--job-id",
+        args.job_id,
+        "--source-buffer-id",
+        args.cpu_buffer_id,
+        "--destination-buffer-id",
+        args.gpu_buffer_id,
         "--bucket-count",
         str(args.bucket_count),
         "--bucket-bytes",
@@ -87,26 +84,20 @@ def build_model_loading_command(args, paths: dict[str, Path]) -> list[str]:
         args.storage_layout,
         "--chunk-bytes",
         str(args.chunk_bytes),
-        "--profile-bytes",
-        str(args.profile_bytes),
-        "--min-pool-bytes",
-        str(args.min_pool_bytes),
         "--warmup",
         str(args.warmup),
         "--iterations",
         str(args.iterations),
-        "--mode",
-        args.mode,
+        "--policy",
+        args.policy,
+        "--run-id",
+        args.run_id,
         "--json-output",
         str(paths["json"]),
         "--summary-output",
         str(paths["summary"]),
         "--no-copy-summary",
     ]
-    if args.verify:
-        command.append("--verify")
-    if args.force_profile:
-        command.append("--force-profile")
     command.extend(daemon_command_args(args))
     return command
 
@@ -115,10 +106,16 @@ def build_training_offload_command(args, paths: dict[str, Path]) -> list[str]:
     command = [
         sys.executable,
         str(BENCHMARKS / "training_offload.py"),
-        "--target-gpu",
-        str(args.target_gpu),
-        "--relay-gpus",
-        args.relay_gpus,
+        "--session-id",
+        args.session_id,
+        "--job-id",
+        args.job_id,
+        "--cpu-buffer-id",
+        args.cpu_buffer_id,
+        "--gpu-buffer-id",
+        args.gpu_buffer_id,
+        "--workload-kind",
+        args.training_workload_kind,
         "--bucket-count",
         str(args.bucket_count),
         "--bucket-bytes",
@@ -127,20 +124,16 @@ def build_training_offload_command(args, paths: dict[str, Path]) -> list[str]:
         args.storage_layout,
         "--chunk-bytes",
         str(args.chunk_bytes),
-        "--profile-bytes",
-        str(args.profile_bytes),
-        "--min-pool-bytes",
-        str(args.min_pool_bytes),
         "--warmup",
         str(args.warmup),
         "--iterations",
         str(args.iterations),
-        "--mode",
-        args.mode,
-        "--compute-elements",
-        str(args.compute_elements),
-        "--compute-iterations",
-        str(args.compute_iterations),
+        "--compute-delay-ms",
+        str(args.compute_delay_ms),
+        "--policy",
+        args.policy,
+        "--run-id",
+        args.run_id,
         "--json-output",
         str(paths["json"]),
         "--summary-output",
@@ -149,53 +142,6 @@ def build_training_offload_command(args, paths: dict[str, Path]) -> list[str]:
     ]
     if args.active_buckets is not None:
         command.extend(["--active-buckets", str(args.active_buckets)])
-    if args.verify:
-        command.append("--verify")
-    if args.force_profile:
-        command.append("--force-profile")
-    command.extend(daemon_command_args(args))
-    return command
-
-
-def build_vllm_kv_command(args, paths: dict[str, Path]) -> list[str]:
-    command = [
-        sys.executable,
-        str(EXAMPLES / "vllm_turbobus_kv_connector_sweep.py"),
-        "--model",
-        args.vllm_model,
-        "--target-gpu",
-        str(args.target_gpu),
-        "--relay-gpus",
-        args.relay_gpus,
-        "--prompt-repeat",
-        str(args.vllm_prompt_repeat),
-        "--restore-blocks-list",
-        args.vllm_restore_blocks_list,
-        "--tokens-per-block",
-        str(args.vllm_tokens_per_block),
-        "--modes",
-        mode_list(args.mode),
-        "--chunk-bytes",
-        str(args.chunk_bytes),
-        "--profile-bytes",
-        str(args.profile_bytes),
-        "--min-pool-bytes",
-        str(args.min_pool_bytes),
-        "--log-dir",
-        str(paths["log_dir"]),
-        "--summary-output",
-        str(paths["summary"]),
-        "--cases-json-output",
-        str(paths["cases_json"]),
-        "--cases-csv-output",
-        str(paths["cases_csv"]),
-    ]
-    if args.vllm_enforce_eager:
-        command.append("--enforce-eager")
-    if args.vllm_enable_multiproc_executor:
-        command.append("--enable-multiproc-executor")
-    if args.vllm_no_map_physical_gpus:
-        command.append("--no-map-physical-gpus")
     command.extend(daemon_command_args(args))
     return command
 
@@ -205,8 +151,6 @@ def build_workload_command(args, workload: str, paths: dict[str, Path]) -> list[
         return build_model_loading_command(args, paths)
     if workload == "training-offload":
         return build_training_offload_command(args, paths)
-    if workload == "vllm-kv":
-        return build_vllm_kv_command(args, paths)
     raise ValueError(f"unsupported workload: {workload}")
 
 
@@ -244,134 +188,97 @@ def as_int(value, default: int = 0) -> int:
         return default
 
 
-def speedup_value(numerator, denominator) -> str:
-    numerator_value = as_float(numerator)
-    denominator_value = as_float(denominator)
-    if numerator_value <= 0.0 or denominator_value <= 0.0:
-        return "NA"
-    return f"{numerator_value / denominator_value:.3f}"
-
-
-def first_status(*items: dict) -> str:
-    for item in items:
-        status = item.get("daemon_reservation_status") if item else None
-        if status:
-            return str(status)
-    return ""
-
-
-def first_fallback_reason(mode_result: dict) -> str:
-    decision = mode_result.get("last_auto_decision", {}) or {}
-    reason = decision.get("auto_reason", "")
-    return str(reason or "")
+def join_values(values) -> str:
+    if values in (None, ""):
+        return ""
+    if isinstance(values, (list, tuple, set)):
+        return ",".join(str(item) for item in values if item not in (None, ""))
+    return str(values)
 
 
 def collect_model_metrics(result: dict) -> list[dict[str, object]]:
-    metrics = []
-    for mode, mode_result in sorted((result.get("modes") or {}).items()):
-        summary = mode_result.get("summary", {}) or {}
-        direct_bytes = as_int(summary.get("direct_bytes"))
-        relay_bytes = as_int(summary.get("relay_bytes"))
-        metrics.append(
-            {
-                "workload": "model-loading",
-                "mode": mode,
-                "ttft_proxy_ms": as_float(summary.get("median_load_ms")),
-                "throughput_gib_s": as_float(summary.get("median_gib_per_second")),
-                "transfer_bytes": direct_bytes + relay_bytes,
-                "direct_bytes": direct_bytes,
-                "relay_bytes": relay_bytes,
-                "direct_chunks": as_int(summary.get("direct_chunks")),
-                "relay_chunks": as_int(summary.get("relay_chunks")),
-                "daemon_reservation_status": first_status(
-                    mode_result.get("daemon_reservation", {}) or {}
-                ),
-                "fallback_reason": first_fallback_reason(mode_result),
-            }
-        )
-    return metrics
+    summary = result.get("summary", {}) or {}
+    if not summary:
+        return []
+    config = result.get("config", {}) or {}
+    return [
+        {
+            "workload": "model-loading",
+            "policy": str(config.get("policy", "")),
+            "iterations": as_int(summary.get("iterations")),
+            "ttft_proxy_ms": as_float(summary.get("median_load_ms")),
+            "throughput_gib_s": as_float(summary.get("median_gib_per_second")),
+            "transfer_bytes": as_int(summary.get("bytes")),
+            "bytes_completed": as_int(summary.get("bytes_completed")),
+            "direct_bytes": as_int(summary.get("direct_bytes")),
+            "relay_bytes": as_int(summary.get("relay_bytes")),
+            "direct_chunks": as_int(summary.get("direct_chunks")),
+            "relay_chunks": as_int(summary.get("relay_chunks")),
+            "decision_ids": join_values(summary.get("decision_ids")),
+            "topology_snapshot_ids": join_values(summary.get("topology_snapshot_ids")),
+            "ticket_ids": join_values(summary.get("ticket_ids")),
+            "fallback_reason": join_values(summary.get("fallback_reasons")),
+        }
+    ]
 
 
-def transfer_side_bytes(summary: dict, side: str) -> tuple[int, int, int, int]:
-    data = summary.get(side, {}) or {}
-    return (
-        as_int(data.get("direct_bytes")),
-        as_int(data.get("relay_bytes")),
-        as_int(data.get("direct_chunks")),
-        as_int(data.get("relay_chunks")),
-    )
+def transfer_side_summary(summary: dict, side: str) -> dict:
+    return summary.get(side, {}) or {}
 
 
 def collect_training_metrics(result: dict) -> list[dict[str, object]]:
-    metrics = []
-    for mode, mode_result in sorted((result.get("modes") or {}).items()):
-        summary = mode_result.get("summary", {}) or {}
-        prefetch = transfer_side_bytes(summary, "prefetch")
-        offload = transfer_side_bytes(summary, "offload")
-        direct_bytes = prefetch[0] + offload[0]
-        relay_bytes = prefetch[1] + offload[1]
-        direct_chunks = prefetch[2] + offload[2]
-        relay_chunks = prefetch[3] + offload[3]
-        metrics.append(
-            {
-                "workload": "training-offload",
-                "mode": mode,
-                "iteration_ms": as_float(summary.get("median_iteration_ms")),
-                "transfer_ms": as_float(summary.get("median_transfer_ms")),
-                "compute_ms": as_float(summary.get("median_compute_ms")),
-                "throughput_gib_s": as_float(summary.get("median_gib_per_second")),
-                "transfer_bytes": direct_bytes + relay_bytes,
-                "direct_bytes": direct_bytes,
-                "relay_bytes": relay_bytes,
-                "direct_chunks": direct_chunks,
-                "relay_chunks": relay_chunks,
-                "daemon_reservation_status": first_status(
-                    mode_result.get("prefetch_daemon_reservation", {}) or {},
-                    mode_result.get("offload_daemon_reservation", {}) or {},
-                ),
-                "fallback_reason": first_fallback_reason(mode_result),
-            }
-        )
-    return metrics
-
-
-def collect_vllm_metrics(case_rows: list[dict]) -> list[dict[str, object]]:
-    metrics = []
-    for row in case_rows:
-        transfer_bytes = as_int(row.get("bytes"))
-        metrics.append(
-            {
-                "workload": "vllm-kv",
-                "mode": str(row.get("mode", "")),
-                "restore_blocks": as_int(row.get("restore_blocks")),
-                "matched_tokens": as_int(row.get("matched_tokens")),
-                "ttft_ms": as_float(row.get("start_load_ms")),
-                "save_ms": as_float(row.get("save_ms")),
-                "restore_latency_ms": as_float(row.get("restore_ms")),
-                "restore_transfer_ms": as_float(row.get("restore_transfer_ms")),
-                "throughput_gib_s": as_float(row.get("restore_gib_s")),
-                "transfer_bytes": transfer_bytes,
-                "direct_bytes": 0,
-                "relay_bytes": 0,
-                "direct_chunks": as_int(row.get("direct_chunks")),
-                "relay_chunks": as_int(row.get("relay_chunks")),
-                "daemon_reservation_status": str(row.get("daemon_reservation_status", "")),
-                "fallback_reason": str(row.get("auto_reason", "")),
-            }
-        )
-    return metrics
+    summary = result.get("summary", {}) or {}
+    if not summary:
+        return []
+    config = result.get("config", {}) or {}
+    prefetch = transfer_side_summary(summary, "prefetch")
+    offload = transfer_side_summary(summary, "offload")
+    direct_bytes = as_int(prefetch.get("direct_bytes")) + as_int(offload.get("direct_bytes"))
+    relay_bytes = as_int(prefetch.get("relay_bytes")) + as_int(offload.get("relay_bytes"))
+    direct_chunks = as_int(prefetch.get("direct_chunks")) + as_int(offload.get("direct_chunks"))
+    relay_chunks = as_int(prefetch.get("relay_chunks")) + as_int(offload.get("relay_chunks"))
+    return [
+        {
+            "workload": "training-offload",
+            "policy": str(config.get("policy", "")),
+            "iterations": as_int(summary.get("iterations")),
+            "iteration_ms": as_float(summary.get("median_iteration_ms")),
+            "transfer_ms": as_float(summary.get("median_transfer_ms")),
+            "compute_ms": as_float(summary.get("median_compute_ms")),
+            "throughput_gib_s": as_float(summary.get("median_gib_per_second")),
+            "transfer_bytes": as_int(prefetch.get("bytes")) + as_int(offload.get("bytes")),
+            "bytes_completed": as_int(prefetch.get("bytes_completed")) + as_int(offload.get("bytes_completed")),
+            "direct_bytes": direct_bytes,
+            "relay_bytes": relay_bytes,
+            "direct_chunks": direct_chunks,
+            "relay_chunks": relay_chunks,
+            "decision_ids": join_values(
+                [*prefetch.get("decision_ids", ()), *offload.get("decision_ids", ())]
+            ),
+            "topology_snapshot_ids": join_values(
+                [
+                    *prefetch.get("topology_snapshot_ids", ()),
+                    *offload.get("topology_snapshot_ids", ()),
+                ]
+            ),
+            "ticket_ids": join_values(
+                [*prefetch.get("ticket_ids", ()), *offload.get("ticket_ids", ())]
+            ),
+            "prefetch_decision_ids": join_values(prefetch.get("decision_ids")),
+            "offload_decision_ids": join_values(offload.get("decision_ids")),
+            "fallback_reason": join_values(
+                [*prefetch.get("fallback_reasons", ()), *offload.get("fallback_reasons", ())]
+            ),
+        }
+    ]
 
 
 def collect_workload_metrics(workload: str, paths: dict[str, Path]) -> tuple[object, list[dict]]:
+    data = read_json(paths["json"], {})
     if workload == "model-loading":
-        data = read_json(paths["json"], {})
         return data, collect_model_metrics(data)
     if workload == "training-offload":
-        data = read_json(paths["json"], {})
         return data, collect_training_metrics(data)
-    if workload == "vllm-kv":
-        rows = read_json(paths["cases_json"], [])
-        return rows, collect_vllm_metrics(rows)
     raise ValueError(f"unsupported workload: {workload}")
 
 
@@ -381,6 +288,16 @@ def workload_validation_errors(data_path: Path, metrics: list[dict]) -> list[str
         errors.append("missing_output_file")
     if not metrics:
         errors.append("missing_paper_metrics")
+        return errors
+    missing_trace = [
+        metric["workload"]
+        for metric in metrics
+        if not metric.get("decision_ids")
+        or not metric.get("topology_snapshot_ids")
+        or not metric.get("ticket_ids")
+    ]
+    if missing_trace:
+        errors.append("missing_daemon_trace")
     return errors
 
 
@@ -405,24 +322,24 @@ def workload_failed(status: str) -> bool:
 def metric_line(metric: dict) -> str:
     ordered = [
         "workload",
-        "mode",
-        "restore_blocks",
-        "matched_tokens",
+        "policy",
+        "iterations",
         "ttft_proxy_ms",
-        "ttft_ms",
-        "save_ms",
-        "restore_latency_ms",
-        "restore_transfer_ms",
         "iteration_ms",
         "transfer_ms",
         "compute_ms",
         "throughput_gib_s",
         "transfer_bytes",
+        "bytes_completed",
         "direct_bytes",
         "relay_bytes",
         "direct_chunks",
         "relay_chunks",
-        "daemon_reservation_status",
+        "decision_ids",
+        "topology_snapshot_ids",
+        "ticket_ids",
+        "prefetch_decision_ids",
+        "offload_decision_ids",
         "fallback_reason",
     ]
     fields = ["paper_metric"]
@@ -437,158 +354,17 @@ def metric_line(metric: dict) -> str:
     return " ".join(fields)
 
 
-def metrics_by_mode(metrics: list[dict]) -> dict[str, dict]:
-    return {str(metric.get("mode", "")): metric for metric in metrics}
-
-
-def latency_speedups(
-    by_mode: dict[str, dict],
-    metric_key: str,
-    output_key: str,
-) -> dict[str, str]:
-    fields = {}
-    for baseline in ("direct", "relay"):
-        for candidate in ("pool", "auto"):
-            baseline_metric = by_mode.get(baseline, {})
-            candidate_metric = by_mode.get(candidate, {})
-            fields[f"{baseline}_over_{candidate}_{output_key}"] = speedup_value(
-                baseline_metric.get(metric_key),
-                candidate_metric.get(metric_key),
-            )
-    return fields
-
-
-def throughput_speedups(by_mode: dict[str, dict]) -> dict[str, str]:
-    fields = {}
-    for candidate in ("pool", "auto"):
-        for baseline in ("direct", "relay"):
-            baseline_metric = by_mode.get(baseline, {})
-            candidate_metric = by_mode.get(candidate, {})
-            fields[f"{candidate}_over_{baseline}_throughput"] = speedup_value(
-                candidate_metric.get("throughput_gib_s"),
-                baseline_metric.get("throughput_gib_s"),
-            )
-    return fields
-
-
-def speedup_line(fields: dict[str, object]) -> str:
-    ordered = [
-        "workload",
-        "restore_blocks",
-        "matched_tokens",
-        "direct_over_pool_ttft_proxy",
-        "relay_over_pool_ttft_proxy",
-        "direct_over_auto_ttft_proxy",
-        "relay_over_auto_ttft_proxy",
-        "direct_over_pool_restore_latency",
-        "relay_over_pool_restore_latency",
-        "direct_over_auto_restore_latency",
-        "relay_over_auto_restore_latency",
-        "direct_over_pool_restore_transfer",
-        "relay_over_pool_restore_transfer",
-        "direct_over_auto_restore_transfer",
-        "relay_over_auto_restore_transfer",
-        "direct_over_pool_iteration",
-        "relay_over_pool_iteration",
-        "direct_over_auto_iteration",
-        "relay_over_auto_iteration",
-        "direct_over_pool_transfer",
-        "relay_over_pool_transfer",
-        "direct_over_auto_transfer",
-        "relay_over_auto_transfer",
-        "pool_over_direct_throughput",
-        "pool_over_relay_throughput",
-        "auto_over_direct_throughput",
-        "auto_over_relay_throughput",
-    ]
-    parts = ["paper_speedup"]
-    for name in ordered:
-        value = fields.get(name)
-        if value in (None, ""):
-            continue
-        parts.append(f"{name}={value}")
-    return " ".join(parts)
-
-
-def model_speedup_lines(metrics: list[dict]) -> list[str]:
-    if not metrics:
-        return []
-    by_mode = metrics_by_mode(metrics)
-    fields: dict[str, object] = {"workload": "model-loading"}
-    fields.update(latency_speedups(by_mode, "ttft_proxy_ms", "ttft_proxy"))
-    fields.update(throughput_speedups(by_mode))
-    return [speedup_line(fields)]
-
-
-def training_speedup_lines(metrics: list[dict]) -> list[str]:
-    if not metrics:
-        return []
-    by_mode = metrics_by_mode(metrics)
-    fields: dict[str, object] = {"workload": "training-offload"}
-    fields.update(latency_speedups(by_mode, "iteration_ms", "iteration"))
-    fields.update(latency_speedups(by_mode, "transfer_ms", "transfer"))
-    fields.update(throughput_speedups(by_mode))
-    return [speedup_line(fields)]
-
-
-def vllm_speedup_lines(metrics: list[dict]) -> list[str]:
-    by_blocks: dict[int, list[dict]] = {}
-    for metric in metrics:
-        by_blocks.setdefault(as_int(metric.get("restore_blocks")), []).append(metric)
-
-    lines = []
-    for restore_blocks, block_metrics in sorted(by_blocks.items()):
-        by_mode = metrics_by_mode(block_metrics)
-        matched_tokens = next(
-            (
-                metric.get("matched_tokens")
-                for metric in block_metrics
-                if metric.get("matched_tokens") not in (None, "")
-            ),
-            None,
-        )
-        fields: dict[str, object] = {
-            "workload": "vllm-kv",
-            "restore_blocks": restore_blocks,
-            "matched_tokens": matched_tokens,
-        }
-        fields.update(
-            latency_speedups(
-                by_mode,
-                "restore_latency_ms",
-                "restore_latency",
-            )
-        )
-        fields.update(
-            latency_speedups(
-                by_mode,
-                "restore_transfer_ms",
-                "restore_transfer",
-            )
-        )
-        fields.update(throughput_speedups(by_mode))
-        lines.append(speedup_line(fields))
-    return lines
-
-
-def speedup_lines_for_workload(workload: str, metrics: list[dict]) -> list[str]:
-    if workload == "model-loading":
-        return model_speedup_lines(metrics)
-    if workload == "training-offload":
-        return training_speedup_lines(metrics)
-    if workload == "vllm-kv":
-        return vllm_speedup_lines(metrics)
-    return []
-
-
 def compact_summary(result: dict) -> str:
     config = result["config"]
     lines = [
         "PAPER_VALIDATION_SUMMARY_BEGIN",
         (
             "paper_validation_config "
-            f"target={config['target_gpu']} relays={config['relay_gpus']} "
-            f"workloads={','.join(config['workloads'])} mode={config['mode']} "
+            f"session_id={config['session_id']} job_id={config['job_id']} "
+            f"cpu_buffer_id={config['cpu_buffer_id']} "
+            f"gpu_buffer_id={config['gpu_buffer_id']} "
+            f"workloads={','.join(config['workloads'])} "
+            f"policy={config['policy']} "
             f"dry_run={config.get('dry_run', False)} output_dir={config['output_dir']}"
         ),
     ]
@@ -602,12 +378,6 @@ def compact_summary(result: dict) -> str:
         )
         for metric in workload["metrics"]:
             lines.append(metric_line(metric))
-        lines.extend(
-            speedup_lines_for_workload(
-                workload["workload"],
-                workload["metrics"],
-            )
-        )
     lines.append("PAPER_VALIDATION_SUMMARY_END")
     return "\n".join(lines)
 
@@ -631,10 +401,13 @@ def run_validation(args) -> dict:
     workloads = selected_workloads(args.workloads)
     result = {
         "config": {
-            "target_gpu": args.target_gpu,
-            "relay_gpus": args.relay_gpus,
+            "session_id": args.session_id,
+            "job_id": args.job_id,
+            "cpu_buffer_id": args.cpu_buffer_id,
+            "gpu_buffer_id": args.gpu_buffer_id,
             "workloads": workloads,
-            "mode": args.mode,
+            "policy": args.policy,
+            "run_id": args.run_id,
             "output_dir": str(output_dir),
             "dry_run": bool(args.dry_run),
             "daemon_socket_path": args.daemon_socket_path,
@@ -647,7 +420,7 @@ def run_validation(args) -> dict:
     for workload in workloads:
         paths = output_paths(output_dir, workload)
         command = build_workload_command(args, workload, paths)
-        data_path = data_path_for_workload(workload, paths)
+        data_path = paths["json"]
         validation_errors = []
         if args.dry_run:
             print(
@@ -657,7 +430,7 @@ def run_validation(args) -> dict:
                 flush=True,
             )
             completed = subprocess.CompletedProcess(command, 0, "", "")
-            data = [] if workload == "vllm-kv" else {}
+            data = {}
             metrics = []
         else:
             clear_workload_outputs(paths)
@@ -666,57 +439,58 @@ def run_validation(args) -> dict:
             try:
                 data, metrics = collect_workload_metrics(workload, paths)
             except (OSError, ValueError, json.JSONDecodeError) as exc:
-                data = [] if workload == "vllm-kv" else {}
+                data = {}
                 metrics = []
                 validation_errors.append("invalid_output")
                 validation_errors.append(type(exc).__name__)
             validation_errors.extend(workload_validation_errors(data_path, metrics))
         status = workload_status(args.dry_run, completed.returncode, validation_errors)
-        workload_result = {
-            "workload": workload,
-            "status": status,
-            "returncode": completed.returncode,
-            "command": command,
-            "stdout": completed.stdout,
-            "stderr": completed.stderr,
-            "summary_path": str(paths["summary"]),
-            "data_path": str(data_path),
-            "validation_errors": validation_errors,
-            "data": data,
-            "metrics": metrics,
-        }
-        result["workloads"].append(workload_result)
+        result["workloads"].append(
+            {
+                "workload": workload,
+                "status": status,
+                "returncode": completed.returncode,
+                "command": command,
+                "stdout": completed.stdout,
+                "stderr": completed.stderr,
+                "summary_path": str(paths["summary"]),
+                "data_path": str(data_path),
+                "validation_errors": validation_errors,
+                "data": data,
+                "metrics": metrics,
+            }
+        )
         if workload_failed(status) and not args.keep_going:
             break
     return result
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run TurboBus paper-style workload validation")
-    parser.add_argument("--workloads", default="all", help="Comma-separated: all, model-loading, vllm-kv, training-offload")
-    parser.add_argument("--target-gpu", type=int, required=True)
-    parser.add_argument("--relay-gpus", required=True)
-    parser.add_argument("--mode", choices=["auto", "pool", "direct", "relay", "all"], default="all")
+    parser = argparse.ArgumentParser(description="Run TurboBus daemon-first paper validation")
+    parser.add_argument(
+        "--workloads",
+        default="all",
+        help="Comma-separated: all, model-loading, training-offload",
+    )
+    parser.add_argument("--session-id", required=True)
+    parser.add_argument("--job-id", default="paper-validation")
+    parser.add_argument("--cpu-buffer-id", required=True)
+    parser.add_argument("--gpu-buffer-id", required=True)
+    parser.add_argument("--policy", default="daemon-default")
+    parser.add_argument("--run-id", default="paper-validation")
     parser.add_argument("--chunk-bytes", type=int, default=4 * 1024 * 1024)
-    parser.add_argument("--profile-bytes", type=int, default=16 * 1024 * 1024)
-    parser.add_argument("--min-pool-bytes", type=int, default=12 * 1024 * 1024)
-    parser.add_argument("--warmup", type=int, default=1)
+    parser.add_argument("--warmup", type=int, default=0)
     parser.add_argument("--iterations", type=int, default=3)
     parser.add_argument("--bucket-count", type=int, default=8)
     parser.add_argument("--active-buckets", type=int)
     parser.add_argument("--bucket-bytes", type=int, default=32 * 1024 * 1024)
-    parser.add_argument("--storage-layout", choices=["separate", "packed"], default="packed")
-    parser.add_argument("--compute-elements", type=int, default=1_048_576)
-    parser.add_argument("--compute-iterations", type=int, default=20)
-    parser.add_argument("--vllm-model", default="Qwen/Qwen3-0.6B")
-    parser.add_argument("--vllm-prompt-repeat", type=int, default=64)
-    parser.add_argument("--vllm-restore-blocks-list", default="8")
-    parser.add_argument("--vllm-tokens-per-block", type=int, default=16)
-    parser.add_argument("--vllm-enforce-eager", action="store_true")
-    parser.add_argument("--vllm-enable-multiproc-executor", action="store_true")
-    parser.add_argument("--vllm-no-map-physical-gpus", action="store_true")
-    parser.add_argument("--force-profile", action="store_true")
-    parser.add_argument("--verify", action="store_true")
+    parser.add_argument("--storage-layout", choices=["packed", "separate"], default="packed")
+    parser.add_argument(
+        "--training-workload-kind",
+        choices=["training_state", "optimizer_state"],
+        default="training_state",
+    )
+    parser.add_argument("--compute-delay-ms", type=float, default=0.0)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--keep-going", action="store_true")
     parser.add_argument("--output-dir", default="benchmarks/results/paper_validation")
