@@ -139,6 +139,27 @@ def _authorized_relay_transfer(daemon: TurboBusDaemon):
     return session_id, planned, lease_token, authorized
 
 
+def _audit_record(
+    profile: dict,
+    *,
+    event_type: str,
+    transfer_id: str | None = None,
+    reason: str | None = None,
+) -> dict:
+    for record in profile["audit_records"]:
+        if record["event_type"] != event_type:
+            continue
+        if transfer_id is not None and record["transfer_id"] != transfer_id:
+            continue
+        if reason is not None and record["reason"] != reason:
+            continue
+        return record
+    raise AssertionError(
+        f"missing audit record event_type={event_type!r} "
+        f"transfer_id={transfer_id!r} reason={reason!r}"
+    )
+
+
 class DaemonStateTest(unittest.TestCase):
     def test_session_lifecycle_releases_quota(self) -> None:
         daemon = _daemon(relay_gpus=[1], max_sessions_per_relay=1)
@@ -2902,6 +2923,49 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(completed.payload["status"]["state"], "complete")
         self.assertEqual(completed.payload["status"]["bytes_completed"], 64)
 
+    def test_relay_completion_records_daemon_audit_record(self) -> None:
+        daemon = _daemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=1,
+            max_inflight_chunks_per_relay=8,
+        )
+        session_id, planned, lease_token, authorized = _authorized_relay_transfer(daemon)
+        transfer_id = planned.payload["transfer_id"]
+
+        reported = daemon.transfer_status(
+            transfer_id,
+            state="complete",
+            bytes_completed=64,
+        )
+
+        self.assertTrue(reported.ok)
+        profile = daemon.describe().payload
+        relay_use = _audit_record(
+            profile,
+            event_type="worker_completion",
+            transfer_id=transfer_id,
+        )
+        self.assertEqual(relay_use["job_id"], "job-1")
+        self.assertEqual(relay_use["session_id"], session_id)
+        self.assertEqual(relay_use["lease_id"], lease_token["lease_id"])
+        self.assertEqual(relay_use["decision_id"], planned.payload["decision_id"])
+        self.assertEqual(relay_use["ticket_id"], authorized.payload["ticket"]["ticket_id"])
+        self.assertEqual(relay_use["topology_snapshot_id"], planned.payload["topology_snapshot_id"])
+        self.assertEqual(relay_use["relay_gpu"], 1)
+        self.assertEqual(relay_use["direction"], "h2d")
+        self.assertEqual(relay_use["bytes_total"], 32)
+        self.assertEqual(relay_use["bytes_completed"], 32)
+        self.assertEqual(relay_use["state"], "complete")
+        self.assertIsNone(relay_use["failure_reason"])
+        self.assertEqual(relay_use["buffer_ids"], ("cpu-buffer", "gpu-buffer"))
+        self.assertEqual(relay_use["source_buffer_id"], "cpu-buffer")
+        self.assertEqual(relay_use["destination_buffer_id"], "gpu-buffer")
+        self.assertEqual(
+            relay_use["staging_record_id"],
+            f"staging-{lease_token['lease_id']}",
+        )
+        self.assertIsNotNone(relay_use["duration_seconds"])
+
     def test_close_session_marks_planned_transfer_canceled_and_reports_cleanup(self) -> None:
         daemon = _daemon(
             relay_gpus=[1],
@@ -3045,6 +3109,26 @@ class DaemonStateTest(unittest.TestCase):
             },
             profile["system_cleanup_events"],
         )
+        mismatch = _audit_record(
+            profile,
+            event_type="detected_mismatch",
+            transfer_id=transfer_id,
+            reason="transfer_status_mismatch",
+        )
+        mismatch_cleanup = _audit_record(
+            profile,
+            event_type="cleanup",
+            transfer_id=transfer_id,
+            reason="transfer_status_mismatch",
+        )
+        self.assertEqual(mismatch["failure_reason"], rejected.error)
+        self.assertEqual(mismatch["job_id"], "job-1")
+        self.assertEqual(mismatch["lease_id"], lease_token["lease_id"])
+        self.assertEqual(mismatch["bytes_completed"], 0)
+        self.assertEqual(mismatch_cleanup["cleanup_kind"], "reservation")
+        self.assertEqual(mismatch_cleanup["cleanup_target_id"], lease_token["lease_id"])
+        self.assertEqual(mismatch_cleanup["failure_reason"], "transfer_status_mismatch")
+        self.assertEqual(mismatch_cleanup["staging_record_id"], f"staging-{lease_token['lease_id']}")
         idempotent = daemon.cleanup(
             target_kind="reservation",
             target_id=lease_token["lease_id"],
@@ -3203,6 +3287,27 @@ class DaemonStateTest(unittest.TestCase):
             },
             profile["system_cleanup_events"],
         )
+        failure = _audit_record(
+            profile,
+            event_type="worker_failure",
+            transfer_id=transfer_id,
+            reason="worker_failed",
+        )
+        cleanup = _audit_record(
+            profile,
+            event_type="cleanup",
+            transfer_id=transfer_id,
+            reason="worker_failed",
+        )
+        self.assertEqual(failure["failure_reason"], "worker_failed")
+        self.assertEqual(failure["job_id"], "job-1")
+        self.assertEqual(failure["lease_id"], lease_token["lease_id"])
+        self.assertEqual(failure["bytes_total"], 32)
+        self.assertEqual(failure["bytes_completed"], 0)
+        self.assertEqual(cleanup["cleanup_kind"], "reservation")
+        self.assertEqual(cleanup["cleanup_target_id"], lease_token["lease_id"])
+        self.assertEqual(cleanup["failure_reason"], "worker_failed")
+        self.assertEqual(cleanup["staging_record_id"], f"staging-{lease_token['lease_id']}")
 
     def test_stale_session_reap_releases_staging_records_and_owner_state(self) -> None:
         daemon = _daemon(
@@ -3236,6 +3341,26 @@ class DaemonStateTest(unittest.TestCase):
             },
             profile["system_cleanup_events"],
         )
+        session_cleanup = _audit_record(
+            profile,
+            event_type="cleanup",
+            reason="stale_session_timeout",
+        )
+        reservation_cleanup = _audit_record(
+            profile,
+            event_type="cleanup",
+            transfer_id=transfer_id,
+            reason="stale_session_timeout",
+        )
+        self.assertEqual(session_cleanup["session_id"], session_id)
+        self.assertEqual(session_cleanup["cleanup_kind"], "session")
+        self.assertEqual(session_cleanup["cleanup_target_id"], session_id)
+        self.assertEqual(session_cleanup["failure_reason"], "stale_session_timeout")
+        self.assertEqual(reservation_cleanup["job_id"], "job-1")
+        self.assertEqual(reservation_cleanup["lease_id"], lease_token["lease_id"])
+        self.assertEqual(reservation_cleanup["cleanup_kind"], "reservation")
+        self.assertEqual(reservation_cleanup["cleanup_target_id"], lease_token["lease_id"])
+        self.assertEqual(reservation_cleanup["failure_reason"], "stale_session_timeout")
 
     def test_plan_transfer_falls_back_direct_when_relay_quota_is_unavailable(self) -> None:
         daemon = _daemon(

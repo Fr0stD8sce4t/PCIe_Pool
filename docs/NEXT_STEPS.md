@@ -12,7 +12,7 @@ new architecture rather than preserve application-side route selection.
 
 ## Immediate Functional Target
 
-Begin Phase 2: Privileged Daemon Control Plane.
+Begin Phase 3: Cross-Job Dynamic Scheduling.
 
 Phase 0 is complete. The public examples and benchmarks now use daemon-first
 client APIs, and the old Runtime-shaped benchmark/example entry points have
@@ -24,15 +24,16 @@ snapshots, supports explicit topology invalidation, reports relay eligibility
 with path capabilities, and fails production startup clearly when discovery
 cannot satisfy policy.
 
-The next target is daemon-owned resource authority:
+Phase 2 daemon-owned resource authority is complete. The next target is
+Phase 3 cross-job dynamic scheduling:
 
-1. Bind clients to user, process, container, job, and session identity.
-2. Check peer credentials on the daemon socket where the platform supports it.
-3. Register buffers with ownership checks and reject cross-job access.
-4. Manage transfer, lease, reservation, and buffer lifecycle on failures,
-   disconnects, timeouts, and worker mismatch.
-5. Emit audit records for relay use, bytes moved, duration, owner, and failure
-   reason.
+1. Add a global daemon transfer queue.
+2. Track active H2D, D2H, P2P, staging, and transfer state.
+3. Schedule from topology, measured bandwidth, current load, request size,
+   workload kind, job weight, and fairness policy.
+4. Add weighted fair sharing across jobs.
+5. Add relay admission control, delayed lease grants, plan expiration, and
+   rescheduling while keeping direct fallback as a scheduler outcome.
 
 ## Current
 
@@ -134,9 +135,9 @@ topology forces the provider to produce a new snapshot, and subsequent
 inventory and relay-discovery responses carry the new snapshot id/version,
 eligibility, filtered reasons, and per-relay path capabilities.
 
-Current phase: Phase 2, privileged daemon control plane.
+Current phase: Phase 3, cross-job dynamic scheduling.
 
-Current item: Phase 2 Cut 4, audit records for relay use and failures.
+Current item: Phase 3 Cut 1, global daemon transfer queue and runtime resource state.
 
 ## Phase 0 Code Cuts
 
@@ -477,7 +478,7 @@ Phase 1 is complete.
 
 ## Phase 2 Current Work
 
-Current item: Phase 2 Cut 4, audit records for relay use and failures.
+Phase 2 is complete.
 
 Cut 1: peer identity and socket credential foundation.
 
@@ -545,7 +546,7 @@ Expected output:
 
 Cut 4: audit records for relay use and failures.
 
-Status: current.
+Status: complete.
 
 - Add daemon-owned audit records for relay use, bytes moved, duration, owner,
   transfer id, decision id, ticket id, lease id, session id, job id, and
@@ -566,13 +567,52 @@ Expected output:
   resource ids;
 - Phase 2 exit criteria can be checked before entering cross-job scheduling.
 
+## Phase 2 Done Criteria
+
+Phase 2 is complete.
+
+- peer credentials are captured where the platform supports them;
+- job and session identity bind to daemon-observed peer identity;
+- buffer registration and transfer use enforce ownership;
+- invalid tickets, buffers, leases, sessions, and cross-owner requests are
+  rejected;
+- stale sessions and failed workers clean reservations and staging records;
+- daemon profile exposes audit records for relay use, worker completion, worker
+  failure, cleanup, timeout, lease expiration, socket disconnect, and mismatch.
+
+## Phase 3 Current Work
+
+Current item: Phase 3 Cut 1, global daemon transfer queue and runtime resource
+state.
+
+Cut 1: global queue and runtime resource state.
+
+Status: current.
+
+- Add a daemon-owned transfer queue for submitted TransferIntent work.
+- Track active H2D, D2H, P2P, relay staging, leases, and running transfer
+  state in one scheduler-readable snapshot.
+- Keep applications and adapters on TransferIntent and TransferReceipt only;
+  they must not choose direct, relay, or pooled paths.
+- Preserve scheduler ownership of production transfer plans and worker
+  ExecutionTicket enforcement.
+- Add focused tests for queued requests, active-resource accounting, and
+  scheduler visibility without implementing app-side path controls.
+
+Expected output:
+
+- daemon scheduling can reason over queued and active work across jobs;
+- Phase 3 can add fairness and admission control on top of explicit runtime
+  resource state;
+- no Phase 2 control-plane isolation or cleanup guarantee regresses.
+
 ## After Phase 0
 
 Proceed in this order:
 
 1. Automatic topology discovery.
-2. Privileged daemon control plane.
-3. Cross-job dynamic scheduling.
+2. Privileged daemon control plane. Complete.
+3. Cross-job dynamic scheduling. Current.
 4. Daemon-plan data plane.
 5. vLLM KV end-to-end workload.
 6. Model loading and training offload.

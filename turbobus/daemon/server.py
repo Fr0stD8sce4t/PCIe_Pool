@@ -79,6 +79,7 @@ class TurboBusDaemon:
         self._lease_tokens: dict[str, LeaseToken] = {}
         self._transfer_statuses: dict[str, TransferStatus] = {}
         self._staging_records: dict[str, dict[str, object]] = {}
+        self._audit_records: list[dict[str, object]] = []
         self._connection_scoped_sessions: set[str] = set()
         self._connection_scoped_session_connections: dict[str, str] = {}
         self._cleanup_events: list[CleanupRequest] = []
@@ -535,6 +536,13 @@ class TurboBusDaemon:
                         TransferStatusState.FAILED,
                         error=mismatch,
                     )
+                    self._append_transfer_audit_records_locked(
+                        event_type="detected_mismatch",
+                        transfer_id=status.transfer_id,
+                        state=TransferStatusState.FAILED,
+                        reason="transfer_status_mismatch",
+                        failure_reason=mismatch,
+                    )
                     removed = self._release_reservations_for_transfer_locked(
                         status.transfer_id,
                         final_state=TransferStatusState.FAILED,
@@ -548,7 +556,22 @@ class TurboBusDaemon:
                 return DaemonResponse(ok=False, error=str(exc))
             self._transfer_statuses[updated.transfer_id] = updated
             removed = _empty_removed_summary()
-            if updated.state is TransferStatusState.FAILED:
+            if updated.state is TransferStatusState.COMPLETE:
+                self._append_transfer_audit_records_locked(
+                    event_type="worker_completion",
+                    transfer_id=updated.transfer_id,
+                    state=updated.state,
+                    bytes_completed=updated.bytes_completed,
+                )
+            elif updated.state is TransferStatusState.FAILED:
+                self._append_transfer_audit_records_locked(
+                    event_type="worker_failure",
+                    transfer_id=updated.transfer_id,
+                    state=updated.state,
+                    reason=updated.error or "worker_failed",
+                    failure_reason=updated.error or "worker_failed",
+                    bytes_completed=updated.bytes_completed,
+                )
                 _merge_removed(
                     removed,
                     self._release_reservations_for_transfer_locked(
@@ -558,6 +581,14 @@ class TurboBusDaemon:
                     ),
                 )
             elif updated.state is TransferStatusState.CANCELED:
+                self._append_transfer_audit_records_locked(
+                    event_type="transfer_canceled",
+                    transfer_id=updated.transfer_id,
+                    state=updated.state,
+                    reason=updated.error or "transfer_canceled",
+                    failure_reason=updated.error or "transfer_canceled",
+                    bytes_completed=updated.bytes_completed,
+                )
                 _merge_removed(
                     removed,
                     self._release_reservations_for_transfer_locked(
@@ -847,6 +878,20 @@ class TurboBusDaemon:
                 transfer_id=request.transfer_id,
                 now=now,
             )
+            self._execution_tickets[ticket.ticket_id] = ticket
+            self._transfer_tickets[request.transfer_id] = ticket.ticket_id
+            self._append_audit_record_locked(
+                event_type="relay_authorized",
+                transfer_id=request.transfer_id,
+                reservation=reservation,
+                lease=lease,
+                staging_record=staging_record,
+                ticket=ticket,
+                state=status.state,
+                reason="worker_authorized",
+                bytes_completed=status.bytes_completed,
+                now=now,
+            )
             decision = self._scheduling_decisions.get(request.transfer_id)
             return DaemonResponse(
                 ok=True,
@@ -1059,12 +1104,34 @@ class TurboBusDaemon:
         final_state: TransferStatusState = TransferStatusState.COMPLETE,
         cleanup_reason: str | None = None,
     ) -> TransferReservation | None:
-        reservation = self._reservations.pop(reservation_id, None)
+        reservation_key = str(reservation_id)
+        reservation = self._reservations.get(reservation_key)
         if reservation is None:
             return None
-        self._lease_tokens.pop(reservation_id, None)
-        self._staging_records.pop(reservation_id, None)
-        transfer_id = self._reservation_transfers.pop(reservation_id, None)
+        transfer_id = self._reservation_transfers.get(reservation_key)
+        lease = self._lease_tokens.get(reservation_key)
+        staging_record = self._staging_records.get(reservation_key)
+        if cleanup_reason is not None:
+            self._append_audit_record_locked(
+                event_type="cleanup",
+                transfer_id=transfer_id,
+                reservation=reservation,
+                lease=lease,
+                staging_record=staging_record,
+                state=final_state,
+                reason=cleanup_reason,
+                failure_reason=(
+                    cleanup_reason
+                    if final_state in {TransferStatusState.FAILED, TransferStatusState.CANCELED}
+                    else None
+                ),
+                cleanup_kind="reservation",
+                cleanup_target_id=reservation_key,
+            )
+        self._reservations.pop(reservation_key, None)
+        self._lease_tokens.pop(reservation_key, None)
+        self._staging_records.pop(reservation_key, None)
+        transfer_id = self._reservation_transfers.pop(reservation_key, None)
         session = self._sessions.get(reservation.session_id)
         if session is not None:
             session.active_chunks = max(0, session.active_chunks - reservation.chunks)
@@ -1351,6 +1418,208 @@ class TurboBusDaemon:
         self._staging_records[lease.lease_id] = record
         return record
 
+    def _append_transfer_audit_records_locked(
+        self,
+        *,
+        event_type: str,
+        transfer_id: str,
+        state: TransferStatusState | str,
+        reason: str | None = None,
+        failure_reason: str | None = None,
+        bytes_completed: int | None = None,
+    ) -> None:
+        reservations = [
+            self._reservations[reservation_id]
+            for reservation_id, mapped_transfer_id in sorted(
+                self._reservation_transfers.items()
+            )
+            if mapped_transfer_id == str(transfer_id)
+            and reservation_id in self._reservations
+        ]
+        if reservations:
+            for reservation in reservations:
+                lease = self._lease_tokens.get(reservation.reservation_id)
+                self._append_audit_record_locked(
+                    event_type=event_type,
+                    transfer_id=str(transfer_id),
+                    reservation=reservation,
+                    lease=lease,
+                    staging_record=self._staging_records.get(reservation.reservation_id),
+                    state=state,
+                    reason=reason,
+                    failure_reason=failure_reason,
+                    bytes_completed=bytes_completed,
+                )
+            return
+        self._append_audit_record_locked(
+            event_type=event_type,
+            transfer_id=str(transfer_id),
+            state=state,
+            reason=reason,
+            failure_reason=failure_reason,
+            bytes_completed=bytes_completed,
+        )
+
+    def _append_audit_record_locked(
+        self,
+        *,
+        event_type: str,
+        transfer_id: str | None = None,
+        reservation: TransferReservation | None = None,
+        lease: LeaseToken | None = None,
+        staging_record: dict[str, object] | None = None,
+        ticket: ExecutionTicket | None = None,
+        state: TransferStatusState | str | None = None,
+        reason: str | None = None,
+        failure_reason: str | None = None,
+        cleanup_kind: str | None = None,
+        cleanup_target_id: str | None = None,
+        session_id: str | None = None,
+        bytes_completed: int | None = None,
+        now: float | None = None,
+    ) -> dict[str, object]:
+        created_at = float(time.time() if now is None else now)
+        normalized_transfer_id = None if transfer_id is None else str(transfer_id)
+        if normalized_transfer_id is None and staging_record is not None:
+            value = staging_record.get("transfer_id")
+            normalized_transfer_id = None if value is None else str(value)
+        status = (
+            None
+            if normalized_transfer_id is None
+            else self._transfer_statuses.get(normalized_transfer_id)
+        )
+        decision = (
+            None
+            if normalized_transfer_id is None
+            else self._scheduling_decisions.get(normalized_transfer_id)
+        )
+        ticket_id = None
+        if ticket is not None:
+            ticket_id = ticket.ticket_id
+        elif normalized_transfer_id is not None:
+            ticket_id = self._transfer_tickets.get(normalized_transfer_id)
+        active_ticket = None if ticket_id is None else self._execution_tickets.get(ticket_id)
+        if ticket is None:
+            ticket = active_ticket
+        lease_id = None
+        if lease is not None:
+            lease_id = lease.lease_id
+        elif reservation is not None:
+            lease_id = reservation.reservation_id
+        elif staging_record is not None:
+            value = staging_record.get("lease_id")
+            lease_id = None if value is None else str(value)
+        if lease is None and lease_id is not None:
+            lease = self._lease_tokens.get(lease_id)
+        resolved_session_id = session_id
+        if resolved_session_id is None and status is not None:
+            resolved_session_id = status.session_id
+        if resolved_session_id is None and lease is not None:
+            resolved_session_id = lease.session_id
+        if resolved_session_id is None and reservation is not None:
+            resolved_session_id = reservation.session_id
+        if resolved_session_id is None and staging_record is not None:
+            value = staging_record.get("session_id")
+            resolved_session_id = None if value is None else str(value)
+        job_id = None
+        if status is not None:
+            job_id = status.job_id
+        elif lease is not None:
+            job_id = lease.job_id
+        elif staging_record is not None:
+            value = staging_record.get("job_id")
+            job_id = None if value is None else str(value)
+        elif decision is not None:
+            job_id = decision.job_id
+        job = None if job_id is None else self._jobs.get(job_id)
+        buffer_ids: tuple[str, ...] = ()
+        if lease is not None:
+            buffer_ids = tuple(lease.buffer_ids)
+        elif staging_record is not None:
+            buffer_ids = tuple(str(item) for item in staging_record.get("buffer_ids", ()))
+        elif ticket is not None:
+            buffer_ids = (ticket.source_buffer_id, ticket.destination_buffer_id)
+        relay_gpu = None
+        if reservation is not None:
+            relay_gpu = reservation.relay_gpu
+        elif lease is not None:
+            relay_gpu = lease.relay_gpu
+        elif staging_record is not None and staging_record.get("relay_gpu") is not None:
+            relay_gpu = int(staging_record["relay_gpu"])
+        direction = None
+        if reservation is not None:
+            direction = reservation.direction
+        elif staging_record is not None:
+            value = staging_record.get("direction")
+            direction = None if value is None else str(value)
+        elif ticket is not None:
+            direction = ticket.direction
+        bytes_total = 0
+        if reservation is not None:
+            bytes_total = int(reservation.bytes)
+        elif staging_record is not None:
+            bytes_total = int(staging_record.get("requested_bytes", 0) or 0)
+        elif status is not None:
+            bytes_total = int(status.bytes_total)
+        completed = (
+            int(bytes_completed)
+            if bytes_completed is not None
+            else (int(status.bytes_completed) if status is not None else 0)
+        )
+        if reservation is not None and bytes_total:
+            completed = min(completed, bytes_total)
+        started_at = None
+        if staging_record is not None:
+            started_at = float(staging_record.get("created_at", 0.0) or 0.0)
+        elif decision is not None:
+            started_at = float(decision.issued_at)
+        duration_seconds = None
+        if started_at:
+            duration_seconds = max(0.0, created_at - started_at)
+        record = {
+            "audit_id": f"audit-{len(self._audit_records) + 1}",
+            "event_type": str(event_type),
+            "created_at": created_at,
+            "transfer_id": normalized_transfer_id,
+            "decision_id": None if decision is None else decision.decision_id,
+            "ticket_id": ticket_id,
+            "topology_snapshot_id": (
+                None if decision is None else decision.topology_snapshot_id
+            ),
+            "lease_id": lease_id,
+            "session_id": None if resolved_session_id is None else str(resolved_session_id),
+            "job_id": job_id,
+            "user_id": None if job is None else job.user_id,
+            "process_id": None if job is None else job.process_id,
+            "container_id": None if job is None else job.container_id,
+            "relay_gpu": relay_gpu,
+            "direction": direction,
+            "bytes_total": bytes_total,
+            "bytes_completed": completed,
+            "duration_seconds": duration_seconds,
+            "state": (
+                state.value
+                if isinstance(state, TransferStatusState)
+                else (None if state is None else str(state))
+            ),
+            "reason": reason,
+            "failure_reason": failure_reason,
+            "cleanup_kind": cleanup_kind,
+            "cleanup_target_id": cleanup_target_id,
+            "source_buffer_id": None if ticket is None else ticket.source_buffer_id,
+            "destination_buffer_id": (
+                None if ticket is None else ticket.destination_buffer_id
+            ),
+            "buffer_ids": buffer_ids,
+            "staging_record_id": (
+                None
+                if staging_record is None
+                else staging_record.get("staging_record_id")
+            ),
+        }
+        self._audit_records.append(record)
+        return record
+
     def _cleanup_job_locked(self, job_id: str, reason: str) -> dict[str, int]:
         removed = _empty_removed_summary()
         job = self._jobs.pop(str(job_id), None)
@@ -1578,6 +1847,15 @@ class TurboBusDaemon:
             return None
         session.active = False
         session.closed_at = time.time()
+        self._append_audit_record_locked(
+            event_type="cleanup",
+            session_id=session_id,
+            state=TransferStatusState.CANCELED,
+            reason=reason,
+            failure_reason=reason,
+            cleanup_kind="session",
+            cleanup_target_id=session_id,
+        )
         self._system_cleanup_events.append(
             CleanupRequest(
                 target_kind="session",
@@ -1737,6 +2015,7 @@ class TurboBusDaemon:
                     "staging_records": {
                         key: dict(value) for key, value in self._staging_records.items()
                     },
+                    "audit_records": [dict(record) for record in self._audit_records],
                     "connection_scoped_sessions": sorted(
                         self._connection_scoped_sessions
                     ),

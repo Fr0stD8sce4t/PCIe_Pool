@@ -4,10 +4,11 @@
 
 The active project plan has been reset to paper-parity execution.
 
-Phase 0 realignment and Phase 1 automatic topology discovery are complete. The
-next work is Phase 2, privileged daemon control plane, which turns the daemon
-into the authority for peer identity, job/session ownership, buffer access,
-leases, cleanup, and audit records.
+Phase 0 realignment, Phase 1 automatic topology discovery, and Phase 2
+privileged daemon control plane are complete. The next work is Phase 3,
+cross-job dynamic scheduling, which turns daemon-owned topology, leases,
+resource state, and audit records into a shared PCIe bandwidth pool across
+jobs.
 
 The active target architecture is:
 
@@ -154,10 +155,18 @@ The active target architecture is:
   resources without client policy, repeated cleanup is idempotent, and direct
   transfers without relay reservations are canceled when their owning job or
   buffer is cleaned.
+- Phase 2 Cut 4 is complete. The daemon now owns audit records for relay
+  authorization, worker completion, worker failure, cleanup, stale session
+  timeout, lease expiration, socket disconnect through session cleanup, and
+  detected mismatch. Audit records are exposed through daemon profile state
+  and include owner identity, transfer id, decision id, ticket id, topology
+  snapshot id, lease id, session id, job id, relay GPU, direction, bytes,
+  duration, buffers, staging record id, cleanup target, reason, and failure
+  reason without letting clients or adapters author audit truth.
 
 ## Active Phase
 
-Phase 2: Privileged Daemon Control Plane.
+Phase 3: Cross-Job Dynamic Scheduling.
 
 Phase 1 is complete:
 
@@ -168,7 +177,7 @@ Phase 1 is complete:
 - versioned `TopologySnapshot` creation and invalidation;
 - startup failure when production topology cannot satisfy policy.
 
-Phase 2 covers:
+Phase 2 is complete:
 
 - socket peer credential checks;
 - user, process, container, job, and session ownership;
@@ -176,9 +185,20 @@ Phase 2 covers:
 - transfer state, lease, reservation, and staging lifecycle cleanup;
 - audit records for relay use and failures.
 
+Phase 3 covers:
+
+- global daemon transfer queue;
+- runtime state for H2D, D2H, P2P, relay staging, and active transfers;
+- scheduling from topology, measured bandwidth, current load, request size,
+  workload kind, job weight, and fairness policy;
+- weighted fair sharing across jobs;
+- relay admission control, delayed lease grants, plan expiration, and
+  rescheduling;
+- direct fallback as a scheduler outcome.
+
 ## Next Work Items
 
-Current item: Phase 2 Cut 4, audit records for relay use and failures.
+Current item: Phase 3 Cut 1, global daemon transfer queue and runtime resource state.
 
 1. Shared schema layer.
    - Status: complete.
@@ -265,14 +285,19 @@ Current item: Phase 2 Cut 4, audit records for relay use and failures.
      multi-GPU server.
 
 10. Privileged daemon control plane.
-   - Status: current.
+   - Status: complete.
    - Cut 1 complete: add peer identity and socket credential foundation.
    - Cut 2 complete: enforce buffer ownership for registration, transfer,
      lease, and worker authorization paths.
    - Cut 3 complete: clean stale resources after disconnects, timeouts, worker
      failures, and detected mismatches.
-   - Cut 4 current: emit audit records for relay use, ownership, bytes,
-     duration, cleanup, and failures.
+   - Cut 4 complete: emit daemon-owned audit records for relay use, ownership,
+     bytes, duration, cleanup, and failures.
+
+11. Cross-job dynamic scheduling.
+   - Status: current.
+   - Cut 1 current: add a global daemon transfer queue and scheduler-readable
+     runtime resource state for queued and active work.
 
 ## Phase 0 Acceptance Criteria
 
@@ -290,7 +315,7 @@ Phase 0 is complete:
 
 ## Latest Validation
 
-Phase 2 Cut 3 validation:
+Phase 2 Cut 4 validation:
 
 - `python -m unittest test.python.integration.test_daemon_state test.python.integration.test_daemon_socket test.python.integration.test_worker_helper test.python.integration.test_client_worker_transfer`
 - `python -m compileall -q turbobus\schema.py turbobus\daemon turbobus\worker turbobus\client_transfer.py test\python\integration\test_daemon_state.py test\python\integration\test_daemon_socket.py test\python\integration\test_worker_helper.py test\python\integration\test_client_worker_transfer.py`
@@ -301,18 +326,19 @@ Remaining risk:
 - Phase 1 implementation is complete, but production topology behavior still
   needs to be exercised on a real multi-GPU CUDA server with `nvidia-smi topo
   -m` available.
-- Phase 2 now rejects cross-peer buffer registration and transfer use and
+- Phase 2 now rejects cross-peer buffer registration and transfer use,
   cleans stale resources after timeout, disconnect, worker failure, and
-  mismatch. Phase 2 still needs daemon-owned audit records before entering
-  cross-job dynamic scheduling.
+  mismatch, and exposes daemon-owned audit records for relay use and failures.
+  Phase 3 still needs global queued-work state, dynamic scheduling, fairness,
+  and relay admission control before real cross-job PCIe pooling is available.
 
 ## Upcoming Phases
 
 After Phase 0, proceed in order:
 
 1. Automatic topology discovery.
-2. Privileged daemon control plane.
-3. Cross-job dynamic scheduling.
+2. Privileged daemon control plane. Complete.
+3. Cross-job dynamic scheduling. Current.
 4. Daemon-plan data plane.
 5. vLLM KV end-to-end workload.
 6. Model loading and training offload.
