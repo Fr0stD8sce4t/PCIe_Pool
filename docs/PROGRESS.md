@@ -4,10 +4,9 @@
 
 The active project plan has been reset to paper-parity execution.
 
-The current repository still contains implementation code, tests, benchmarks,
-and examples that need to be realigned around daemon-first scheduling. The next
-work is Phase 0, which updates the structure and contracts before adding broad
-new features.
+Phase 0 realignment is complete. The next work is Phase 1, automatic topology
+discovery, which moves production startup away from manual or fixture topology
+and toward daemon-owned machine discovery.
 
 The active target architecture is:
 
@@ -105,24 +104,31 @@ The active target architecture is:
   the daemon-first vLLM KV connector, vLLM mapping, vLLM integration, intent
   fields, receipt handling, and public package boundaries instead of the old
   Runtime route-selection surface.
+- Phase 0 Cut 9 is complete. The remaining legacy workload entry points
+  `examples/vllm_turbobus_restore.py`, `benchmarks/bandwidth_pool.py`,
+  `benchmarks/kv_offload.py`, and `benchmarks/tune_transfer.py` have been
+  removed because they encoded application-side target GPU, relay GPU, and
+  physical mode control. `benchmarks/summarize_result.py` now summarizes only
+  daemon-first model-loading, training-offload, and paper-validation JSON
+  shapes and rejects old route-shaped benchmark JSON.
 
 ## Active Phase
 
-Phase 0: Paper-Parity Realignment.
+Phase 1: Automatic Topology Discovery.
 
-Phase 0 covers:
+Phase 1 covers:
 
-- shared schema contracts;
-- package boundary setup;
-- daemon-first public API;
-- scheduler and ticket contract;
-- test tree rewrite;
-- benchmark and example rewrite;
-- adapter thinning.
+- daemon-owned topology provider boundaries;
+- production GPU identity and PCI bus discovery;
+- PCIe hierarchy and link capability discovery;
+- CUDA P2P and scale-up fabric discovery where available;
+- versioned `TopologySnapshot` creation and invalidation;
+- startup failure when production topology cannot satisfy policy.
 
 ## Next Work Items
 
-Current item: Cut 9, remaining legacy benchmark and example cleanup.
+Current item: Phase 1 Cut 1, topology provider boundary and production startup
+contract.
 
 1. Shared schema layer.
    - Status: complete.
@@ -172,7 +178,7 @@ Current item: Cut 9, remaining legacy benchmark and example cleanup.
      for the rewritten model-loading and training-offload benchmarks.
 
 7. Adapter thinning.
-   - Status: current.
+   - Status: complete.
    - Substage 8.1 complete: the shared adapter named-block path now submits
      `TransferIntent` through the client API and consumes `TransferReceipt`
      for stats and block state. Model-loading, training-offload, inference KV,
@@ -184,19 +190,30 @@ Current item: Cut 9, remaining legacy benchmark and example cleanup.
      protect old Runtime route-selection behavior.
 
 8. Remaining legacy benchmark and example cleanup.
-   - Status: current.
-   - Resolve active examples and benchmarks that still construct `Runtime` or
-     expose target GPU, relay GPU, or physical mode selection for workload
+   - Status: complete.
+   - Removed active examples and benchmarks that still constructed `Runtime`
+     or exposed target GPU, relay GPU, or physical mode selection for workload
      submission.
-   - Known files: `examples/vllm_turbobus_restore.py`,
+   - Removed files: `examples/vllm_turbobus_restore.py`,
      `benchmarks/bandwidth_pool.py`, `benchmarks/kv_offload.py`, and
      `benchmarks/tune_transfer.py`.
+   - Reworked `benchmarks/summarize_result.py` to dispatch only current
+     daemon-first benchmark JSON shapes.
    - Keep direct, relay, and pooled path coverage inside scheduler, worker, or
      data-plane tests where daemon decisions and tickets are authoritative.
 
+9. Automatic topology discovery.
+   - Status: current.
+   - Add or tighten daemon-owned topology provider interfaces.
+   - Make production startup use production providers rather than fixture
+     topology.
+   - Produce versioned `TopologySnapshot` objects for scheduler input.
+   - Add focused tests for provider selection, snapshot shape, and startup
+     failure when production discovery is unavailable or insufficient.
+
 ## Phase 0 Acceptance Criteria
 
-Phase 0 is done when:
+Phase 0 is complete:
 
 - main transfer calls require daemon scheduling;
 - scheduler decisions are the only production transfer plans;
@@ -210,19 +227,18 @@ Phase 0 is done when:
 
 ## Latest Validation
 
-Phase 0 Cut 8 Substage 8.3 validation:
+Phase 0 Cut 9 validation:
 
-- `python -m unittest test.python.unit.test_adapters_package test.python.e2e.test_vllm_integration test.python.e2e.test_vllm_kv_connector`
-- `python -m compileall -q turbobus\adapters turbobus\vllm.py turbobus\vllm_integration.py turbobus\vllm_kv_connector.py test\python\unit\test_adapters_package.py test\python\e2e\test_vllm_integration.py test\python\e2e\test_vllm_kv_connector.py`
-- `rg -n "vllm_connector|VllmTurboBusConnector|VllmConnectorEvent|vllm_turbobus_connector" turbobus examples test\python -g "*.py"`
+- `python -m unittest test.python.e2e.test_summarize_result test.python.e2e.test_model_loading_benchmark test.python.e2e.test_training_offload_benchmark test.python.e2e.test_paper_validation`
+- `python -m compileall -q benchmarks\model_loading.py benchmarks\training_offload.py benchmarks\paper_validation.py benchmarks\summarize_result.py examples test\python\e2e\test_summarize_result.py`
+- `rg -n "Runtime\(|RuntimeOptions|--target-gpu\b|--relay-gpus\b|--mode\b|--modes\b|turbobus\.mode\b|min_pool_bytes\b|target_gpu=args\b|relay_gpus=args\b|transfer_mode\b|direct_over_pool\b|auto_resolved_mode\b|set_transfer_mode\b" examples benchmarks turbobus\adapters -g "*.py"`
+- `rg -n "bandwidth_pool|kv_offload|tune_transfer|vllm_turbobus_restore" examples benchmarks test\python -g "*.py"`
 - `git diff --check`
 
 Remaining Phase 0 risk:
 
-- `examples/vllm_turbobus_restore.py`, `benchmarks/bandwidth_pool.py`,
-  `benchmarks/kv_offload.py`, and `benchmarks/tune_transfer.py` still expose
-  old Runtime or route-shaped workload entry points. Phase 0 must resolve
-  these before moving to Phase 1.
+- none currently tracked. New work should proceed to Phase 1 without reviving
+  removed Runtime-shaped benchmark or example entry points.
 
 ## Upcoming Phases
 

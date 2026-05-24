@@ -58,17 +58,17 @@ example entry points.
 
 | Current files | Current behavior | Phase 0 target |
 | --- | --- | --- |
-| `examples/torch_tensor_fetch.py` | Constructs runtime and calls direct tensor fetch | Replace with minimal daemon-first client example. |
-| `examples/vllm_turbobus_connector.py` | Builds runtime and configures relay-related connector options | Convert to vLLM connector using public intent API. |
-| `examples/vllm_turbobus_kv_connector.py` | Passes connector config and emits path/mode events | Convert event output to decisions and receipts. |
-| `examples/vllm_turbobus_kv_connector_sweep.py` | Sweeps explicit relay/mode style inputs | Convert to workload/policy sweep. |
-| `examples/vllm_turbobus_restore.py` | Constructs runtime with physical/runtime relay mapping | Convert restore workflow to daemon-first path. |
-| `benchmarks/bandwidth_pool.py` | Benchmarks path modes through runtime calls | Convert to policy-based daemon decision benchmark. |
-| `benchmarks/model_loading.py` | Loads model buckets through runtime mode and relays | Convert to model-loading workload intent benchmark. |
-| `benchmarks/training_offload.py` | Prefetch/offload benchmark through runtime mode and relays | Convert to training workload intent benchmark. |
-| `benchmarks/kv_offload.py` | KV offload benchmark through runtime mode and relays | Convert to KV workload intent benchmark. |
-| `benchmarks/tune_transfer.py` | Tunes chunk/staging against runtime and relay inputs | Reframe as scheduler/backend tuning using daemon decisions. |
-| `benchmarks/paper_validation.py` | Builds command lines with relay-shaped benchmark inputs | Rebuild around public API experiments and receipt output. |
+| `examples/torch_tensor_fetch.py` | Formerly constructed runtime and called direct tensor fetch | Replaced with minimal daemon-first client example. |
+| `examples/vllm_turbobus_connector.py` | Built runtime and configured relay-related connector options | Removed with the old non-KV vLLM connector experiment. |
+| `examples/vllm_turbobus_kv_connector.py` | Formerly passed connector config and emitted path/mode events | Rewritten to use daemon identity and receipt output. |
+| `examples/vllm_turbobus_kv_connector_sweep.py` | Formerly swept explicit relay/mode style inputs | Rewritten to report daemon receipt fields and policy metadata. |
+| `examples/vllm_turbobus_restore.py` | Constructed runtime with physical/runtime relay mapping | Removed to avoid preserving route-shaped vLLM workload entry point. |
+| `benchmarks/bandwidth_pool.py` | Benchmarked path modes through runtime calls | Removed; public benchmarks must use daemon-first workload intent. |
+| `benchmarks/model_loading.py` | Formerly loaded model buckets through runtime mode and relays | Rewritten as model-loading workload intent benchmark. |
+| `benchmarks/training_offload.py` | Formerly prefetched/offloaded through runtime mode and relays | Rewritten as training workload intent benchmark. |
+| `benchmarks/kv_offload.py` | KV offload benchmark through runtime mode and relays | Removed; future KV workload coverage should use vLLM KV daemon-first paths. |
+| `benchmarks/tune_transfer.py` | Tuned chunk/staging against runtime and relay inputs | Removed; future tuning belongs in scheduler/backend tests or daemon decisions. |
+| `benchmarks/paper_validation.py` | Formerly built command lines with relay-shaped benchmark inputs | Rebuilt around public API experiments and receipt output. |
 
 ## Target Test Layout
 

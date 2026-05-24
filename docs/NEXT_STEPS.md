@@ -12,28 +12,27 @@ new architecture rather than preserve application-side route selection.
 
 ## Immediate Functional Target
 
-Complete Phase 0: Paper-Parity Realignment.
+Begin Phase 1: Automatic Topology Discovery.
 
-The first target is not a new transfer optimization. It is a structural cut that
-creates the contracts needed for the rest of the system:
+Phase 0 is complete. The public examples and benchmarks now use daemon-first
+client APIs, and the old Runtime-shaped benchmark/example entry points have
+been removed instead of preserved as compatibility paths.
 
-1. Define the shared schema objects:
-   - JobIdentity;
-   - BufferHandle;
-   - TransferIntent;
-   - TopologySnapshot;
-   - SchedulingDecision;
-   - ExecutionTicket;
-   - TransferReceipt.
-2. Route the public transfer API through daemon scheduling.
-3. Make scheduler output the only production source of transfer plans.
-4. Make worker execution require ExecutionTicket validation.
-5. Move synthetic topology into explicit test fixtures.
-6. Rewrite tests, examples, and benchmarks around the public client API.
+The next target is daemon-owned topology discovery:
+
+1. Discover GPU identity, UUID, PCI bus id, NUMA node, memory size, and
+   visibility from a daemon-owned provider.
+2. Discover PCIe hierarchy, link generation, link width, negotiated speed, and
+   estimated bandwidth where available.
+3. Discover CUDA P2P reachability and NVLink or NVSwitch information where
+   available.
+4. Produce versioned `TopologySnapshot` objects for scheduler input.
+5. Fail production startup clearly when topology discovery cannot satisfy the
+   configured policy.
 
 ## Current
 
-Cut 8: Adapter Thinning.
+Phase 1: Automatic Topology Discovery.
 
 Cut 1 is complete. The contract inventory is recorded in
 `docs/PHASE0_CONTRACT_INVENTORY.md`.
@@ -82,7 +81,8 @@ physical transfer mode arguments. Paper metrics now come from daemon receipt
 trace ids and path split fields. `examples/torch_tensor_fetch.py` now
 demonstrates public `TransferIntent` submission and receipt reporting.
 
-Current cut: Cut 8, Adapter Thinning.
+Cut 8 is complete. Adapter-facing APIs now submit intent and consume receipts
+without owning physical path selection.
 
 Cut 8 Substage 8.1 is complete. The shared adapter transfer path now uses
 `AdapterTransferContext` to describe job, session, buffer, workload, and
@@ -106,7 +106,13 @@ test have been removed. Adapter-facing exports now protect the daemon-first
 KV connector, vLLM mapping, vLLM integration, intent fields, receipt handling,
 and package boundaries.
 
-Current cut: Cut 9, remaining legacy benchmark and example cleanup.
+Cut 9 is complete. The remaining legacy workload entry points
+`examples/vllm_turbobus_restore.py`, `benchmarks/bandwidth_pool.py`,
+`benchmarks/kv_offload.py`, and `benchmarks/tune_transfer.py` have been
+removed. `benchmarks/summarize_result.py` now dispatches only daemon-first
+JSON result shapes for model loading, training offload, and paper validation.
+
+Current phase: Phase 1, automatic topology discovery.
 
 ## Phase 0 Code Cuts
 
@@ -264,7 +270,7 @@ Expected output:
 
 ### Cut 8: Adapter Thinning
 
-Status: current.
+Status: complete.
 
 Cut 8 is split so adapter work does not drift back into Runtime-owned physical
 path selection.
@@ -316,7 +322,7 @@ Expected output:
 
 ### Cut 9: Remaining Legacy Benchmark And Example Cleanup
 
-Status: current.
+Status: complete.
 
 Phase 0 is not complete until remaining examples and benchmarks stop presenting
 old Runtime, target GPU, relay GPU, and physical mode controls as active
@@ -332,15 +338,14 @@ application-facing workflows.
   worker, or data-plane tests where daemon decisions and tickets are the
   authority.
 
-Current known files to resolve:
+Resolved files:
 
-- `examples/vllm_turbobus_restore.py`;
-- `benchmarks/bandwidth_pool.py`;
-- `benchmarks/kv_offload.py`;
-- `benchmarks/tune_transfer.py`;
-- tests that only guard rejection of removed benchmark/example route-shaped
-  arguments should either move to Cut 9 validation or be removed with the
-  old entry points.
+- removed `examples/vllm_turbobus_restore.py`;
+- removed `benchmarks/bandwidth_pool.py`;
+- removed `benchmarks/kv_offload.py`;
+- removed `benchmarks/tune_transfer.py`;
+- rewrote `benchmarks/summarize_result.py` so it rejects old route-shaped JSON
+  and only summarizes daemon-first benchmark outputs.
 
 Expected output:
 
@@ -351,7 +356,7 @@ Expected output:
 
 ## Phase 0 Done Criteria
 
-Phase 0 is complete when:
+Phase 0 is complete.
 
 - the main transfer path requires daemon scheduling;
 - scheduler decisions are the only production transfer plans;
@@ -362,6 +367,26 @@ Phase 0 is complete when:
 - `python -m compileall` passes;
 - non-GPU tests pass;
 - GPU tests are clearly marked and runnable on CUDA hardware.
+
+## Phase 1 Current Work
+
+Current item: Phase 1 Cut 1, topology provider boundary and production startup
+contract.
+
+- Add a daemon-owned topology provider interface if the current provider shape
+  is not sufficient.
+- Keep synthetic topology under `test/python/fixtures/`; do not add synthetic
+  fallback to production startup.
+- Add a production provider selection path for daemon startup.
+- Return or cache `TopologySnapshot` objects with stable ids and version fields.
+- Add focused tests for provider selection, snapshot shape, and startup failure
+  when no production provider can satisfy policy.
+
+Expected output:
+
+- daemon topology code has a clear production provider boundary;
+- tests protect that production startup cannot silently use fixture topology;
+- no application or benchmark code chooses relays or physical paths.
 
 ## After Phase 0
 
