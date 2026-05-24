@@ -5,10 +5,11 @@
 The active project plan has been reset to paper-parity execution.
 
 Phase 0 realignment, Phase 1 automatic topology discovery, Phase 2
-privileged daemon control plane, Phase 3 cross-job dynamic scheduling, and
-Phase 4 daemon-plan data plane are complete. The next work is Phase 5, vLLM
-KV end-to-end workload, which makes real KV cache save and restore use the
-daemon-first `TransferIntent` and `TransferReceipt` path.
+privileged daemon control plane, Phase 3 cross-job dynamic scheduling, Phase 4
+daemon-plan data plane, and Phase 5 vLLM KV end-to-end workload are complete.
+The next work is Phase 6, model loading and training offload, which extends
+the same daemon-first `TransferIntent` and `TransferReceipt` path beyond KV
+cache movement.
 
 The active target architecture is:
 
@@ -18,7 +19,9 @@ The active target architecture is:
 - daemon control plane issues ExecutionTicket;
 - workers and data-plane backends execute exact ticketed plans;
 - completion returns TransferReceipt;
-- vLLM KV cache save/restore is the first full workload target.
+- vLLM KV cache save/restore is the first completed full workload target;
+- model weight loading and training or optimizer state offload are the next
+  workload targets.
 
 ## Completed Planning Work
 
@@ -188,7 +191,7 @@ The active target architecture is:
 
 ## Active Phase
 
-Phase 5: vLLM KV End-To-End Workload.
+Phase 6: Model Loading And Training Offload.
 
 Phase 1 is complete:
 
@@ -263,9 +266,21 @@ primitives remain available for daemon-ticketed execution. Runtime tests now
 protect `runtime_engine` exact-plan conversion helpers and public package
 boundaries instead of old direct/relay/pool route selection.
 
+Phase 5 is complete. The vLLM KV connector now submits save and restore
+`TransferIntent` objects from real vLLM lifecycle points, consumes
+`TransferReceipt` objects, and records daemon receipt ids, decision ids,
+topology snapshot ids, ticket ids, bytes, timing, fallback reason, and
+direct/relay path split. Paper validation can run both a single vLLM KV
+save/restore job and concurrent multi-job vLLM KV save/restore jobs through
+the daemon-first connector path. Multi-job validation assigns distinct
+job/session/buffer/prefix identities to each job, aggregates per-job daemon
+trace output for fairness audits, and rejects missing per-job daemon trace
+without adding target GPU, relay GPU, mode, or direct/relay/pool controls.
+
 ## Next Work Items
 
-Current item: Phase 5 Cut 3, multi-job vLLM KV trace and fairness validation.
+Current item: Phase 6 Cut 1, model-loading and training-offload adapter
+inventory and workload boundary audit.
 
 1. Shared schema layer.
    - Status: complete.
@@ -387,7 +402,7 @@ Current item: Phase 5 Cut 3, multi-job vLLM KV trace and fairness validation.
      behaviors, not app-side controls.
 
 13. vLLM KV end-to-end workload.
-   - Status: current.
+   - Status: complete.
    - Cut 1 complete: tighten the vLLM KV connector around the real
      `KVConnectorBase_V1` save/restore lifecycle, remove the public fake saved
      prefix injection path, remove the non-layer `wait_for_save` fallback, and
@@ -396,7 +411,22 @@ Current item: Phase 5 Cut 3, multi-job vLLM KV trace and fairness validation.
      real connector example on a CUDA server, requires lifecycle events, parses
      save/restore daemon trace fields, writes JSON, and reports vLLM KV paper
      metrics without application-side path controls.
-   - Cut 3 current: add multi-job vLLM KV trace and fairness validation.
+   - Cut 3 complete: add concurrent multi-job vLLM KV validation through
+     paper validation. Each job gets distinct job/session/buffer/prefix
+     identity, runs the daemon-first connector example, and contributes
+     per-job save/restore receipt ids, decision ids, topology snapshot ids,
+     ticket ids, bytes, direct/relay path split, fallback reason, timing, and
+     log path to the paper-validation JSON and summary.
+
+14. Model loading and training offload.
+   - Status: current.
+   - Current item: Phase 6 Cut 1, model-loading and training-offload adapter
+     inventory and workload boundary audit.
+   - Inspect model-loading and training-offload adapters, benchmark code,
+     public client calls, scheduler workload-kind policy inputs, and existing
+     tests before changing behavior.
+   - Keep adapters and benchmarks on `TransferIntent` and `TransferReceipt`
+     only, with no application-side direct, relay, or pooled path selection.
 
 ## Phase 0 Acceptance Criteria
 
@@ -414,7 +444,14 @@ Phase 0 is complete:
 
 ## Latest Validation
 
-Phase 4 Cut 4 validation:
+Phase 5 Cut 3 validation:
+
+- `python -m unittest test.python.e2e.test_paper_validation`
+- `python -m unittest test.python.e2e.test_paper_validation test.python.e2e.test_vllm_kv_connector_example test.python.e2e.test_vllm_kv_connector_sweep test.python.e2e.test_vllm_kv_connector`
+- `python -m py_compile benchmarks\paper_validation.py examples\vllm_turbobus_kv_connector.py examples\vllm_turbobus_kv_connector_sweep.py test\python\e2e\test_paper_validation.py test\python\e2e\test_vllm_kv_connector.py test\python\e2e\test_vllm_kv_connector_example.py test\python\e2e\test_vllm_kv_connector_sweep.py turbobus\adapters\vllm_kv_connector.py`
+- `git diff --check`
+
+Earlier Phase 4 Cut 4 validation:
 
 - `python -m unittest test.python.unit.test_public_client_api test.python.unit.test_runtime_engine test.python.unit.test_backend_cuda test.python.unit.test_worker_cuda_executor test.python.e2e.test_verification test.python.integration.test_client_worker_transfer test.python.integration.test_worker_helper test.python.integration.test_daemon_state`
 - `python -m py_compile turbobus\runtime_engine.py turbobus\backends\cuda.py turbobus\client_transfer.py turbobus\worker\cuda_executor.py turbobus\verification.py test\python\unit\test_public_client_api.py test\python\unit\test_runtime_engine.py test\python\unit\test_backend_cuda.py test\python\unit\test_worker_cuda_executor.py test\python\e2e\test_verification.py test\python\integration\test_client_worker_transfer.py test\python\integration\test_worker_helper.py test\python\integration\test_daemon_state.py`
@@ -435,16 +472,10 @@ Remaining risk:
   `python -m turbobus.verification` commands.
 - Native C++/CUDA build checks were not run in the local Windows environment
   because `cmake` and `nvcc` are not installed there.
-- Phase 5 Cut 2 added the real vLLM server command path, but it still needs to
-  be exercised on a CUDA server with vLLM installed and a TurboBus daemon
-  running.
-- Phase 5 still needs multi-job vLLM KV validation for cross-job trace and
-  fairness behavior.
-
-Latest validation:
-
-- `python -m unittest test.python.e2e.test_paper_validation test.python.e2e.test_vllm_kv_connector_example test.python.e2e.test_vllm_kv_connector_sweep test.python.e2e.test_vllm_kv_connector`
-- `python -m py_compile benchmarks\\paper_validation.py examples\\vllm_turbobus_kv_connector.py test\\python\\e2e\\test_paper_validation.py test\\python\\e2e\\test_vllm_kv_connector.py turbobus\\adapters\\vllm_kv_connector.py`
+- Phase 5 is complete in code and local non-GPU validation, but the single-job
+  and multi-job vLLM KV paper-validation commands still need to be exercised on
+  a CUDA server with vLLM installed and a TurboBus daemon running.
+- Phase 6 has not started beyond being selected as the next active phase.
 
 ## Upcoming Phases
 
@@ -454,6 +485,6 @@ After Phase 0, proceed in order:
 2. Privileged daemon control plane. Complete.
 3. Cross-job dynamic scheduling. Complete.
 4. Daemon-plan data plane. Complete.
-5. vLLM KV end-to-end workload. Current.
-6. Model loading and training offload.
+5. vLLM KV end-to-end workload. Complete.
+6. Model loading and training offload. Current.
 7. Paper evaluation and hardening.

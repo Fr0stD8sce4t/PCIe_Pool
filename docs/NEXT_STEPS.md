@@ -12,7 +12,7 @@ new architecture rather than preserve application-side route selection.
 
 ## Immediate Functional Target
 
-Begin Phase 5: vLLM KV End-To-End Workload.
+Begin Phase 6: Model Loading And Training Offload.
 
 Phase 0 is complete. The public examples and benchmarks now use daemon-first
 client APIs, and the old Runtime-shaped benchmark/example entry points have
@@ -25,18 +25,19 @@ with path capabilities, and fails production startup clearly when discovery
 cannot satisfy policy.
 
 Phase 2 daemon-owned resource authority, Phase 3 cross-job dynamic scheduling,
-and Phase 4 daemon-plan data plane are complete. The next target is Phase 5
-vLLM KV end-to-end workload:
+Phase 4 daemon-plan data plane, and Phase 5 vLLM KV end-to-end workload are
+complete. The next target is Phase 6 model loading and training offload:
 
-1. Convert vLLM KV save and restore into `TransferIntent`.
-2. Restore prefix KV blocks through daemon scheduling.
-3. Record daemon decision, topology snapshot, receipt, bytes, path split, and
-   timing.
-4. Test single-job and multi-job vLLM scenarios.
+1. Convert model weight bucket loading into `TransferIntent`.
+2. Convert training or optimizer state offload into `TransferIntent` for H2D
+   and D2H directions.
+3. Include workload kind in scheduler policy.
+4. Unify correctness and performance reporting across vLLM KV, model loading,
+   and training offload.
 
 ## Current
 
-Phase 5: vLLM KV End-To-End Workload.
+Phase 6: Model Loading And Training Offload.
 
 Phase 3 is complete. The daemon now keeps cross-job queue state, runtime
 resource state, weighted scheduling inputs, relay admission state, delayed
@@ -45,8 +46,15 @@ applications or adapters physical path control.
 
 Phase 4 is complete. Exact daemon-issued plans are now the only production
 data-plane input; the old importable Python Runtime path and native extension
-local-planning bindings are gone. Current item: Phase 5 Cut 3, multi-job vLLM
-KV trace and fairness validation.
+local-planning bindings are gone.
+
+Phase 5 is complete. vLLM KV save and restore now use the daemon-first
+`TransferIntent` and `TransferReceipt` path, and paper validation covers both
+single-job and concurrent multi-job trace output without application-side
+physical path selection.
+
+Current item: Phase 6 Cut 1, model-loading and training-offload adapter
+inventory and workload boundary audit.
 
 ### Phase 3 Cut 1
 
@@ -231,9 +239,9 @@ python -m turbobus.verification --direction h2d --mode relay --target-gpu 0 --re
 python -m turbobus.verification --direction d2h --mode pool --target-gpu 0 --relay-gpu 1 --bytes 16777216 --chunk-bytes 4194304 --src-offset 8192 --dst-offset 4096 --source-buffer-bytes 16785408 --destination-buffer-bytes 16781312
 ```
 
-## Phase 5 Current Work
+## Phase 5 Completed Work
 
-Current item: Phase 5 Cut 3, multi-job vLLM KV trace and fairness validation.
+Phase 5 is complete.
 
 Cut 1: vLLM KV workload boundary and adapter inventory.
 
@@ -295,24 +303,58 @@ python benchmarks/paper_validation.py --workloads vllm-kv --session-id vllm-kv-p
 
 Cut 3: multi-job vLLM KV trace and fairness validation.
 
-Status: current.
+Status: complete.
 
-- Add a validation path that runs at least two concurrent vLLM KV save/restore
-  jobs through the daemon-first connector path.
-- Use distinct job ids, session ids, and registered buffer ids so daemon
-  ownership and cross-job scheduling state are exercised.
-- Require each job output to include save and restore receipt ids, decision
-  ids, topology snapshot ids, ticket ids, bytes, path split, fallback reason,
-  timing, and job/session identity.
-- Confirm daemon profile or paper-validation output exposes enough trace data
-  to audit cross-job fairness without any application-side physical path
-  selection.
+Completed output:
 
-Expected output:
+- added `--vllm-job-count` to paper validation so one validation run can launch
+  at least two concurrent vLLM KV save/restore jobs through
+  `examples/vllm_turbobus_kv_connector.py`;
+- each concurrent job receives distinct job id, session id, registered CPU
+  buffer id, registered GPU buffer id, prefix key, and log path;
+- paper validation aggregates per-job daemon traces into the vLLM KV JSON
+  output and summary metrics, including job/session/buffer identity, save and
+  restore receipt ids, decision ids, topology snapshot ids, ticket ids, bytes,
+  direct/relay path split, fallback reason, timing, and log path;
+- validation fails when any job is missing lifecycle events or per-job daemon
+  trace fields;
+- all vLLM KV commands remain daemon-first and contain no target GPU, relay GPU,
+  mode, or direct/relay/pool physical path controls.
 
 - single-job vLLM KV validation remains runnable through paper validation;
 - multi-job vLLM KV validation produces per-job daemon traces and path split;
 - no Phase 5 code reintroduces application-side physical path selection.
+
+Multi-job server command:
+
+```text
+python benchmarks/paper_validation.py --workloads vllm-kv --session-id vllm-kv-paper --job-id vllm-kv-paper --cpu-buffer-id vllm-kv-cpu-buffer --gpu-buffer-id vllm-kv-gpu-buffer --daemon-socket-path /tmp/turbobusd.sock --vllm-model <vllm-compatible-model> --vllm-job-count 2 --vllm-restore-blocks 8 --vllm-matched-tokens 128 --vllm-prompt-repeat 64 --vllm-enforce-eager --output-dir benchmarks/results/paper_validation_vllm_kv_multi_job --json-output benchmarks/results/paper_validation_vllm_kv_multi_job/result.json --summary-output benchmarks/results/paper_validation_vllm_kv_multi_job/summary.txt
+```
+
+## Phase 6 Current Work
+
+Current item: Phase 6 Cut 1, model-loading and training-offload adapter
+inventory and workload boundary audit.
+
+Status: current.
+
+- Inspect model-loading and training-offload adapters, benchmark code, public
+  client calls, scheduler workload-kind policy inputs, and existing tests.
+- Remove or rewrite any remaining benchmark-only behavior that still shapes the
+  core design instead of submitting `TransferIntent` through public APIs.
+- Confirm model loading and training offload carry workload kind, job/session
+  identity, buffer identity, receipt trace, bytes, timing, path split, and
+  fallback reason without application-side physical path selection.
+- Split Phase 6 into complete, verifiable cuts before changing behavior if the
+  audit finds multiple independent gaps.
+
+Expected output:
+
+- a Phase 6 inventory or first implementation cut that is tied to real model
+  loading and training offload code paths;
+- adapters and benchmarks remain on `TransferIntent` and `TransferReceipt`;
+- no Phase 6 code introduces direct, relay, or pooled path selection outside
+  daemon scheduling.
 
 ## Phase 0 Code Cuts
 
@@ -815,6 +857,6 @@ Proceed in this order:
 2. Privileged daemon control plane. Complete.
 3. Cross-job dynamic scheduling. Complete.
 4. Daemon-plan data plane. Complete.
-5. vLLM KV end-to-end workload. Current.
-6. Model loading and training offload.
+5. vLLM KV end-to-end workload. Complete.
+6. Model loading and training offload. Current.
 7. Paper evaluation and hardening.

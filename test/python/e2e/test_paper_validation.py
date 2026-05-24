@@ -49,6 +49,7 @@ def make_args(**overrides):
         "vllm_prefix_key": "paper-validation-vllm-kv",
         "vllm_restore_blocks": 8,
         "vllm_matched_tokens": 128,
+        "vllm_job_count": 1,
         "vllm_wait_timeout_seconds": None,
         "vllm_enforce_eager": False,
         "vllm_enable_multiproc_executor": False,
@@ -97,6 +98,31 @@ class PaperValidationTest(unittest.TestCase):
         self.assertTrue(forbidden.isdisjoint(model))
         self.assertTrue(forbidden.isdisjoint(training))
         self.assertTrue(forbidden.isdisjoint(vllm))
+
+    def test_build_multi_job_vllm_commands_use_distinct_identity_without_physical_paths(self) -> None:
+        args = make_args(vllm_job_count=2)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = paper_validation.output_paths(Path(tmpdir), "vllm-kv")
+            commands = paper_validation.build_vllm_kv_commands(args, paths)
+
+        self.assertEqual(len(commands), 2)
+        job_ids = {value_after(command, "--job-id") for command in commands}
+        session_ids = {value_after(command, "--session-id") for command in commands}
+        cpu_buffer_ids = {value_after(command, "--cpu-buffer-id") for command in commands}
+        gpu_buffer_ids = {value_after(command, "--gpu-buffer-id") for command in commands}
+        prefix_keys = {value_after(command, "--prefix-key") for command in commands}
+        log_outputs = {value_after(command, "--log-output") for command in commands}
+
+        self.assertEqual(job_ids, {"job-1-job1", "job-1-job2"})
+        self.assertEqual(session_ids, {"session-1-job1", "session-1-job2"})
+        self.assertEqual(cpu_buffer_ids, {"cpu-buffer-job1", "cpu-buffer-job2"})
+        self.assertEqual(gpu_buffer_ids, {"gpu-buffer-job1", "gpu-buffer-job2"})
+        self.assertEqual(prefix_keys, {"paper-validation-vllm-kv-job1", "paper-validation-vllm-kv-job2"})
+        self.assertEqual(len(log_outputs), 2)
+
+        forbidden = {"--target-gpu", "--relay-gpus", "--mode", "--modes", "--min-pool-bytes"}
+        for command in commands:
+            self.assertTrue(forbidden.isdisjoint(command))
 
     def test_collect_model_and_training_metrics_from_daemon_receipts(self) -> None:
         model = {
@@ -174,6 +200,7 @@ class PaperValidationTest(unittest.TestCase):
             "vllm_kv_connector_config": {"model": "model"},
             "vllm_kv_connector_save": {
                 "elapsed_ms": "10.0",
+                "transfer_ms": "8.0",
                 "bytes": "64",
                 "direct_chunks": "1",
                 "relay_chunks": "1",
@@ -183,6 +210,7 @@ class PaperValidationTest(unittest.TestCase):
                 "decision_ids": "save-d",
                 "topology_snapshot_ids": "save-t",
                 "ticket_ids": "save-ticket",
+                "fallback_reason": "",
                 "save_layer_count": "2",
                 "save_layer_ranges": "4",
             },
@@ -371,6 +399,104 @@ class PaperValidationTest(unittest.TestCase):
         self.assertIn("paper_metric workload=vllm-kv", summary)
         self.assertIn("save_decision_ids=save-d", summary)
 
+    def test_run_validation_collects_multi_job_vllm_kv_logs_and_writes_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = make_args(output_dir=tmpdir, workloads="vllm-kv", vllm_job_count=2)
+            run_calls = []
+
+            def fake_run(commands):
+                run_calls.append(commands)
+                for index, command in enumerate(commands):
+                    log_path = Path(command[command.index("--log-output") + 1])
+                    job_id = command[command.index("--job-id") + 1]
+                    session_id = command[command.index("--session-id") + 1]
+                    cpu_buffer_id = command[command.index("--cpu-buffer-id") + 1]
+                    gpu_buffer_id = command[command.index("--gpu-buffer-id") + 1]
+                    log_path.write_text(
+                        vllm_log_text(
+                            job_id=job_id,
+                            session_id=session_id,
+                            cpu_buffer_id=cpu_buffer_id,
+                            gpu_buffer_id=gpu_buffer_id,
+                            save_decision_id=f"save-d-{index}",
+                            restore_decision_id=f"restore-d-{index}",
+                            restore_ticket_id=f"restore-ticket-{index}",
+                        ),
+                        encoding="utf-8",
+                    )
+                return [
+                    paper_validation.subprocess.CompletedProcess(command, 0, "", "")
+                    for command in commands
+                ]
+
+            with mock.patch.object(paper_validation, "run_commands_concurrent", side_effect=fake_run):
+                result = paper_validation.run_validation(args)
+                output_path = Path(result["workloads"][0]["data_path"])
+                output_data = json.loads(output_path.read_text(encoding="utf-8"))
+
+        workload = result["workloads"][0]
+        self.assertEqual(workload["status"], "ok")
+        self.assertEqual(len(run_calls), 1)
+        self.assertEqual(len(run_calls[0]), 2)
+        self.assertEqual(len(workload["metrics"]), 2)
+        self.assertEqual(
+            {metric["job_id"] for metric in workload["metrics"]},
+            {"job-1-job1", "job-1-job2"},
+        )
+        self.assertEqual(
+            {metric["session_id"] for metric in workload["metrics"]},
+            {"session-1-job1", "session-1-job2"},
+        )
+        self.assertEqual(
+            {metric["cpu_buffer_id"] for metric in workload["metrics"]},
+            {"cpu-buffer-job1", "cpu-buffer-job2"},
+        )
+        self.assertEqual(
+            {metric["gpu_buffer_id"] for metric in workload["metrics"]},
+            {"gpu-buffer-job1", "gpu-buffer-job2"},
+        )
+        self.assertEqual(output_data["vllm_kv_multi_job"]["job_count"], 2)
+        self.assertEqual(len(output_data["jobs"]), 2)
+        summary = paper_validation.compact_summary(result)
+        self.assertIn("job_id=job-1-job1", summary)
+        self.assertIn("job_id=job-1-job2", summary)
+        self.assertIn("decision_ids=restore-d-0", summary)
+        self.assertIn("decision_ids=restore-d-1", summary)
+
+    def test_multi_job_vllm_kv_validation_fails_on_missing_per_job_trace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = make_args(output_dir=tmpdir, workloads="vllm-kv", vllm_job_count=2)
+
+            def fake_run(commands):
+                for index, command in enumerate(commands):
+                    log_path = Path(command[command.index("--log-output") + 1])
+                    job_id = command[command.index("--job-id") + 1]
+                    session_id = command[command.index("--session-id") + 1]
+                    cpu_buffer_id = command[command.index("--cpu-buffer-id") + 1]
+                    gpu_buffer_id = command[command.index("--gpu-buffer-id") + 1]
+                    decision_id = "" if index == 1 else f"restore-d-{index}"
+                    log_path.write_text(
+                        vllm_log_text(
+                            job_id=job_id,
+                            session_id=session_id,
+                            cpu_buffer_id=cpu_buffer_id,
+                            gpu_buffer_id=gpu_buffer_id,
+                            restore_decision_id=decision_id,
+                        ),
+                        encoding="utf-8",
+                    )
+                return [
+                    paper_validation.subprocess.CompletedProcess(command, 0, "", "")
+                    for command in commands
+                ]
+
+            with mock.patch.object(paper_validation, "run_commands_concurrent", side_effect=fake_run):
+                result = paper_validation.run_validation(args)
+
+        workload = result["workloads"][0]
+        self.assertEqual(workload["status"], "missing-metrics")
+        self.assertIn("missing_daemon_trace", workload["validation_errors"])
+
     def test_keep_going_continues_after_missing_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             args = make_args(
@@ -440,20 +566,33 @@ if __name__ == "__main__":
     unittest.main()
 
 
-def vllm_log_text() -> str:
+def value_after(command: list[str], option: str) -> str:
+    return command[command.index(option) + 1]
+
+
+def vllm_log_text(
+    *,
+    job_id: str = "job-1",
+    session_id: str = "session-1",
+    cpu_buffer_id: str = "cpu-buffer",
+    gpu_buffer_id: str = "gpu-buffer",
+    save_decision_id: str = "save-d",
+    restore_decision_id: str = "restore-d",
+    restore_ticket_id: str = "restore-ticket",
+) -> str:
     return "\n".join(
         [
             "turbobus_kv_connector_event event=register_kv_caches layers=2",
             "turbobus_kv_connector_event event=save_layer request_id=req0 prefix_key=prefix receipt_ids=save-layer-r decision_ids=save-layer-d topology_snapshot_ids=save-layer-t ticket_ids=save-layer-ticket bytes=64 direct_bytes=32 relay_bytes=32 elapsed_ms=5 transfer_ms=5",
             "turbobus_kv_connector_event event=wait_for_save_done requests=1",
-            "turbobus_kv_connector_event event=save request_id=req0 prefix_key=prefix receipt_ids=save-r decision_ids=save-d topology_snapshot_ids=save-t ticket_ids=save-ticket bytes=64 direct_bytes=32 relay_bytes=32 direct_chunks=1 relay_chunks=1 elapsed_ms=10 transfer_ms=8 total_ms=12 save_layer_count=2 save_layer_ranges=4",
-            "turbobus_kv_connector_event event=restore request_id=req1 prefix_key=prefix receipt_ids=restore-r decision_ids=restore-d topology_snapshot_ids=restore-t ticket_ids=restore-ticket bytes=128 direct_bytes=96 relay_bytes=32 direct_chunks=2 relay_chunks=1 elapsed_ms=20 transfer_ms=16 total_ms=22 layers=2 ranges=4 fallback_reason=quota",
+            f"turbobus_kv_connector_event event=save request_id=req0 prefix_key=prefix receipt_ids=save-r decision_ids={save_decision_id} topology_snapshot_ids=save-t ticket_ids=save-ticket bytes=64 direct_bytes=32 relay_bytes=32 direct_chunks=1 relay_chunks=1 elapsed_ms=10 transfer_ms=8 total_ms=12 save_layer_count=2 save_layer_ranges=4",
+            f"turbobus_kv_connector_event event=restore request_id=req1 prefix_key=prefix receipt_ids=restore-r decision_ids={restore_decision_id} topology_snapshot_ids=restore-t ticket_ids={restore_ticket_id} bytes=128 direct_bytes=96 relay_bytes=32 direct_chunks=2 relay_chunks=1 elapsed_ms=20 transfer_ms=16 total_ms=22 layers=2 ranges=4 fallback_reason=quota",
             "turbobus_kv_connector_event event=start_load_done requests=1 restore_enabled=True elapsed_ms=21",
             "COPY_SUMMARY_BEGIN",
-            "vllm_kv_connector_config model=model job_id=job-1 session_id=session-1 cpu_buffer_id=cpu-buffer gpu_buffer_id=gpu-buffer",
+            f"vllm_kv_connector_config model=model job_id={job_id} session_id={session_id} cpu_buffer_id={cpu_buffer_id} gpu_buffer_id={gpu_buffer_id}",
             "vllm_kv_connector_scenario type=real_vllm_kv_transfer_connector boundary=KVConnectorBase_V1 entry=start_load_kv",
-            "vllm_kv_connector_save source_request=req0 source_blocks=8 blocks=8 bytes=64 elapsed_ms=10.0 transfer_ms=8.0 direct_chunks=1 relay_chunks=1 direct_bytes=32 relay_bytes=32 receipt_ids=save-r decision_ids=save-d topology_snapshot_ids=save-t ticket_ids=save-ticket save_layer_count=2 save_layer_ranges=4",
-            "vllm_kv_connector_restore request_id=req1 prefix_key=prefix bytes=128 elapsed_ms=20.0 transfer_ms=16.0 total_ms=22.0 layers=2 ranges=4 direct_chunks=2 relay_chunks=1 direct_bytes=96 relay_bytes=32 receipt_ids=restore-r decision_ids=restore-d topology_snapshot_ids=restore-t ticket_ids=restore-ticket fallback_reason=quota",
+            f"vllm_kv_connector_save source_request=req0 source_blocks=8 blocks=8 bytes=64 elapsed_ms=10.0 transfer_ms=8.0 direct_chunks=1 relay_chunks=1 direct_bytes=32 relay_bytes=32 receipt_ids=save-r decision_ids={save_decision_id} topology_snapshot_ids=save-t ticket_ids=save-ticket fallback_reason= save_layer_count=2 save_layer_ranges=4",
+            f"vllm_kv_connector_restore request_id=req1 prefix_key=prefix bytes=128 elapsed_ms=20.0 transfer_ms=16.0 total_ms=22.0 layers=2 ranges=4 direct_chunks=2 relay_chunks=1 direct_bytes=96 relay_bytes=32 receipt_ids=restore-r decision_ids={restore_decision_id} topology_snapshot_ids=restore-t ticket_ids={restore_ticket_id} fallback_reason=quota",
             "vllm_kv_connector_result source_request=req0 source_blocks=8 shared_prefix=True prompt_tokens=256",
             "COPY_SUMMARY_END",
         ]
