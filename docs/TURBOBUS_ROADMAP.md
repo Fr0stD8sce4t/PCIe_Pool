@@ -1,88 +1,141 @@
 # TurboBus Roadmap
 
-This roadmap follows a rewrite-first approach.
+This roadmap is the active implementation sequence for the paper-parity
+reproduction.
 
-## Phase 0: Architecture Reset
+## Phase 0: Paper-Parity Realignment
 
-- Define the system as client, daemon, worker, backend, planner, and adapter
-  layers.
-- Remove prototype assumptions from the public design.
-- Lock the first implementation target to a daemon-managed transfer system.
+- Define shared contracts: JobIdentity, BufferHandle, TransferIntent,
+  TopologySnapshot, SchedulingDecision, ExecutionTicket, and TransferReceipt.
+- Route public transfer calls through daemon scheduling.
+- Make scheduler decisions the only production transfer plans.
+- Make worker execution require ExecutionTicket validation.
+- Move synthetic topology into explicit test fixtures.
+- Reorganize tests into unit, integration, e2e, and fixtures.
+- Rewrite benchmarks and examples to use the public client API.
+- Thin adapters so they submit intent and consume receipts.
 
-## Phase 1: Protocol And Types
+Exit criteria:
 
-- Define daemon/client/worker messages.
-- Define backend-neutral transfer objects.
-- Define job, buffer, lease, path, chunk, and stats types.
-- Stop once the first real data path has the metadata it needs.
+- main transfer calls require daemon scheduling;
+- default tests protect daemon-first contracts;
+- benchmarks and examples report daemon decisions and receipts;
+- `python -m compileall` and non-GPU tests pass.
 
-## Phase 2: Planner And Backend Baseline
+## Phase 1: Automatic Topology Discovery
 
-- Implement a backend-neutral planner.
-- Implement a CUDA backend on top of the new interfaces.
-- Reproduce direct, relay, and pooled behavior on the new types.
-- Keep scheduling policy out of backend execution code.
+- Implement daemon-owned topology providers.
+- Discover GPU id, UUID, PCI bus id, NUMA node, memory size, and visibility.
+- Discover PCIe hierarchy, link generation, link width, negotiated speed, and
+  estimated bandwidth.
+- Discover CUDA P2P reachability and NVLink or NVSwitch information where
+  available.
+- Add topology snapshot ids, versioning, and invalidation.
 
-## Phase 3: Privileged Daemon
+Exit criteria:
 
-- Discover topology and fabric links.
-- Track jobs and sessions.
-- Track relay ownership and relay quota.
-- Issue relay leases.
-- Reclaim stale resources.
+- daemon can discover relay candidates for a target GPU;
+- daemon reports filtered candidates and reasons;
+- production startup fails clearly when topology discovery cannot satisfy the
+  configured policy.
 
-## Phase 4: Remove Non-Functional Scaffold
+## Phase 2: Privileged Daemon Control Plane
 
-- Remove smoke-only helpers and tests that do not exercise real data movement.
-- Remove endpoint observability/event-history code that is not needed for the
-  first working transfer path.
-- Remove extra socket/transport wrappers that only preserve unsupported
-  lifecycle behavior.
-- Keep the smallest daemon/client/worker surface needed for plans, leases,
-  worker authorization, execution, completion, cleanup, and direct fallback.
+- Add Unix socket peer credential checks.
+- Bind user, process, container, job, and session identity.
+- Register buffers with ownership checks.
+- Manage shared CPU buffer and CUDA IPC or HIP IPC handle lifecycle.
+- Track transfer states: submitted, running, complete, failed, canceled.
+- Reclaim leases, reservations, and staging resources after failure or timeout.
+- Emit audit records for transfer ownership and resource use.
 
-## Phase 5: Whole-System CUDA Data Path
+Exit criteria:
 
-- Execute exact daemon-issued chunk plans.
-- Register real client buffers with daemon-approved handles.
-- Implement the first shared pinned CPU buffer strategy.
-- Move bytes through direct, relay, and pooled CUDA paths from a daemon plan.
-- Keep the first cut narrow if needed: one relay, H2D, static topology.
+- jobs cannot access each other's buffers;
+- invalid tickets, buffers, leases, or sessions are rejected;
+- stale sessions and failed workers are cleaned up.
 
-## Phase 6: Worker Execution And Isolation
+## Phase 3: Cross-Job Dynamic Scheduling
 
-- Add worker or helper processes for safe relay execution.
-- Use IPC or equivalent handles for cross-process buffer access.
-- Enforce job boundaries and lease checks.
-- Prevent relay reuse across unauthorized jobs.
+- Add a global daemon transfer queue.
+- Track active H2D, D2H, P2P, staging, and transfer state.
+- Schedule from topology, measured bandwidth, current load, request size,
+  workload kind, job weight, and fairness policy.
+- Implement weighted fair sharing across jobs.
+- Add admission control, delayed lease grants, plan expiration, and rescheduling.
+- Keep direct fallback available as a scheduler outcome.
 
-## Phase 7: Framework Adapters
+Exit criteria:
 
-- vLLM KV prefix save/restore.
-- model-loading bucket transfer.
-- training offload bucket transfer.
+- jobs can use idle PCIe bandwidth from eligible relay devices without naming
+  those devices;
+- busy resources are avoided by new decisions;
+- concurrent jobs receive explainable and fair decisions.
 
-## Phase 8: ROCm Support
+## Phase 4: Daemon-Plan Data Plane
 
-- Add a ROCm backend.
-- Discover AMD peer and fabric capabilities.
-- Reuse the same planner and daemon protocol.
+- Use exact daemon-issued plans as data-plane input.
+- Keep `fetch_plan_to_gpu` and `offload_plan_to_cpu` as backend primitives.
+- Extend worker-managed execution to multiple relay paths.
+- Track staging buffers through daemon or worker lifecycle.
+- Share ticket and receipt semantics across H2D, D2H, and range transfers.
+- Add correctness tests for direct, relay, pooled, and failure paths.
 
-## Phase 9: Evaluation
+Exit criteria:
 
-- single-job benchmarks;
-- multi-job contention benchmarks;
-- fairness and isolation checks;
-- framework latency and throughput evaluation;
-- direct vs relay vs pool comparisons.
+- application code does not decide transfer paths;
+- workers complete daemon-ticketed direct and pooled transfers;
+- repeated submission, lease expiration, and partial failure are deterministic.
 
-## Exit Criteria
+## Phase 5: vLLM KV End-To-End Workload
 
-TurboBus is considered on track only when the new system can:
+- Convert vLLM KV save and restore into TransferIntent.
+- Restore prefix KV blocks through daemon scheduling.
+- Record daemon decision, topology snapshot, receipt, bytes, path split, and
+  timing.
+- Test single-job and multi-job vLLM scenarios.
 
-- accept daemon-approved transfer requests;
-- move real bytes through a daemon-issued direct, relay, or pooled plan;
+Exit criteria:
+
+- real vLLM requests save and restore KV cache through the daemon-first path;
+- performance and path split are traceable through daemon and data-plane stats.
+
+## Phase 6: Model Loading And Training Offload
+
+- Convert model weight loading into TransferIntent.
+- Convert training or optimizer state offload into TransferIntent.
+- Include workload kind in scheduler policy.
+- Unify correctness and performance reporting across workloads.
+
+Exit criteria:
+
+- vLLM KV, model loading, and training offload share the same public API;
+- adapters carry framework mapping logic only.
+
+## Phase 7: Paper Evaluation And Hardening
+
+- Run experiments on 2, 4, and 8 GPU systems when available.
+- Compare baseline policy and daemon-scheduled TurboBus.
+- Measure single-job, multi-job, fairness, contention, and interference cases.
+- Report p50 and p99 latency, throughput, PCIe utilization, relay impact,
+  bytes moved, path split, failure recovery, and isolation.
+- Make experiment output auditable from workload request to receipt.
+
+Exit criteria:
+
+- evaluation uses formal public APIs;
+- results include daemon decisions, topology snapshots, execution tickets, and
+  data-plane stats;
+- the system supports at least one real LLM framework path end to end.
+
+## Global Exit Criteria
+
+TurboBus is on track when it can:
+
+- accept daemon-scheduled transfer intent;
+- discover machine topology automatically;
 - schedule relay use across jobs;
-- keep clients out of unauthorized relay control;
-- support at least one real LLM framework path end to end;
-- report clear metrics for both performance and isolation.
+- keep clients outside physical path control;
+- execute exact daemon-issued plans;
+- support vLLM KV cache save/restore end to end;
+- report performance and isolation metrics with full traceability.

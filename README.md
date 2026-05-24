@@ -16,15 +16,12 @@ The target system is centered on:
 
 - `cpp/`: native transfer engine, profiler, planner, and pybind module.
 - `turbobus/`: Python client API, daemon control plane, and framework adapters.
-- `docs/`: rewrite plan, roadmap, and implementation notes.
+- `docs/`: active next steps, roadmap, and progress notes.
 - `benchmarks/`: workload and evaluation scripts.
 - `test/`: Python and native tests.
 
 ## Current Direction
 
-The near-term work is to define the new daemon/client/worker protocol, then
-rebuild the planner, backend, and framework integration layers on top of it.
-
-The first complete target is a daemon-managed transfer system that can be used
-by real LLM workloads without requiring the client process to own the relay
-GPU directly.
+The active direction is the paper-parity plan in `AGENTS.md` and `docs/`.
+Start with Phase 0, which realigns core code, tests, benchmarks, examples,
+exports, and adapters around daemon-first scheduling.

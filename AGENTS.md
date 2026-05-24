@@ -1,217 +1,352 @@
 # TurboBus Agent Instructions
 
-TurboBus should be treated as a paper-reproduction system project.
-
-The target paper system is:
+TurboBus is a paper-reproduction system project for:
 
 TurboBus: Pooling PCIe Bandwidth for LLM Workloads via Scale-Up Fabrics.
 
-The system goal is to pool otherwise idle PCIe bandwidth in a multi-GPU server
-for large-model memory movement. When a target GPU needs data from CPU memory,
-TurboBus should support both:
+The target system pools idle PCIe bandwidth in a multi-GPU server for large
+model memory movement. Applications submit transfer intent. A privileged
+per-node daemon discovers machine topology, schedules cross-job transfers,
+issues execution tickets, and records completion. Workers and backend data
+planes execute exact daemon-issued plans.
 
-- direct path: CPU pinned memory -> target GPU;
-- relay path: CPU pinned memory -> relay GPU -> target GPU.
+## Active Direction
 
-The relay path uses the relay GPU's PCIe link for the CPU-to-relay stage, then
-uses a scale-up GPU-GPU fabric such as NVLink, NVSwitch, or Infinity Fabric for
-the relay-to-target stage.
+Build directly toward paper parity.
 
-## Project Direction
+The active architecture is:
 
-The next architecture should be designed around a privileged per-node daemon,
-cross-job resource discovery and scheduling, application isolation, real shared
-relay PCIe use, scale-up fabric backends, full LLM framework integration, and
-multi-tenant evaluation.
+- application adapters submit TransferIntent objects;
+- daemon-owned topology discovery produces TopologySnapshot objects;
+- daemon scheduler produces SchedulingDecision objects;
+- daemon control plane issues ExecutionTicket objects and leases;
+- worker or data-plane backend executes the exact ticketed plan;
+- TransferReceipt objects report correctness, bytes, timing, path split, and
+  failure state;
+- real LLM workloads validate the system end to end.
 
-Prefer rewriting major components when the existing code assumes a single
-process owns both target and relay GPUs.
+Every code change should move the project closer to daemon-controlled,
+topology-aware, cross-job execution.
 
-Do not preserve old module boundaries just because they already exist.
+## System Contract
 
-## Current Implementation Priority
+The production path must satisfy these contracts:
 
-The next phase must prioritize whole-system functionality over additional
-control-plane polish. Do not spend the next code cuts on standalone protocol
-expansion, socket wrappers, observability, smoke tests, or test-only
-infrastructure unless they directly unblock real data movement.
+- Applications describe what data must move, not which physical route to use.
+- The daemon is the production scheduling authority.
+- The scheduler is the only component that creates production transfer plans.
+- Topology is discovered by daemon-owned providers.
+- Synthetic topology is used only by explicit tests and fixtures.
+- Workers execute only daemon-issued ExecutionTickets.
+- Direct, relay, and pooled paths are scheduling outcomes.
+- Adapters depend on the public client API and shared schema objects.
+- Benchmarks and examples call the public client API.
 
-The immediate target is an end-to-end daemon-managed transfer:
+## Core Objects
 
-1. the client registers a job and real buffers;
-2. the daemon issues an exact chunk-level transfer plan and relay lease;
-3. a worker/helper validates the lease and owns relay staging buffers;
-4. the worker/helper performs real direct, relay, or pooled CUDA movement;
-5. the daemon records completion and releases relay resources.
+Use these shared objects across the control plane, scheduler, data plane,
+adapters, tests, and experiments:
 
-The first functional slice may be narrow: one node, one target GPU, one relay
-GPU, H2D only, CUDA only, static topology, and a simple shared pinned CPU buffer
-scheme. It must still move real bytes through the daemon-approved path.
+- JobIdentity: user, job, process, container, and session identity.
+- BufferHandle: registered CPU or GPU buffer owned by a job.
+- TransferIntent: requested movement, direction, byte ranges, workload kind,
+  priority, and policy hints.
+- TopologySnapshot: daemon-discovered GPU, PCIe, NUMA, and fabric state.
+- SchedulingDecision: daemon-selected chunk-level plan and fallback reason.
+- ExecutionTicket: daemon authorization for a worker or backend to execute one
+  exact plan.
+- TransferReceipt: completion state, bytes, timing, path split, and errors.
 
-Before starting that slice, do one cleanup pass that removes code whose only
-purpose is to keep building the old unsupported control-plane scaffold:
-standalone smoke helpers, endpoint observability plumbing, excess socket
-wrappers, and protocol fields that are not needed by daemon-issued real
-transfer execution. Keep only the minimum daemon/client/worker interfaces
-needed to authorize, execute, complete, and clean up a real transfer.
+Tests may construct invalid variants of these objects only when the purpose is
+to validate rejection behavior.
 
-Do not delete core pieces that the functional path needs: job and buffer
-registration, transfer requests, daemon-issued plans, lease validation, worker
-authorization, staging ownership, cleanup on failure, and direct fallback.
-
-## New Architecture
+## Architecture Layers
 
 Build TurboBus around these layers:
 
 1. Client API.
-   - Own user-facing transfer requests.
+   - Own user-facing transfer intent.
    - Register CPU pinned buffers and target GPU buffers.
-   - Submit transfer requests to the daemon.
-   - Wait for transfer completion and expose stats.
-   - Do not choose unauthorized relay GPUs locally.
+   - Submit transfer intent to the daemon.
+   - Wait for transfer receipts and expose stats.
 
 2. Privileged daemon.
    - Own global machine state.
    - Discover GPUs, PCIe topology, NUMA topology, and scale-up fabric links.
-   - Track jobs, sessions, users, containers, and relay permissions.
+   - Track jobs, sessions, users, containers, buffers, leases, and transfers.
    - Measure and cache path profiles.
    - Observe current PCIe and fabric utilization.
    - Schedule direct and relay paths across jobs.
-   - Issue relay leases and enforce quotas.
-   - Reclaim resources after failures or timeout.
+   - Issue execution tickets and relay leases.
+   - Reclaim resources after failure, timeout, or client exit.
 
-3. Worker or helper process.
-   - Own privileged data movement when relay GPUs are not visible to clients.
-   - Hold relay GPU access.
-   - Manage relay staging buffers.
-   - Use CUDA IPC, HIP IPC, or equivalent handles where required.
-   - Execute daemon-approved transfer plans.
+3. Scheduler.
+   - Convert topology, load, policy, and TransferIntent into a chunk-level
+     SchedulingDecision.
+   - Account for link bandwidth, fabric bandwidth, relay quotas, fairness,
+     request size, workload kind, and fallback rules.
+   - Explain every scheduling decision in machine-readable output.
 
-4. Fabric backend layer.
-   - Provide a common backend interface for CUDA/NVIDIA and ROCm/AMD.
-   - CUDA backend should cover PCIe, P2P, NVLink, and NVSwitch through CUDA
-     runtime/NVML where available.
-   - ROCm backend should cover HIP and Infinity Fabric through ROCm SMI or
-     equivalent APIs.
-   - Planner code must consume generic path capabilities, not CUDA-specific
-     objects.
+4. Worker or helper process.
+   - Own privileged data movement when the client cannot access all required
+     devices.
+   - Validate ExecutionTickets before touching buffers.
+   - Hold relay device access and manage staging buffers.
+   - Use CUDA IPC, HIP IPC, or equivalent safe handles where required.
+   - Report completion through daemon status updates.
 
-5. Planner and scheduler.
-   - Convert daemon resource state and request metadata into a chunk-level plan.
-   - Split work across direct and relay paths.
-   - Account for current load, link bandwidth, fabric bandwidth, relay quotas,
-     job policy, request size, and fallback rules.
+5. Data-plane backend layer.
+   - Execute exact daemon-issued plans.
+   - Provide CUDA/NVIDIA support first.
+   - Add ROCm/AMD support as a separate backend.
+   - Keep framework-specific policy out of native transfer execution.
 
 6. LLM framework adapters.
-   - Keep framework-specific logic outside the native data path.
+   - Convert framework-owned tensors or blocks into TransferIntent.
    - Support vLLM KV cache prefix save/restore first.
-   - Add model weight loading and training state offload adapters.
-   - Later targets may include DeepSpeed/FSDP, TensorRT-LLM, or SGLang.
+   - Add model weight loading and training state offload after the vLLM path.
 
-## Required System Capabilities
+## Phase 0: Paper-Parity Realignment
 
-The reproduction target requires these capabilities:
+Phase 0 is mandatory before broad feature expansion. It realigns main code,
+tests, benchmarks, examples, exports, and adapters around the paper architecture.
 
-- privileged per-node daemon;
-- cross-job idle PCIe discovery;
-- daemon-managed relay leases;
-- full-machine transfer scheduling;
-- application isolation;
-- client operation without direct relay GPU visibility;
-- daemon/helper data path using IPC or equivalent safe handles;
-- direct, relay, and pooled transfer execution;
-- block-level pipelining;
-- fine-grained chunk placement;
-- concurrent multi-request scheduling;
-- NVIDIA CUDA/NVLink/NVSwitch backend;
-- AMD ROCm/Infinity Fabric backend;
-- vLLM KV cache connector that works through the real framework lifecycle;
-- model weight loading workload;
-- training offload workload;
-- multi-tenant benchmark suite.
+### 0.1 Shared Contracts
 
-## Milestones
+- Define or rewrite schema objects for JobIdentity, BufferHandle,
+  TransferIntent, TopologySnapshot, SchedulingDecision, ExecutionTicket, and
+  TransferReceipt.
+- Route the public API through daemon-first transfer intent.
+- Make worker execution require ExecutionTicket.
+- Make synthetic topology an explicit test fixture.
 
-M1: Define the new daemon/client/worker protocol.
+### 0.2 Package Structure
 
-- Specify job registration, buffer registration, transfer request, transfer
-  planning, relay lease, transfer status, and cleanup messages.
-- Add tests for protocol validation.
+Prefer this package layout:
 
-M2: Implement the new planner data model.
+```text
+turbobus/
+  api/
+  control/
+  topology/
+  scheduler/
+  data_plane/
+  adapters/
+```
 
-- Define generic devices, links, path capabilities, chunks, plans, leases, and
-  stats.
-- Support direct-only, relay-only, and pooled plans.
-- Keep CUDA out of planner types.
+Experiments and paper validation code should live outside the core package path
+and call the public API.
 
-M3: Rebuild single-process CUDA execution on the new interfaces.
+### 0.3 Public API And Exports
 
-- Reproduce current direct, relay, and pooled behavior.
-- Use this only as a compatibility baseline.
+- Export the daemon-first API from `turbobus.__init__`.
+- Keep low-level planner and backend objects internal unless they are shared
+  schema objects or test fixtures.
+- Express baseline behavior through scheduler policy and experiment
+  configuration, not through application-side physical path choices.
 
-M4: Add daemon-issued plans with client-side execution.
+### 0.4 Tests
 
-- The daemon chooses relay paths and returns a plan.
-- The backend executes the exact daemon-issued chunk plan; local replanning is
-  only allowed for explicit direct fallback.
-- The client executes only daemon-approved paths during this temporary
-  milestone.
-- This is an intermediate milestone, not the final isolation model.
+Use this structure:
 
-M5: Add daemon/helper execution with CUDA IPC.
+```text
+test/python/
+  unit/
+  integration/
+  e2e/
+  fixtures/
+```
 
-- Client should not need direct visibility of relay GPUs.
-- Worker/helper should own relay staging buffers.
-- Define and implement the first cross-process CPU pinned buffer strategy.
-- Add CUDA IPC or equivalent device-buffer handle exchange for the target GPU.
-- Move real bytes through the worker/helper path before expanding observability
-  or transports.
-- Add ownership checks and lease-token validation.
+Unit tests validate schemas, topology snapshots, scheduler decisions,
+execution tickets, and plan validation. Integration tests validate daemon
+session lifecycle, topology discovery, cross-job scheduling, worker ticket
+execution, and client-daemon API behavior. End-to-end tests cover vLLM KV
+restore, model loading, and training offload through daemon-first APIs.
 
-M6: Add isolation and policy.
+### 0.5 Benchmarks And Examples
 
-- Track job/session/user/container identity.
-- Enforce relay access through leases.
-- Prevent unauthorized buffer or relay access.
-- Reclaim stale sessions and clear or protect reused staging buffers.
+- Benchmarks submit workload intent through the public client API.
+- Experiment configuration may request policy variants, but physical paths are
+  recorded as daemon decisions.
+- Outputs must include daemon decision id, topology snapshot id, execution
+  ticket id, actual path stats, bytes, timing, and fallback reason.
 
-M7: Build full vLLM KV cache integration.
+### 0.6 Adapters
 
-- Save prefixes from real vLLM-owned KV tensors.
-- Restore prefixes through the official vLLM connector lifecycle.
-- Report save/restore timing, bytes, chunks, path split, and fallback reason.
+- Adapters submit TransferIntent and consume TransferReceipt.
+- vLLM, model loading, and training adapters must not contain path selection
+  policy.
+- Framework-specific logic stays outside native transfer execution.
 
-M8: Add model loading and training offload adapters.
+### 0.7 Acceptance Criteria
 
-- Model loading should move CPU-backed weight buckets into GPU memory.
-- Training offload should move parameter or optimizer buckets both directions.
+- Main transfer calls require daemon scheduling.
+- The scheduler is the only source of production transfer plans.
+- Workers reject requests without valid ExecutionTickets.
+- Synthetic topology is available only through explicit fixtures.
+- Default tests protect the daemon-first contract.
+- Benchmarks and examples call public daemon-first APIs.
+- `python -m compileall` and non-GPU tests pass.
 
-M9: Add ROCm/Infinity Fabric backend.
+## Phase 1: Automatic Topology Discovery
 
-- Implement HIP transfer operations.
-- Discover AMD peer/fabric capabilities.
-- Run equivalent direct, relay, and pooled tests.
+Implement daemon-owned topology discovery.
 
-M10: Complete multi-tenant evaluation.
+Required capabilities:
 
-- Measure single-job and multi-job behavior.
-- Measure direct vs relay vs pool.
-- Measure idle-relay benefit and relay contention.
-- Include vLLM KV restore latency, model load time, training step time,
-  throughput, fairness, and isolation tests.
+- GPU device id, UUID, PCI bus id, NUMA node, memory size, and visibility.
+- PCIe root complex, switch hierarchy, link generation, link width, negotiated
+  speed, and estimated bandwidth.
+- CUDA P2P reachability and NVLink or NVSwitch information where available.
+- Topology snapshot versioning and cache invalidation.
+- CUDA/NVML provider as the first production provider.
+- ROCm/HIP provider as a backend-specific later provider.
+
+Acceptance criteria:
+
+- The daemon can discover usable relay candidates from the local machine.
+- Given a target GPU, the daemon reports eligible relays, filtered relays,
+  filtering reasons, and path capabilities.
+- Production startup fails clearly if topology discovery cannot satisfy the
+  configured policy.
+
+## Phase 2: Privileged Daemon Control Plane
+
+Make the daemon the resource authority.
+
+Required capabilities:
+
+- Unix socket peer credential checks.
+- User, process, container, job, and session binding.
+- Buffer registration with ownership checks.
+- Safe lifecycle for shared CPU buffers and CUDA IPC or HIP IPC handles.
+- Transfer state machine: submitted, running, complete, failed, canceled.
+- Lease and reservation cleanup on timeout, socket close, client exit, worker
+  failure, or daemon-detected mismatch.
+- Audit records for relay use, bytes moved, duration, owner, and failure reason.
+
+Acceptance criteria:
+
+- Jobs cannot access each other's buffers.
+- Unauthorized buffer, device, lease, or ticket requests are rejected.
+- Stale sessions and failed workers release reservations and staging resources.
+
+## Phase 3: Cross-Job Dynamic Scheduling
+
+Implement the shared PCIe bandwidth pool.
+
+Required capabilities:
+
+- Global daemon transfer queue.
+- Runtime state for H2D, D2H, P2P, relay staging, and active transfers.
+- Scheduling based on topology, measured bandwidth, current load, request size,
+  workload kind, job weight, and fairness policy.
+- Weighted fair sharing across jobs.
+- Relay admission control and delayed lease grants.
+- Plan expiration and rescheduling when topology, load, or leases change.
+- Direct fallback when relay scheduling is unavailable or not beneficial.
+
+Acceptance criteria:
+
+- A job can borrow idle PCIe bandwidth from eligible devices without naming
+  those devices.
+- New requests avoid busy resources.
+- Concurrent jobs receive fair and explainable scheduling decisions.
+
+## Phase 4: Daemon-Plan Data Plane
+
+Make exact daemon-issued plans the only production data-plane input.
+
+Required capabilities:
+
+- `fetch_plan_to_gpu` and `offload_plan_to_cpu` remain backend execution
+  primitives.
+- Worker-managed execution supports multiple relay paths in one plan.
+- Staging buffers are tracked and cleaned by daemon or worker lifecycle.
+- H2D, D2H, and range transfers share ticket and receipt semantics.
+- Data correctness checks cover direct, relay, pooled, and failure cases.
+
+Acceptance criteria:
+
+- Application code does not decide transfer paths.
+- Workers complete daemon-ticketed direct plus multi-relay pooled transfers.
+- Lease expiration, repeated submission, and partial failure are deterministic.
+
+## Phase 5: vLLM KV End-To-End Workload
+
+Make vLLM KV cache save and restore the first full workload.
+
+Required capabilities:
+
+- vLLM connector submits KV save and restore TransferIntent.
+- Prefix matches restore GPU KV blocks through daemon scheduling.
+- Save and restore record daemon decision, topology snapshot, receipt, bytes,
+  path split, and timing.
+- Single-job and multi-job scenarios are covered.
+
+Acceptance criteria:
+
+- Real vLLM requests save and restore KV cache through the daemon-first path.
+- Path split and performance results are traceable through daemon and
+  data-plane stats.
+
+## Phase 6: Model Loading And Training Offload
+
+Extend the daemon-first path to more LLM memory movement.
+
+Required capabilities:
+
+- Model weight bucket loading through TransferIntent.
+- Training state or optimizer state offload in both H2D and D2H directions.
+- Workload kind included in scheduler policy.
+- Unified correctness and performance reporting.
+
+Acceptance criteria:
+
+- vLLM KV, model loading, and training offload share the same public API.
+- Adapters carry no physical path policy.
+
+## Phase 7: Paper Evaluation And Hardening
+
+Prove paper parity through full-system experiments.
+
+Required capabilities:
+
+- Experiments on 2, 4, and 8 GPU systems when hardware is available.
+- Baseline policy versus daemon-scheduled TurboBus.
+- Single-job, multi-job, fairness, relay contention, and interference studies.
+- Metrics: p50 and p99 latency, throughput, PCIe utilization, relay impact,
+  bytes moved, path split, failure recovery, and isolation.
+- Experiment output traceable to daemon decisions, topology snapshots,
+  execution tickets, and data-plane stats.
+
+Acceptance criteria:
+
+- Experiments use the formal public API.
+- Results can be audited end to end from workload request to transfer receipt.
+
+## Anti-Drift Rules
+
+Rewrite changes that:
+
+- put physical route selection into application code;
+- bypass daemon scheduling to create production plans;
+- make synthetic topology a production fallback;
+- let adapters choose path policy;
+- add benchmark-only APIs to core modules;
+- add tests that do not protect a contract, integration path, or real workload;
+- place framework policy inside CUDA or HIP execution code.
+
+Prefer breaking changes when the existing code encodes the wrong architecture.
 
 ## Coding Rules
 
-- Prefer simple, testable interfaces over patching around current assumptions.
-- Keep daemon control plane, worker data plane, planner, backend, and framework
-  adapters separate.
+- Prefer simple, testable interfaces over compatibility shims.
+- Keep client API, daemon control plane, scheduler, topology discovery, worker
+  data plane, backend execution, and framework adapters separate.
+- Keep native data movement framework-agnostic.
 - Do not let benchmark scripts become the system.
-- Do not place vLLM request or scheduler policy inside CUDA execution code.
-- Do not require application code to control another job's relay GPU in the
-  final design.
-- Keep direct transfer fallback available whenever relay scheduling or lease
-  acquisition fails.
-- Add focused tests after functional code paths exist; do not let test or
-  observability work displace the real daemon/helper data path.
+- Keep direct transfer fallback available as a scheduler result or explicit
+  failure fallback.
+- Add focused tests that protect the daemon-first contract.
 - For documentation-only changes, `git diff --check` is sufficient.
