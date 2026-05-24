@@ -20,7 +20,7 @@ from turbobus.daemon.topology import (
     StaticTopologyProvider,
 )
 from turbobus.worker import (
-    UnsupportedWorkerExecution,
+    CudaWorkerExecutor,
     WorkerAuthorizationError,
     WorkerCleanupError,
     WorkerDataPlaneCompletionEnvelope,
@@ -42,7 +42,6 @@ from turbobus.worker import (
     WorkerTransferService,
     WorkerTransferState,
     WorkerTransferStatusReporter,
-    WorkerTransferUnsupportedExecutor,
     decode_worker_request_envelope,
     decode_worker_response_envelope,
     encode_worker_request_envelope,
@@ -463,27 +462,21 @@ class WorkerHelperTest(unittest.TestCase):
                 data_plane=bad_data_plane,
             )
 
-    def test_unsupported_executor_reports_no_data_movement(self) -> None:
-        request = WorkerTransferRequest.from_authorization_payload(authorization_payload())
-        executor = WorkerTransferUnsupportedExecutor()
-        staging_pool = WorkerStagingPool(slot_id_factory=lambda: "staging-1")
-        staging_slot = staging_pool.allocate(request.data_plane)
+    def test_worker_client_defaults_to_cuda_executor_and_resource_binder(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(ok=True, payload=authorization_payload())
+        )
 
-        result = executor.execute(request, staging_slot)
+        client = WorkerTransferClient(daemon_client)
 
-        self.assertEqual(result.state, WorkerTransferState.UNSUPPORTED)
-        self.assertEqual(result.bytes_completed, 0)
-        self.assertIn("not implemented", result.error)
-        self.assertEqual(result.metadata["relay_gpu"], 1)
-        self.assertEqual(result.metadata["src_buffer_id"], "cpu-buffer")
-        self.assertEqual(result.metadata["staging_slot_id"], "staging-1")
-        self.assertEqual(result.metadata["staging_allocated_bytes"], 256)
+        self.assertIsInstance(client.executor, CudaWorkerExecutor)
+        self.assertIsInstance(client.resource_binder, WorkerDataPlaneResourceBinder)
 
     def test_worker_result_builds_data_plane_completion_report(self) -> None:
         result = WorkerTransferResult(
             transfer_id="transfer-1",
-            state=WorkerTransferState.UNSUPPORTED,
-            error="worker execution is not implemented yet",
+            state=WorkerTransferState.FAILED,
+            error="worker transfer failed",
             bytes_completed=0,
         )
 
@@ -493,31 +486,7 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(completion.lease_id, "lease-1")
         self.assertEqual(completion.state.value, "failed")
         self.assertEqual(completion.bytes_completed, 0)
-        self.assertIn("not implemented", completion.error)
-
-    def test_unsupported_executor_can_raise_explicit_error(self) -> None:
-        request = WorkerTransferRequest.from_authorization_payload(authorization_payload())
-        executor = WorkerTransferUnsupportedExecutor()
-        staging_slot = WorkerStagingPool().allocate(request.data_plane)
-
-        with self.assertRaises(UnsupportedWorkerExecution):
-            executor.execute_or_raise(request, staging_slot)
-
-    def test_unsupported_executor_rejects_mismatched_staging_slot(self) -> None:
-        request = WorkerTransferRequest.from_authorization_payload(authorization_payload())
-        other_request = WorkerTransferRequest.from_authorization_payload(
-            {
-                "authorization": {
-                    **authorization_payload()["authorization"],
-                    "transfer_id": "transfer-2",
-                }
-            }
-        )
-        staging_slot = WorkerStagingPool().allocate(other_request.data_plane)
-        executor = WorkerTransferUnsupportedExecutor()
-
-        with self.assertRaisesRegex(ValueError, "transfer"):
-            executor.execute(request, staging_slot)
+        self.assertEqual(completion.error, "worker transfer failed")
 
     def test_authorizer_builds_worker_request_from_daemon_response(self) -> None:
         daemon_client = FakeDaemonClient(
@@ -694,7 +663,7 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(staging_pool.describe(), {"active_slots": {}})
         self.assertEqual(daemon_client.cleanup_requests[0]["target_id"], "lease-1")
 
-    def test_worker_client_submit_keeps_execution_unsupported(self) -> None:
+    def test_worker_client_submit_uses_cuda_worker_path(self) -> None:
         daemon_client = FakeDaemonClient(
             DaemonResponse(ok=True, payload=authorization_payload())
         )
@@ -704,13 +673,13 @@ class WorkerHelperTest(unittest.TestCase):
         result = client.submit(authorization_request())
 
         self.assertEqual(result.transfer_id, "transfer-1")
-        self.assertEqual(result.state, WorkerTransferState.UNSUPPORTED)
+        self.assertEqual(result.state, WorkerTransferState.FAILED)
         self.assertEqual(result.bytes_completed, 0)
-        self.assertIn("not implemented", result.error)
+        self.assertIn("failed to bind worker data-plane resources", result.error)
         self.assertEqual(result.metadata["staging_slot_id"], "staging-1")
         self.assertEqual(staging_pool.describe(), {"active_slots": {}})
 
-    def test_status_reporter_maps_unsupported_to_daemon_failed_status(self) -> None:
+    def test_status_reporter_maps_failed_to_daemon_failed_status(self) -> None:
         daemon_client = FakeDaemonClient(
             DaemonResponse(ok=True, payload=authorization_payload())
         )
@@ -719,8 +688,8 @@ class WorkerHelperTest(unittest.TestCase):
         response = reporter.report(
             WorkerTransferResult(
                 transfer_id="transfer-1",
-                state=WorkerTransferState.UNSUPPORTED,
-                error="worker execution is not implemented yet",
+                state=WorkerTransferState.FAILED,
+                error="worker transfer failed",
                 bytes_completed=0,
             )
         )
@@ -730,7 +699,7 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(daemon_client.status_updates[0]["transfer_id"], "transfer-1")
         self.assertEqual(daemon_client.status_updates[0]["state"], "failed")
         self.assertEqual(daemon_client.status_updates[0]["bytes_completed"], 0)
-        self.assertIn("not implemented", daemon_client.status_updates[0]["error"])
+        self.assertEqual(daemon_client.status_updates[0]["error"], "worker transfer failed")
 
     def test_status_reporter_maps_complete_to_daemon_complete_status(self) -> None:
         daemon_client = FakeDaemonClient(
@@ -774,7 +743,7 @@ class WorkerHelperTest(unittest.TestCase):
 
         result = client.submit_and_report(authorization_request())
 
-        self.assertEqual(result.state, WorkerTransferState.UNSUPPORTED)
+        self.assertEqual(result.state, WorkerTransferState.FAILED)
         self.assertEqual(len(daemon_client.status_updates), 1)
         self.assertEqual(daemon_client.status_updates[0]["state"], "failed")
 
@@ -864,7 +833,7 @@ class WorkerHelperTest(unittest.TestCase):
 
         result = client.submit_report_and_cleanup(authorization_request())
 
-        self.assertEqual(result.state, WorkerTransferState.UNSUPPORTED)
+        self.assertEqual(result.state, WorkerTransferState.FAILED)
         self.assertEqual(daemon_client.status_updates[0]["state"], "failed")
         self.assertEqual(
             daemon_client.cleanup_requests,
@@ -872,7 +841,7 @@ class WorkerHelperTest(unittest.TestCase):
                 {
                     "target_kind": "reservation",
                     "target_id": "lease-1",
-                    "reason": "worker_unsupported",
+                    "reason": "worker_failed",
                     "force": True,
                 }
             ],
@@ -927,14 +896,14 @@ class WorkerHelperTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(result.state, WorkerTransferState.UNSUPPORTED)
+        self.assertEqual(result.state, WorkerTransferState.FAILED)
         profile = daemon.describe().payload
         self.assertEqual(profile["reservations"], {})
         self.assertIn(
             {
                 "target_kind": "reservation",
                 "target_id": lease_token["lease_id"],
-                "reason": "worker_unsupported",
+                "reason": "worker_failed",
                 "force": True,
             },
             profile["cleanup_events"],
@@ -950,8 +919,8 @@ class WorkerHelperTest(unittest.TestCase):
         )
         result = WorkerTransferResult(
             transfer_id="transfer-1",
-            state=WorkerTransferState.UNSUPPORTED,
-            error="worker execution is not implemented yet",
+            state=WorkerTransferState.FAILED,
+            error="worker transfer failed",
         )
         staging_slot = WorkerStagingPool(
             slot_id_factory=lambda: "staging-1",
@@ -972,7 +941,7 @@ class WorkerHelperTest(unittest.TestCase):
             cleanup_target_kind="reservation",
             cleanup_target_id="lease-1",
             cleanup_response=DaemonResponse(ok=True, payload={"removed": {"reservations": 1}}),
-            final_state="unsupported",
+            final_state="failed",
             error=result.error,
         )
         payload = record.as_dict()
@@ -984,12 +953,12 @@ class WorkerHelperTest(unittest.TestCase):
         )
         self.assertEqual(payload["staging_slot"]["transfer_id"], "transfer-1")
         self.assertIsNone(payload["staging_release"])
-        self.assertEqual(payload["result"]["state"], "unsupported")
+        self.assertEqual(payload["result"]["state"], "failed")
         self.assertEqual(payload["status_update"]["state"], "failed")
         self.assertEqual(payload["status_response"]["payload"]["status"]["state"], "failed")
         self.assertEqual(payload["cleanup_target"]["target_id"], "lease-1")
         self.assertEqual(payload["cleanup_response"]["payload"]["removed"]["reservations"], 1)
-        self.assertEqual(payload["final_state"], "unsupported")
+        self.assertEqual(payload["final_state"], "failed")
 
     def test_worker_client_lifecycle_records_status_and_cleanup(self) -> None:
         daemon_client = FakeDaemonClient(
@@ -1000,14 +969,17 @@ class WorkerHelperTest(unittest.TestCase):
 
         lifecycle = client.submit_report_cleanup_lifecycle(authorization_request())
 
-        self.assertEqual(lifecycle.final_state, "unsupported")
-        self.assertEqual(lifecycle.result.state, WorkerTransferState.UNSUPPORTED)
+        self.assertEqual(lifecycle.final_state, "failed")
+        self.assertEqual(lifecycle.result.state, WorkerTransferState.FAILED)
         self.assertEqual(lifecycle.status_response, daemon_client.status_response)
         self.assertEqual(lifecycle.cleanup_response, daemon_client.cleanup_response)
         self.assertEqual(lifecycle.cleanup_target_kind, "reservation")
         self.assertEqual(lifecycle.cleanup_target_id, "lease-1")
         self.assertEqual(lifecycle.status_update["state"], "failed")
-        self.assertIn("not implemented", lifecycle.status_update["error"])
+        self.assertIn(
+            "failed to bind worker data-plane resources",
+            lifecycle.status_update["error"],
+        )
         self.assertEqual(lifecycle.staging_slot.transfer_id, "transfer-1")
         self.assertTrue(lifecycle.staging_slot.active)
         self.assertEqual(lifecycle.staging_release.slot_id, lifecycle.staging_slot.slot_id)
@@ -1030,10 +1002,10 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["transfer_id"], "transfer-1")
         self.assertEqual(payload["lease_id"], "lease-1")
-        self.assertEqual(payload["final_state"], "unsupported")
+        self.assertEqual(payload["final_state"], "failed")
         self.assertEqual(payload["staging_slot"]["slot_id"], "staging-1")
         self.assertTrue(payload["staging_slot"]["active"])
-        self.assertEqual(payload["worker_result"]["state"], "unsupported")
+        self.assertEqual(payload["worker_result"]["state"], "failed")
         self.assertEqual(payload["daemon_status_update"]["state"], "failed")
         self.assertTrue(payload["daemon_status_response"]["ok"])
         self.assertTrue(payload["daemon_cleanup_response"]["ok"])
@@ -1054,8 +1026,8 @@ class WorkerHelperTest(unittest.TestCase):
                 self.calls.append((request, staging_slot))
                 return WorkerTransferResult(
                     transfer_id=request.transfer_id,
-                    state=WorkerTransferState.UNSUPPORTED,
-                    error="recorded unsupported",
+                    state=WorkerTransferState.FAILED,
+                    error="recorded failure",
                     metadata={"staging_slot_id": staging_slot.slot_id},
                 )
 
@@ -1360,7 +1332,7 @@ class WorkerHelperTest(unittest.TestCase):
 
         self.assertEqual(payload["final_state"], "status_failed")
         self.assertIn("unknown transfer", payload["error"])
-        self.assertEqual(payload["worker_result"]["state"], "unsupported")
+        self.assertEqual(payload["worker_result"]["state"], "failed")
         self.assertEqual(payload["daemon_status_update"]["state"], "failed")
         self.assertIsNone(payload["daemon_status_response"])
         self.assertTrue(payload["daemon_cleanup_response"]["ok"])
@@ -1432,7 +1404,7 @@ class WorkerHelperTest(unittest.TestCase):
 
         self.assertEqual(payload["final_state"], "cleanup_failed")
         self.assertIn("unknown reservation", payload["error"])
-        self.assertEqual(payload["worker_result"]["state"], "unsupported")
+        self.assertEqual(payload["worker_result"]["state"], "failed")
         self.assertEqual(payload["daemon_status_update"]["state"], "failed")
         self.assertTrue(payload["daemon_status_response"]["ok"])
         self.assertIsNone(payload["daemon_cleanup_response"])
@@ -1448,14 +1420,17 @@ class WorkerHelperTest(unittest.TestCase):
 
         lifecycle = client.submit_report_cleanup_lifecycle(authorization_request())
 
-        self.assertEqual(lifecycle.final_state, "unsupported")
-        self.assertEqual(lifecycle.result.state, WorkerTransferState.UNSUPPORTED)
+        self.assertEqual(lifecycle.final_state, "failed")
+        self.assertEqual(lifecycle.result.state, WorkerTransferState.FAILED)
         self.assertEqual(lifecycle.status_response, daemon_client.status_response)
         self.assertEqual(lifecycle.cleanup_response, daemon_client.cleanup_response)
         self.assertEqual(lifecycle.cleanup_target_kind, "reservation")
         self.assertEqual(lifecycle.cleanup_target_id, "lease-1")
         self.assertEqual(lifecycle.status_update["state"], "failed")
-        self.assertIn("not implemented", lifecycle.status_update["error"])
+        self.assertIn(
+            "failed to bind worker data-plane resources",
+            lifecycle.status_update["error"],
+        )
         self.assertFalse(lifecycle.staging_release.active)
         self.assertEqual(daemon_client.status_updates[0]["state"], "failed")
         self.assertEqual(daemon_client.cleanup_requests[0]["target_id"], "lease-1")
@@ -1540,7 +1515,7 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(lifecycle.cleanup_target_id, "lease-1")
         self.assertEqual(daemon_client.cleanup_requests[0]["reason"], "worker_authorization_failed")
 
-    def test_worker_service_returns_unsupported_completion_envelope(self) -> None:
+    def test_worker_service_returns_cuda_failure_completion_envelope(self) -> None:
         daemon_client = FakeDaemonClient(
             DaemonResponse(ok=True, payload=authorization_payload())
         )
@@ -1551,8 +1526,8 @@ class WorkerHelperTest(unittest.TestCase):
         ).as_dict()
 
         self.assertTrue(payload["ok"])
-        self.assertEqual(payload["final_state"], "unsupported")
-        self.assertEqual(payload["completion"]["worker_result"]["state"], "unsupported")
+        self.assertEqual(payload["final_state"], "failed")
+        self.assertEqual(payload["completion"]["worker_result"]["state"], "failed")
         self.assertEqual(payload["completion"]["daemon_status_update"]["state"], "failed")
         self.assertEqual(payload["completion"]["staging_release"]["slot_id"], "staging-1")
         self.assertEqual(daemon_client.status_updates[0]["state"], "failed")
@@ -1624,7 +1599,8 @@ class WorkerHelperTest(unittest.TestCase):
         lifecycle = service.handle_lifecycle(authorization_request())
 
         self.assertIsInstance(lifecycle, WorkerTransferLifecycleRecord)
-        self.assertEqual(lifecycle.final_state, "unsupported")
+        self.assertEqual(lifecycle.final_state, "failed")
+        self.assertEqual(lifecycle.result.state, WorkerTransferState.FAILED)
 
     def test_worker_authorization_payload_parser_accepts_plain_dict(self) -> None:
         request = parse_worker_authorization_request_payload(
@@ -1677,7 +1653,7 @@ class WorkerHelperTest(unittest.TestCase):
         ).as_dict()
 
         self.assertEqual(payload["completion"]["transfer_id"], "transfer-1")
-        self.assertEqual(payload["final_state"], "unsupported")
+        self.assertEqual(payload["final_state"], "failed")
         self.assertEqual(payload["completion"]["daemon_status_update"]["state"], "failed")
         self.assertEqual(payload["completion"]["staging_release"]["slot_id"], "staging-1")
 
@@ -1750,8 +1726,8 @@ class WorkerHelperTest(unittest.TestCase):
         )
 
         self.assertTrue(response["ok"])
-        self.assertEqual(response["final_state"], "unsupported")
-        self.assertEqual(response["completion"]["worker_result"]["state"], "unsupported")
+        self.assertEqual(response["final_state"], "failed")
+        self.assertEqual(response["completion"]["worker_result"]["state"], "failed")
         self.assertEqual(response["completion"]["daemon_status_update"]["state"], "failed")
         self.assertTrue(response["completion"]["daemon_cleanup_response"]["ok"])
         self.assertEqual(response["completion"]["staging_release"]["slot_id"], "staging-1")
@@ -1771,8 +1747,8 @@ class WorkerHelperTest(unittest.TestCase):
         payload = decoded.as_dict()
 
         self.assertTrue(payload["ok"])
-        self.assertEqual(payload["final_state"], "unsupported")
-        self.assertEqual(payload["completion"]["worker_result"]["state"], "unsupported")
+        self.assertEqual(payload["final_state"], "failed")
+        self.assertEqual(payload["completion"]["worker_result"]["state"], "failed")
         self.assertEqual(payload["completion"]["daemon_status_update"]["state"], "failed")
         self.assertEqual(payload["completion"]["staging_release"]["slot_id"], "staging-1")
         self.assertFalse(payload["completion"]["staging_release"]["active"])
@@ -1807,8 +1783,8 @@ class WorkerHelperTest(unittest.TestCase):
         response = decode_worker_response_envelope(response_message).as_dict()
 
         self.assertTrue(response["ok"])
-        self.assertEqual(response["final_state"], "unsupported")
-        self.assertEqual(response["completion"]["worker_result"]["state"], "unsupported")
+        self.assertEqual(response["final_state"], "failed")
+        self.assertEqual(response["completion"]["worker_result"]["state"], "failed")
         self.assertEqual(response["completion"]["staging_release"]["slot_id"], "staging-1")
         self.assertFalse(response["completion"]["staging_release"]["active"])
         self.assertEqual(daemon_client.status_updates[0]["state"], "failed")
@@ -1868,8 +1844,8 @@ class WorkerHelperTest(unittest.TestCase):
         response = decode_worker_response_envelope(response_message).as_dict()
 
         self.assertTrue(response["ok"])
-        self.assertEqual(response["final_state"], "unsupported")
-        self.assertEqual(response["completion"]["worker_result"]["state"], "unsupported")
+        self.assertEqual(response["final_state"], "failed")
+        self.assertEqual(response["completion"]["worker_result"]["state"], "failed")
         self.assertEqual(response["completion"]["staging_release"]["slot_id"], "staging-1")
         self.assertFalse(response["completion"]["staging_release"]["active"])
         self.assertEqual(daemon_client.status_updates[0]["state"], "failed")

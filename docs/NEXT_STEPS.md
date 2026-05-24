@@ -363,6 +363,10 @@ Completed current code cut:
 - Reject disabled daemon plan paths during worker authorization before
   staging allocation, so the worker never allocates relay resources for a path
   the daemon itself marked unavailable.
+- Remove the default unsupported worker executor path. `WorkerTransferClient`
+  and `WorkerTransferService` now use the CUDA worker executor with resource
+  binding by default, while callers can still inject a fake executor for
+  focused tests.
 
 1. Verify the worker-managed H2D relay path on a CUDA server.
    - Rebuild the native extension with CUDA.

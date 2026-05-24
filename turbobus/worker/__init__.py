@@ -1,5 +1,4 @@
 from .helper import (
-    UnsupportedWorkerExecution,
     WorkerAuthorizationError,
     WorkerCleanupError,
     WorkerServiceRequestEnvelope,
@@ -17,7 +16,6 @@ from .helper import (
     WorkerTransferService,
     WorkerTransferState,
     WorkerTransferStatusReporter,
-    WorkerTransferUnsupportedExecutor,
     parse_worker_authorization_request_payload,
 )
 from .cuda_executor import CudaWorkerExecutor
@@ -52,7 +50,6 @@ from .staging_pool import (
 )
 
 __all__ = [
-    "UnsupportedWorkerExecution",
     "WorkerAuthorizationError",
     "WorkerCleanupError",
     "WorkerServiceRequestEnvelope",
@@ -78,7 +75,6 @@ __all__ = [
     "WorkerTransferService",
     "WorkerTransferState",
     "WorkerTransferStatusReporter",
-    "WorkerTransferUnsupportedExecutor",
     "WorkerStagingPool",
     "WorkerStagingPoolError",
     "WorkerStagingSlot",

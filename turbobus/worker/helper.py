@@ -22,13 +22,8 @@ from .staging_pool import WorkerStagingPool, WorkerStagingSlot
 
 
 class WorkerTransferState(str, Enum):
-    UNSUPPORTED = "unsupported"
     FAILED = "failed"
     COMPLETE = "complete"
-
-
-class UnsupportedWorkerExecution(RuntimeError):
-    pass
 
 
 class WorkerAuthorizationError(RuntimeError):
@@ -440,45 +435,6 @@ class WorkerServiceResponseEnvelope:
         }
 
 
-class WorkerTransferUnsupportedExecutor:
-    def execute(
-        self,
-        request: WorkerTransferRequest,
-        staging_slot: WorkerStagingSlot,
-    ) -> WorkerTransferResult:
-        if not isinstance(request, WorkerTransferRequest):
-            raise TypeError("request must be a WorkerTransferRequest")
-        if not isinstance(staging_slot, WorkerStagingSlot):
-            raise TypeError("staging_slot must be a WorkerStagingSlot")
-        if staging_slot.transfer_id != request.transfer_id:
-            raise ValueError("staging slot transfer does not match request")
-        if staging_slot.lease_id != request.authorization.lease_id:
-            raise ValueError("staging slot lease does not match request")
-        if staging_slot.relay_gpu != request.authorization.relay_gpu:
-            raise ValueError("staging slot relay does not match request")
-        return WorkerTransferResult(
-            transfer_id=request.transfer_id,
-            state=WorkerTransferState.UNSUPPORTED,
-            error="worker execution is not implemented yet",
-            bytes_completed=0,
-            metadata={
-                "relay_gpu": request.authorization.relay_gpu,
-                "src_buffer_id": request.authorization.src_buffer.buffer_id,
-                "dst_buffer_id": request.authorization.dst_buffer.buffer_id,
-                "staging_slot_id": staging_slot.slot_id,
-                "staging_allocated_bytes": staging_slot.allocated_bytes,
-            },
-        )
-
-    def execute_or_raise(
-        self,
-        request: WorkerTransferRequest,
-        staging_slot: WorkerStagingSlot,
-    ) -> WorkerTransferResult:
-        result = self.execute(request, staging_slot)
-        raise UnsupportedWorkerExecution(result.error or "worker execution is unsupported")
-
-
 class WorkerTransferAuthorizer:
     def __init__(self, daemon_client) -> None:
         self.daemon_client = daemon_client
@@ -626,14 +582,18 @@ class WorkerTransferClient:
     def __init__(
         self,
         daemon_client,
-        executor: WorkerTransferUnsupportedExecutor | None = None,
+        executor: object | None = None,
         status_reporter: WorkerTransferStatusReporter | None = None,
         cleanup_coordinator: WorkerTransferCleanupCoordinator | None = None,
         staging_pool: WorkerStagingPool | None = None,
         resource_binder: WorkerDataPlaneResourceBinder | None = None,
     ) -> None:
+        if executor is None:
+            executor = _default_worker_executor()
+            if resource_binder is None:
+                resource_binder = WorkerDataPlaneResourceBinder()
         self.authorizer = WorkerTransferAuthorizer(daemon_client)
-        self.executor = executor or WorkerTransferUnsupportedExecutor()
+        self.executor = executor
         self.status_reporter = status_reporter or WorkerTransferStatusReporter(
             daemon_client
         )
@@ -656,10 +616,15 @@ class WorkerTransferClient:
         worker_request = self.authorize(request)
         staging_slot = self.staging_pool.allocate(worker_request.data_plane)
         try:
-            return _validate_worker_completion_bytes(
-                worker_request,
-                self._execute(worker_request, staging_slot),
-            )
+            try:
+                result = self._execute(worker_request, staging_slot)
+            except Exception as exc:
+                result = _failed_worker_result_from_exception(
+                    worker_request,
+                    staging_slot,
+                    exc,
+                )
+            return _validate_worker_completion_bytes(worker_request, result)
         finally:
             self.staging_pool.release(staging_slot.slot_id, worker_request.data_plane)
 
@@ -963,8 +928,6 @@ def _daemon_state_for_worker_state(
 def _daemon_status_update_for_result(result: WorkerTransferResult) -> dict[str, object]:
     daemon_state = _daemon_state_for_worker_state(result.state)
     error = result.error
-    if result.state == WorkerTransferState.UNSUPPORTED and error is None:
-        error = "worker execution is unsupported"
     if result.state == WorkerTransferState.FAILED and error is None:
         error = "worker transfer failed"
     return {
@@ -1127,6 +1090,12 @@ def _execute_worker_transfer(
     return executor.execute(request, staging_slot)
 
 
+def _default_worker_executor():
+    from .cuda_executor import CudaWorkerExecutor
+
+    return CudaWorkerExecutor()
+
+
 def _lifecycle_transfer_id(lifecycle: WorkerTransferLifecycleRecord) -> str:
     if lifecycle.result is not None:
         return lifecycle.result.transfer_id
@@ -1142,7 +1111,6 @@ def _lifecycle_lease_id(lifecycle: WorkerTransferLifecycleRecord) -> str:
 
 
 __all__ = [
-    "UnsupportedWorkerExecution",
     "WorkerAuthorizationError",
     "WorkerCleanupError",
     "WorkerDataPlaneCompletion",
@@ -1163,6 +1131,5 @@ __all__ = [
     "WorkerTransferService",
     "WorkerTransferState",
     "WorkerTransferStatusReporter",
-    "WorkerTransferUnsupportedExecutor",
     "parse_worker_authorization_request_payload",
 ]

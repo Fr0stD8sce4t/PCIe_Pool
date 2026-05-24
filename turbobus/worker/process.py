@@ -5,10 +5,8 @@ from threading import Event
 from typing import Sequence
 
 from ..daemon import TurboBusDaemonClient
-from .cuda_executor import CudaWorkerExecutor
 from .endpoint import WorkerServiceEndpoint
 from .helper import WorkerTransferClient, WorkerTransferService
-from .resources import WorkerDataPlaneResourceBinder
 from .transport import WorkerServiceUnixSocketTransport
 
 
@@ -17,11 +15,7 @@ def build_worker_helper_transport(
     socket_path: str,
 ) -> WorkerServiceUnixSocketTransport:
     daemon_client = TurboBusDaemonClient(str(daemon_socket_path))
-    transfer_client = WorkerTransferClient(
-        daemon_client,
-        executor=CudaWorkerExecutor(),
-        resource_binder=WorkerDataPlaneResourceBinder(),
-    )
+    transfer_client = WorkerTransferClient(daemon_client)
     endpoint = WorkerServiceEndpoint(
         service=WorkerTransferService(
             daemon_client,

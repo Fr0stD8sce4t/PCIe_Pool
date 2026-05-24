@@ -51,9 +51,10 @@ transfer request objects:
 - `turbobus.worker.cuda_executor.CudaWorkerExecutor` now runs the first narrow
   daemon-authorized CUDA worker path: shared CPU source to worker-owned relay
   staging to CUDA IPC target GPU for H2D relay chunks;
-- the worker helper process now uses the CUDA worker executor and resource
-  binder by default, so the helper-process boundary no longer defaults to the
-  unsupported executor when serving real requests;
+- `WorkerTransferClient` and the worker helper process now use the CUDA worker
+  executor and resource binder by default, so the default helper path attempts
+  daemon-authorized resource binding and reports real data-path failures
+  instead of returning an unsupported worker result;
 - `turbobus.client_transfer.WorkerManagedTransferClient` now connects the
   first client-to-daemon-to-worker call for H2D relay transfers using shared
   CPU source buffers, CUDA IPC target buffers, daemon-issued relay leases,
@@ -362,16 +363,16 @@ transfer request objects:
 - Worker-facing authorization messages now exist in the daemon protocol, and
   `AUTHORIZE_WORKER_TRANSFER` returns a checked transfer context with source
   and destination buffer registrations, direction, relay GPU, and ranges.
-- `turbobus.worker` now has a helper skeleton that parses daemon authorization
-  payloads into worker transfer requests and reports unsupported execution
-  without pretending data movement happened.
+- `turbobus.worker` now has a helper path that parses daemon authorization
+  payloads into worker transfer requests and drives the CUDA worker data path
+  by default.
 - `turbobus.worker` now also has a client-side authorization helper that calls
   `authorize_worker_transfer` on the daemon client, builds a
-  `WorkerTransferRequest` from the daemon response, and keeps execution on the
-  explicit unsupported path until worker IPC movement exists.
-- `turbobus.worker` now has a status reporter that maps worker unsupported,
-  failed, and completed outcomes into daemon `TRANSFER_STATUS` updates, keeping
-  transfer state owned by the daemon even before real worker movement exists.
+  `WorkerTransferRequest` from the daemon response, and executes it through the
+  default CUDA worker path unless a caller explicitly injects another executor.
+- `turbobus.worker` now has a status reporter that maps worker failed and
+  completed outcomes into daemon `TRANSFER_STATUS` updates, keeping transfer
+  state owned by the daemon.
 - `turbobus.daemon.topology` now defines backend-neutral GPU, PCIe path, and
   scale-up fabric link inventory records, plus an injectable static topology
   provider.
@@ -428,11 +429,10 @@ transfer request objects:
   session, job, or relay use.
 - worker request lifecycle records now include staging slot allocation and
   release metadata, and `WorkerTransferClient` releases staging slots after
-  unsupported execution, daemon status failure, and daemon cleanup failure.
+  execution failure, daemon status failure, and daemon cleanup failure.
 - worker data-plane executors now receive both the daemon-authorized
-  `WorkerTransferRequest` and its allocated `WorkerStagingSlot`. The default
-  executor still returns explicit unsupported execution without CUDA IPC,
-  sockets, real data movement, or hardware discovery.
+  `WorkerTransferRequest` and its allocated `WorkerStagingSlot`; the default
+  client path uses the CUDA worker executor with resource binding.
 - `WorkerDataPlaneCompletionEnvelope` now gives the future helper-process
   boundary a completion-specific serialized shape for allocated staging slots,
   worker results, daemon status updates and responses, daemon cleanup responses,
@@ -577,7 +577,7 @@ phase:
 11. worker/helper authorization can be requested through the daemon client
     without adding worker execution, so the next data-plane layer has a
     daemon-approved input shape.
-12. worker/helper code now has a package boundary and a no-op unsupported
+12. worker/helper code now has a package boundary and a default CUDA worker
     executor for daemon-authorized transfer contexts.
 13. worker/helper outcomes can be reported back through the daemon status path,
     so future worker execution can update daemon-owned transfer status instead
@@ -599,8 +599,8 @@ phase:
     observability.
 19. client-driven cleanup is now reachable from `TurboBusDaemonClient.cleanup()`
     and covered through the daemon socket path.
-20. worker-side cleanup coordination can now report failed or unsupported helper
-    transfers and ask the daemon to reclaim the matching reservation or session.
+20. worker-side cleanup coordination can now report failed helper transfers and
+    ask the daemon to reclaim the matching reservation or session.
 21. worker request lifecycle records now make status and cleanup decisions
     explicit and serializable for future helper processes.
 22. an in-process worker helper service skeleton keeps lifecycle records
@@ -610,9 +610,9 @@ phase:
     worker authorization requests before they enter the service path.
 24. worker service request/response envelopes now provide a stable shape for
     future helper process boundaries without adding sockets or IPC.
-25. worker service control-plane smoke coverage now proves a daemon-owned
-    planned relay transfer can pass through the service envelope path, report
-    unsupported execution as daemon `failed`, and reclaim the daemon
+25. worker service envelope coverage now proves a daemon-owned planned relay
+    transfer can pass through the service path, report CUDA resource-binding
+    failure as daemon `failed` on non-CUDA local runs, and reclaim the daemon
     reservation.
 26. worker data-plane request records now capture daemon-approved relay
     execution inputs and completion reports without adding CUDA IPC, sockets,
@@ -621,14 +621,13 @@ phase:
     staging slots, with validation and release checks but no CUDA IPC, sockets,
     real data movement, or hardware discovery.
 28. worker service lifecycle now reserves a staging slot after daemon
-    authorization and releases it across unsupported, status-failed, and
-    cleanup-failed paths without adding CUDA IPC, sockets, real data movement,
-    or hardware discovery.
+    authorization and releases it across execution-failed, status-failed, and
+    cleanup-failed paths.
 29. worker data-plane executor calls now receive the allocated staging slot
-    alongside the worker request, while preserving the unsupported default
-    executor path.
+    alongside the worker request, and the default client/service path uses the
+    CUDA worker executor with resource binding.
 30. worker data-plane completion envelopes now serialize lifecycle completion
-    output without losing staging release information on unsupported,
+    output without losing staging release information on execution-failed,
     status-failed, or cleanup-failed paths.
 31. worker service response envelopes now carry the completion envelope,
     final state, and error without serializing the full lifecycle payload.
