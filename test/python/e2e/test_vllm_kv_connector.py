@@ -501,9 +501,12 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertEqual(saved.receipt_ids, "receipt-1,receipt-2")
         self.assertEqual(saved.save_layer_count, 2)
         self.assertEqual(saved.save_layer_ranges, 2)
-        self.assertEqual(connector.state.events[-1]["event"], "save")
-        self.assertEqual(connector.state.events[-1]["layers"], 2)
-        self.assertEqual(connector.state.events[-1]["ranges"], 2)
+        save_event = next(
+            event for event in reversed(connector.state.events) if event["event"] == "save"
+        )
+        self.assertEqual(save_event["layers"], 2)
+        self.assertEqual(save_event["ranges"], 2)
+        self.assertEqual(connector.state.events[-1]["event"], "wait_for_save_done")
 
     def test_wait_for_save_rejects_incomplete_layer_save(self) -> None:
         connector = self.make_connector(client=FakeClient())

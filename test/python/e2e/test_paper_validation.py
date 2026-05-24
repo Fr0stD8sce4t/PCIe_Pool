@@ -42,23 +42,31 @@ def make_args(**overrides):
         "daemon_profile_max_age_seconds": 45.0,
         "workloads": "all",
         "dry_run": False,
+        "vllm_model": "vllm-model",
+        "vllm_prompt": "",
+        "vllm_prompt_repeat": 64,
+        "vllm_second_prompt_suffix": " Italy",
+        "vllm_prefix_key": "paper-validation-vllm-kv",
+        "vllm_restore_blocks": 8,
+        "vllm_matched_tokens": 128,
+        "vllm_wait_timeout_seconds": None,
+        "vllm_enforce_eager": False,
+        "vllm_enable_multiproc_executor": False,
     }
     values.update(overrides)
     return argparse.Namespace(**values)
 
 
 class PaperValidationTest(unittest.TestCase):
-    def test_selected_workloads_expands_daemon_first_targets_and_defers_vllm(self) -> None:
+    def test_selected_workloads_expands_daemon_first_targets(self) -> None:
         self.assertEqual(
             paper_validation.selected_workloads("all"),
-            ["model-loading", "training-offload"],
+            ["model-loading", "training-offload", "vllm-kv"],
         )
         self.assertEqual(
-            paper_validation.selected_workloads("model-loading"),
-            ["model-loading"],
+            paper_validation.selected_workloads("model-loading,vllm-kv"),
+            ["model-loading", "vllm-kv"],
         )
-        with self.assertRaisesRegex(ValueError, "not daemon-first"):
-            paper_validation.selected_workloads("vllm-kv")
         with self.assertRaises(ValueError):
             paper_validation.selected_workloads("missing")
 
@@ -66,21 +74,29 @@ class PaperValidationTest(unittest.TestCase):
         args = make_args()
         with tempfile.TemporaryDirectory() as tmpdir:
             paths = paper_validation.output_paths(Path(tmpdir), "model-loading")
+            vllm_paths = paper_validation.output_paths(Path(tmpdir), "vllm-kv")
             model = paper_validation.build_model_loading_command(args, paths)
             training = paper_validation.build_training_offload_command(args, paths)
+            vllm = paper_validation.build_vllm_kv_command(args, vllm_paths)
 
         self.assertIn(str(BENCHMARKS / "model_loading.py"), model)
         self.assertIn(str(BENCHMARKS / "training_offload.py"), training)
+        self.assertIn(str(BENCHMARKS.parent / "examples" / "vllm_turbobus_kv_connector.py"), vllm)
         self.assertIn("--session-id", model)
         self.assertIn("--source-buffer-id", model)
         self.assertIn("--destination-buffer-id", model)
         self.assertIn("--cpu-buffer-id", training)
         self.assertIn("--gpu-buffer-id", training)
+        self.assertIn("--cpu-buffer-id", vllm)
+        self.assertIn("--gpu-buffer-id", vllm)
+        self.assertIn("--restore-enabled", vllm)
         self.assertIn("--daemon-socket-path", model)
         self.assertIn("--daemon-profile-max-age-seconds", training)
+        self.assertIn("--daemon-socket-path", vllm)
         forbidden = {"--target-gpu", "--relay-gpus", "--mode", "--modes", "--min-pool-bytes"}
         self.assertTrue(forbidden.isdisjoint(model))
         self.assertTrue(forbidden.isdisjoint(training))
+        self.assertTrue(forbidden.isdisjoint(vllm))
 
     def test_collect_model_and_training_metrics_from_daemon_receipts(self) -> None:
         model = {
@@ -153,6 +169,61 @@ class PaperValidationTest(unittest.TestCase):
         )
         self.assertEqual(training_metric["fallback_reason"], "quota")
 
+    def test_collect_vllm_kv_metrics_from_connector_summary(self) -> None:
+        summary = {
+            "vllm_kv_connector_config": {"model": "model"},
+            "vllm_kv_connector_save": {
+                "elapsed_ms": "10.0",
+                "bytes": "64",
+                "direct_chunks": "1",
+                "relay_chunks": "1",
+                "direct_bytes": "32",
+                "relay_bytes": "32",
+                "receipt_ids": "save-r",
+                "decision_ids": "save-d",
+                "topology_snapshot_ids": "save-t",
+                "ticket_ids": "save-ticket",
+                "save_layer_count": "2",
+                "save_layer_ranges": "4",
+            },
+            "vllm_kv_connector_restore": {
+                "elapsed_ms": "20.0",
+                "transfer_ms": "16.0",
+                "total_ms": "22.0",
+                "bytes": "128",
+                "direct_chunks": "2",
+                "relay_chunks": "1",
+                "direct_bytes": "96",
+                "relay_bytes": "32",
+                "receipt_ids": "restore-r",
+                "decision_ids": "restore-d",
+                "topology_snapshot_ids": "restore-t",
+                "ticket_ids": "restore-ticket",
+                "fallback_reason": "quota",
+                "layers": "2",
+                "ranges": "4",
+            },
+            "vllm_kv_connector_result": {
+                "prompt_tokens": "256",
+                "shared_prefix": "True",
+            },
+        }
+
+        metric = paper_validation.collect_vllm_kv_metrics(summary)[0]
+
+        self.assertEqual(metric["workload"], "vllm-kv")
+        self.assertEqual(metric["transfer_bytes"], 128)
+        self.assertEqual(metric["direct_bytes"], 96)
+        self.assertEqual(metric["relay_bytes"], 32)
+        self.assertEqual(metric["decision_ids"], "restore-d")
+        self.assertEqual(metric["save_decision_ids"], "save-d")
+        self.assertEqual(metric["ticket_ids"], "restore-ticket")
+        self.assertEqual(metric["save_ticket_ids"], "save-ticket")
+        self.assertEqual(metric["fallback_reason"], "quota")
+        self.assertEqual(metric["save_layer_count"], 2)
+        self.assertEqual(metric["restore_layers"], 2)
+        self.assertEqual(metric["prompt_tokens"], 256)
+
     def test_collect_workload_metrics_reads_daemon_first_json_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             paths = paper_validation.output_paths(Path(tmpdir), "model-loading")
@@ -179,6 +250,17 @@ class PaperValidationTest(unittest.TestCase):
 
         self.assertEqual(data["summary"]["bytes"], 64)
         self.assertEqual(metrics[0]["decision_ids"], "decision-1")
+
+    def test_collect_vllm_kv_metrics_reads_connector_log(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = paper_validation.output_paths(Path(tmpdir), "vllm-kv")
+            paths["log"].write_text(vllm_log_text(), encoding="utf-8")
+
+            data, metrics = paper_validation.collect_workload_metrics("vllm-kv", paths)
+
+        self.assertEqual(data["vllm_kv_connector_restore"]["decision_ids"], "restore-d")
+        self.assertEqual(metrics[0]["workload"], "vllm-kv")
+        self.assertEqual(metrics[0]["decision_ids"], "restore-d")
 
     def test_compact_summary_reports_policy_and_trace_ids(self) -> None:
         result = self._summary_result(
@@ -225,7 +307,7 @@ class PaperValidationTest(unittest.TestCase):
             ):
                 result = paper_validation.run_validation(args)
 
-        self.assertEqual([item["status"] for item in result["workloads"]], ["dry-run"] * 2)
+        self.assertEqual([item["status"] for item in result["workloads"]], ["dry-run"] * 3)
         self.assertTrue(all(item["returncode"] == 0 for item in result["workloads"]))
         self.assertTrue(all(item["metrics"] == [] for item in result["workloads"]))
         self.assertEqual(result["workloads"][0]["data"], {})
@@ -265,6 +347,30 @@ class PaperValidationTest(unittest.TestCase):
             paper_validation.compact_summary(result),
         )
 
+    def test_run_validation_collects_vllm_kv_log_and_writes_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = make_args(output_dir=tmpdir, workloads="vllm-kv")
+
+            def fake_run(command):
+                log_path = Path(command[command.index("--log-output") + 1])
+                log_path.write_text(vllm_log_text(), encoding="utf-8")
+                return paper_validation.subprocess.CompletedProcess(command, 0, "", "")
+
+            with mock.patch.object(paper_validation, "run_command", side_effect=fake_run):
+                result = paper_validation.run_validation(args)
+                output_exists = Path(result["workloads"][0]["data_path"]).exists()
+
+        workload = result["workloads"][0]
+        self.assertEqual(workload["status"], "ok")
+        self.assertEqual(workload["metrics"][0]["workload"], "vllm-kv")
+        self.assertEqual(workload["metrics"][0]["decision_ids"], "restore-d")
+        self.assertEqual(workload["metrics"][0]["save_decision_ids"], "save-d")
+        self.assertEqual(workload["data"]["vllm_kv_connector_restore"]["decision_ids"], "restore-d")
+        self.assertTrue(output_exists)
+        summary = paper_validation.compact_summary(result)
+        self.assertIn("paper_metric workload=vllm-kv", summary)
+        self.assertIn("save_decision_ids=save-d", summary)
+
     def test_keep_going_continues_after_missing_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             args = make_args(
@@ -290,6 +396,20 @@ class PaperValidationTest(unittest.TestCase):
             ["model-loading", "training-offload"],
         )
         self.assertEqual([item["status"] for item in result["workloads"]], ["missing-output"] * 2)
+
+    def test_vllm_kv_workload_requires_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = make_args(output_dir=tmpdir, workloads="vllm-kv", vllm_model="")
+
+            with self.assertRaisesRegex(ValueError, "--vllm-model"):
+                paper_validation.run_validation(args)
+
+    def test_vllm_kv_workload_requires_daemon_socket(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = make_args(output_dir=tmpdir, workloads="vllm-kv", daemon_socket_path="")
+
+            with self.assertRaisesRegex(ValueError, "--daemon-socket-path"):
+                paper_validation.run_validation(args)
 
     def _summary_result(self, workload: str, metrics: list[dict]) -> dict:
         return {
@@ -318,3 +438,23 @@ class PaperValidationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def vllm_log_text() -> str:
+    return "\n".join(
+        [
+            "turbobus_kv_connector_event event=register_kv_caches layers=2",
+            "turbobus_kv_connector_event event=save_layer request_id=req0 prefix_key=prefix receipt_ids=save-layer-r decision_ids=save-layer-d topology_snapshot_ids=save-layer-t ticket_ids=save-layer-ticket bytes=64 direct_bytes=32 relay_bytes=32 elapsed_ms=5 transfer_ms=5",
+            "turbobus_kv_connector_event event=wait_for_save_done requests=1",
+            "turbobus_kv_connector_event event=save request_id=req0 prefix_key=prefix receipt_ids=save-r decision_ids=save-d topology_snapshot_ids=save-t ticket_ids=save-ticket bytes=64 direct_bytes=32 relay_bytes=32 direct_chunks=1 relay_chunks=1 elapsed_ms=10 transfer_ms=8 total_ms=12 save_layer_count=2 save_layer_ranges=4",
+            "turbobus_kv_connector_event event=restore request_id=req1 prefix_key=prefix receipt_ids=restore-r decision_ids=restore-d topology_snapshot_ids=restore-t ticket_ids=restore-ticket bytes=128 direct_bytes=96 relay_bytes=32 direct_chunks=2 relay_chunks=1 elapsed_ms=20 transfer_ms=16 total_ms=22 layers=2 ranges=4 fallback_reason=quota",
+            "turbobus_kv_connector_event event=start_load_done requests=1 restore_enabled=True elapsed_ms=21",
+            "COPY_SUMMARY_BEGIN",
+            "vllm_kv_connector_config model=model job_id=job-1 session_id=session-1 cpu_buffer_id=cpu-buffer gpu_buffer_id=gpu-buffer",
+            "vllm_kv_connector_scenario type=real_vllm_kv_transfer_connector boundary=KVConnectorBase_V1 entry=start_load_kv",
+            "vllm_kv_connector_save source_request=req0 source_blocks=8 blocks=8 bytes=64 elapsed_ms=10.0 transfer_ms=8.0 direct_chunks=1 relay_chunks=1 direct_bytes=32 relay_bytes=32 receipt_ids=save-r decision_ids=save-d topology_snapshot_ids=save-t ticket_ids=save-ticket save_layer_count=2 save_layer_ranges=4",
+            "vllm_kv_connector_restore request_id=req1 prefix_key=prefix bytes=128 elapsed_ms=20.0 transfer_ms=16.0 total_ms=22.0 layers=2 ranges=4 direct_chunks=2 relay_chunks=1 direct_bytes=96 relay_bytes=32 receipt_ids=restore-r decision_ids=restore-d topology_snapshot_ids=restore-t ticket_ids=restore-ticket fallback_reason=quota",
+            "vllm_kv_connector_result source_request=req0 source_blocks=8 shared_prefix=True prompt_tokens=256",
+            "COPY_SUMMARY_END",
+        ]
+    )

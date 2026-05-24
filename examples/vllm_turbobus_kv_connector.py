@@ -63,6 +63,54 @@ def receipt_fields(event: dict | None) -> list[str]:
     ]
 
 
+def validate_lifecycle(events: list[dict], *, save_enabled: bool, restore_enabled: bool) -> None:
+    missing = []
+    if not last_event(events, "register_kv_caches"):
+        missing.append("register_kv_caches")
+    if save_enabled:
+        if not last_event(events, "save_layer"):
+            missing.append("save_kv_layer")
+        if not last_event(events, "wait_for_save_done"):
+            missing.append("wait_for_save")
+        save_event = last_event(events, "save")
+        if save_event is None:
+            missing.append("save")
+        else:
+            missing.extend(_missing_trace_fields(save_event, "save"))
+    if restore_enabled:
+        restore_event = last_event(events, "restore")
+        if restore_event is None:
+            missing.append("start_load_kv")
+        else:
+            missing.extend(_missing_trace_fields(restore_event, "restore"))
+        if not last_event(events, "start_load_done"):
+            missing.append("start_load_done")
+    if missing:
+        raise RuntimeError(
+            "TurboBus vLLM KV connector lifecycle incomplete: "
+            + ",".join(missing)
+        )
+
+
+def _missing_trace_fields(event: dict, label: str) -> list[str]:
+    required = (
+        "receipt_ids",
+        "decision_ids",
+        "topology_snapshot_ids",
+        "ticket_ids",
+        "bytes",
+        "direct_bytes",
+        "relay_bytes",
+        "transfer_ms",
+        "elapsed_ms",
+    )
+    return [
+        f"{label}.{field}"
+        for field in required
+        if event.get(field) in (None, "")
+    ]
+
+
 def run(args) -> None:
     if args.disable_multiproc_executor:
         os.environ.setdefault("VLLM_ENABLE_V1_MULTIPROCESSING", "0")
@@ -177,6 +225,11 @@ def run(args) -> None:
     )
     outputs = llm.generate([second_prompt], sampling)
     events = get_connector_events()
+    validate_lifecycle(
+        events,
+        save_enabled=args.save_enabled,
+        restore_enabled=args.restore_enabled,
+    )
     restore_event = last_event(events, "restore", prefix_key=restore_prefix_key)
     generated_text = outputs[0].outputs[0].text if outputs and outputs[0].outputs else ""
 

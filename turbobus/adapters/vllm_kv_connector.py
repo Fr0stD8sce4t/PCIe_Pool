@@ -598,6 +598,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         metadata = self._get_connector_metadata()
         if not isinstance(metadata, TurboBusConnectorMetadata) or not metadata.save_requests:
             return None
+        completed = 0
         for request in metadata.save_requests:
             context = self._layer_save_contexts.pop(request.request_id, None)
             if context is None or not context.saved_layers:
@@ -611,6 +612,14 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                     f"KV layers for request {request.request_id}"
                 )
             self._finish_layer_save_context(context)
+            completed += 1
+        self.state.events.append(
+            {
+                "event": "wait_for_save_done",
+                "requests": completed,
+            }
+        )
+        _emit_event("wait_for_save_done", requests=completed)
         return None
 
     def get_finished(self, finished_req_ids: set[str]):

@@ -45,8 +45,8 @@ applications or adapters physical path control.
 
 Phase 4 is complete. Exact daemon-issued plans are now the only production
 data-plane input; the old importable Python Runtime path and native extension
-local-planning bindings are gone. Current item: Phase 5 Cut 2, real vLLM
-server fixture and single-job save/restore run.
+local-planning bindings are gone. Current item: Phase 5 Cut 3, multi-job vLLM
+KV trace and fairness validation.
 
 ### Phase 3 Cut 1
 
@@ -233,8 +233,7 @@ python -m turbobus.verification --direction d2h --mode pool --target-gpu 0 --rel
 
 ## Phase 5 Current Work
 
-Current item: Phase 5 Cut 2, real vLLM server fixture and single-job
-save/restore run.
+Current item: Phase 5 Cut 3, multi-job vLLM KV trace and fairness validation.
 
 Cut 1: vLLM KV workload boundary and adapter inventory.
 
@@ -271,24 +270,48 @@ Completed output:
 
 Cut 2: real vLLM server fixture and single-job save/restore run.
 
+Status: complete.
+
+Completed output:
+
+- added a CUDA-server validation path that runs
+  `examples/vllm_turbobus_kv_connector.py` against an installed vLLM build and
+  a running TurboBus daemon through `benchmarks/paper_validation.py`;
+- made the example fail clearly if vLLM does not call
+  `register_kv_caches`, `save_kv_layer`, `wait_for_save`, and
+  `start_load_kv`;
+- made paper validation parse the connector log and require save and restore
+  receipt ids, decision ids, topology snapshot ids, ticket ids, bytes, path
+  split, fallback reason, and timing;
+- kept all physical path choices in daemon scheduling; vLLM validation
+  arguments name registered buffer ids and policy-neutral workload settings
+  only.
+
+Server command:
+
+```text
+python benchmarks/paper_validation.py --workloads vllm-kv --session-id vllm-kv-paper --job-id vllm-kv-paper --cpu-buffer-id vllm-kv-cpu-buffer --gpu-buffer-id vllm-kv-gpu-buffer --daemon-socket-path /tmp/turbobusd.sock --vllm-model <vllm-compatible-model> --vllm-restore-blocks 8 --vllm-matched-tokens 128 --vllm-prompt-repeat 64 --vllm-enforce-eager --output-dir benchmarks/results/paper_validation_vllm_kv --json-output benchmarks/results/paper_validation_vllm_kv/result.json --summary-output benchmarks/results/paper_validation_vllm_kv/summary.txt
+```
+
+Cut 3: multi-job vLLM KV trace and fairness validation.
+
 Status: current.
 
-- Add a CUDA-server validation fixture or command that runs
-  `examples/vllm_turbobus_kv_connector.py` against an installed vLLM build and
-  a running TurboBus daemon.
-- Ensure the example fails clearly if vLLM does not call
-  `register_kv_caches`, `save_kv_layer`, `wait_for_save`, and
-  `start_load_kv`.
-- Confirm the run emits save and restore receipt ids, decision ids, topology
-  snapshot ids, ticket ids, bytes, path split, fallback reason, and timing.
-- Keep all physical path choices in daemon scheduling; example arguments may
-  name registered buffer ids and policy-neutral workload settings only.
+- Add a validation path that runs at least two concurrent vLLM KV save/restore
+  jobs through the daemon-first connector path.
+- Use distinct job ids, session ids, and registered buffer ids so daemon
+  ownership and cross-job scheduling state are exercised.
+- Require each job output to include save and restore receipt ids, decision
+  ids, topology snapshot ids, ticket ids, bytes, path split, fallback reason,
+  timing, and job/session identity.
+- Confirm daemon profile or paper-validation output exposes enough trace data
+  to audit cross-job fairness without any application-side physical path
+  selection.
 
 Expected output:
 
-- one real single-job vLLM KV save/restore run can be executed on a CUDA
-  server through the daemon-first connector path;
-- the run output is traceable from vLLM request metadata to daemon receipts;
+- single-job vLLM KV validation remains runnable through paper validation;
+- multi-job vLLM KV validation produces per-job daemon traces and path split;
 - no Phase 5 code reintroduces application-side physical path selection.
 
 ## Phase 0 Code Cuts

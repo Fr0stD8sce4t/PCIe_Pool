@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 
@@ -11,11 +12,9 @@ from daemon_support import add_daemon_options
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BENCHMARKS = REPO_ROOT / "benchmarks"
+EXAMPLES = REPO_ROOT / "examples"
 
-WORKLOADS = ("model-loading", "training-offload")
-DEFERRED_WORKLOADS = {
-    "vllm-kv": "vLLM KV paper validation waits for the daemon-first adapter cut",
-}
+WORKLOADS = ("model-loading", "training-offload", "vllm-kv")
 OUTPUT_FILE_KEYS = ("json", "summary")
 
 
@@ -27,10 +26,6 @@ def selected_workloads(value: str) -> list[str]:
     items = parse_csv(value)
     if not items or items == ["all"]:
         return list(WORKLOADS)
-    deferred = [item for item in items if item in DEFERRED_WORKLOADS]
-    if deferred:
-        reasons = ", ".join(f"{item}: {DEFERRED_WORKLOADS[item]}" for item in deferred)
-        raise ValueError(f"workloads are not daemon-first paper-validation targets yet: {reasons}")
     unknown = [item for item in items if item not in WORKLOADS]
     if unknown:
         raise ValueError(f"unknown workloads: {unknown}")
@@ -39,10 +34,13 @@ def selected_workloads(value: str) -> list[str]:
 
 def output_paths(output_dir: Path, workload: str) -> dict[str, Path]:
     safe = workload.replace("-", "_")
-    return {
+    paths = {
         "json": output_dir / f"{safe}.json",
         "summary": output_dir / f"{safe}_summary.txt",
     }
+    if workload == "vllm-kv":
+        paths["log"] = output_dir / f"{safe}.log"
+    return paths
 
 
 def clear_workload_outputs(paths: dict[str, Path]) -> None:
@@ -146,11 +144,56 @@ def build_training_offload_command(args, paths: dict[str, Path]) -> list[str]:
     return command
 
 
+def build_vllm_kv_command(args, paths: dict[str, Path]) -> list[str]:
+    command = [
+        sys.executable,
+        str(EXAMPLES / "vllm_turbobus_kv_connector.py"),
+        "--model",
+        args.vllm_model,
+        "--job-id",
+        args.job_id,
+        "--session-id",
+        args.session_id,
+        "--cpu-buffer-id",
+        args.cpu_buffer_id,
+        "--gpu-buffer-id",
+        args.gpu_buffer_id,
+        "--prompt-repeat",
+        str(args.vllm_prompt_repeat),
+        "--second-prompt-suffix",
+        args.vllm_second_prompt_suffix,
+        "--prefix-key",
+        args.vllm_prefix_key,
+        "--matched-tokens",
+        str(args.vllm_matched_tokens),
+        "--restore-blocks",
+        str(args.vllm_restore_blocks),
+        "--restore-enabled",
+        "--chunk-bytes",
+        str(args.chunk_bytes),
+        "--daemon-socket-path",
+        args.daemon_socket_path,
+        "--log-output",
+        str(paths["log"]),
+    ]
+    if args.vllm_prompt:
+        command.extend(["--prompt", args.vllm_prompt])
+    if args.vllm_wait_timeout_seconds is not None:
+        command.extend(["--wait-timeout-seconds", str(args.vllm_wait_timeout_seconds)])
+    if args.vllm_enforce_eager:
+        command.append("--enforce-eager")
+    if args.vllm_enable_multiproc_executor:
+        command.append("--enable-multiproc-executor")
+    return command
+
+
 def build_workload_command(args, workload: str, paths: dict[str, Path]) -> list[str]:
     if workload == "model-loading":
         return build_model_loading_command(args, paths)
     if workload == "training-offload":
         return build_training_offload_command(args, paths)
+    if workload == "vllm-kv":
+        return build_vllm_kv_command(args, paths)
     raise ValueError(f"unsupported workload: {workload}")
 
 
@@ -168,6 +211,39 @@ def read_json(path: Path, default):
     if not path.exists():
         return default
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def parse_summary_line(line: str) -> tuple[str, dict[str, str]]:
+    parts = shlex.split(str(line))
+    if not parts:
+        return "", {}
+    values = {}
+    for item in parts[1:]:
+        if "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        values[key] = value
+    return parts[0], values
+
+
+def parse_vllm_kv_summary(log_path: Path) -> dict[str, dict[str, str]]:
+    if not log_path.exists():
+        return {}
+    parsed = {}
+    in_summary = False
+    for raw_line in log_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if line == "COPY_SUMMARY_BEGIN":
+            in_summary = True
+            continue
+        if line == "COPY_SUMMARY_END":
+            break
+        if not in_summary:
+            continue
+        name, values = parse_summary_line(line)
+        if name:
+            parsed[name] = values
+    return parsed
 
 
 def as_float(value, default: float = 0.0) -> float:
@@ -194,6 +270,12 @@ def join_values(values) -> str:
     if isinstance(values, (list, tuple, set)):
         return ",".join(str(item) for item in values if item not in (None, ""))
     return str(values)
+
+
+def _gib_per_second_value(byte_count: int, elapsed_ms: float) -> float:
+    if byte_count <= 0 or elapsed_ms <= 0:
+        return 0.0
+    return float(byte_count) / (1024.0**3) / (float(elapsed_ms) / 1000.0)
 
 
 def collect_model_metrics(result: dict) -> list[dict[str, object]]:
@@ -273,12 +355,62 @@ def collect_training_metrics(result: dict) -> list[dict[str, object]]:
     ]
 
 
+def collect_vllm_kv_metrics(summary: dict) -> list[dict[str, object]]:
+    config = summary.get("vllm_kv_connector_config", {}) or {}
+    save = summary.get("vllm_kv_connector_save", {}) or {}
+    restore = summary.get("vllm_kv_connector_restore", {}) or {}
+    result = summary.get("vllm_kv_connector_result", {}) or {}
+    if not save or not restore:
+        return []
+    return [
+        {
+            "workload": "vllm-kv",
+            "policy": "daemon-default",
+            "iterations": 1,
+            "ttft_proxy_ms": as_float(restore.get("total_ms")),
+            "transfer_ms": as_float(restore.get("transfer_ms")),
+            "throughput_gib_s": _gib_per_second_value(
+                as_int(restore.get("bytes")),
+                as_float(restore.get("transfer_ms")),
+            ),
+            "transfer_bytes": as_int(restore.get("bytes")),
+            "bytes_completed": as_int(restore.get("bytes")),
+            "direct_bytes": as_int(restore.get("direct_bytes")),
+            "relay_bytes": as_int(restore.get("relay_bytes")),
+            "direct_chunks": as_int(restore.get("direct_chunks")),
+            "relay_chunks": as_int(restore.get("relay_chunks")),
+            "decision_ids": join_values(restore.get("decision_ids")),
+            "topology_snapshot_ids": join_values(restore.get("topology_snapshot_ids")),
+            "ticket_ids": join_values(restore.get("ticket_ids")),
+            "save_decision_ids": join_values(save.get("decision_ids")),
+            "save_topology_snapshot_ids": join_values(save.get("topology_snapshot_ids")),
+            "save_ticket_ids": join_values(save.get("ticket_ids")),
+            "fallback_reason": join_values(restore.get("fallback_reason")),
+            "save_receipt_ids": join_values(save.get("receipt_ids")),
+            "restore_receipt_ids": join_values(restore.get("receipt_ids")),
+            "save_ms": as_float(save.get("elapsed_ms")),
+            "restore_ms": as_float(restore.get("elapsed_ms")),
+            "save_layer_count": as_int(save.get("save_layer_count")),
+            "save_layer_ranges": as_int(save.get("save_layer_ranges")),
+            "restore_layers": as_int(restore.get("layers")),
+            "restore_ranges": as_int(restore.get("ranges")),
+            "prompt_tokens": as_int(result.get("prompt_tokens")),
+            "shared_prefix": str(result.get("shared_prefix", "")),
+            "model": str(config.get("model", "")),
+        }
+    ]
+
+
 def collect_workload_metrics(workload: str, paths: dict[str, Path]) -> tuple[object, list[dict]]:
     data = read_json(paths["json"], {})
     if workload == "model-loading":
         return data, collect_model_metrics(data)
     if workload == "training-offload":
         return data, collect_training_metrics(data)
+    if workload == "vllm-kv":
+        if not data:
+            data = parse_vllm_kv_summary(paths["log"])
+        return data, collect_vllm_kv_metrics(data)
     raise ValueError(f"unsupported workload: {workload}")
 
 
@@ -298,6 +430,35 @@ def workload_validation_errors(data_path: Path, metrics: list[dict]) -> list[str
     ]
     if missing_trace:
         errors.append("missing_daemon_trace")
+    return errors
+
+
+def vllm_kv_validation_errors(paths: dict[str, Path], metrics: list[dict]) -> list[str]:
+    errors = workload_validation_errors(paths["json"], metrics)
+    if not paths["log"].exists():
+        errors.append("missing_log_file")
+        return errors
+    summary = parse_vllm_kv_summary(paths["log"])
+    for key in (
+        "vllm_kv_connector_config",
+        "vllm_kv_connector_scenario",
+        "vllm_kv_connector_save",
+        "vllm_kv_connector_restore",
+        "vllm_kv_connector_result",
+    ):
+        if key not in summary:
+            errors.append(f"missing_{key}")
+    text = paths["log"].read_text(encoding="utf-8")
+    for event in (
+        "register_kv_caches",
+        "save_layer",
+        "wait_for_save_done",
+        "save",
+        "restore",
+        "start_load_done",
+    ):
+        if f"turbobus_kv_connector_event event={event}" not in text:
+            errors.append(f"missing_event_{event}")
     return errors
 
 
@@ -340,6 +501,17 @@ def metric_line(metric: dict) -> str:
         "ticket_ids",
         "prefetch_decision_ids",
         "offload_decision_ids",
+        "save_decision_ids",
+        "save_topology_snapshot_ids",
+        "save_ticket_ids",
+        "save_ms",
+        "restore_ms",
+        "save_layer_count",
+        "save_layer_ranges",
+        "restore_layers",
+        "restore_ranges",
+        "prompt_tokens",
+        "shared_prefix",
         "fallback_reason",
     ]
     fields = ["paper_metric"]
@@ -399,6 +571,10 @@ def run_validation(args) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     workloads = selected_workloads(args.workloads)
+    if "vllm-kv" in workloads and not str(args.vllm_model).strip():
+        raise ValueError("--vllm-model is required when workload vllm-kv is selected")
+    if "vllm-kv" in workloads and not str(args.daemon_socket_path).strip():
+        raise ValueError("--daemon-socket-path is required when workload vllm-kv is selected")
     result = {
         "config": {
             "session_id": args.session_id,
@@ -413,6 +589,7 @@ def run_validation(args) -> dict:
             "daemon_socket_path": args.daemon_socket_path,
             "daemon_max_inflight_chunks": args.daemon_max_inflight_chunks,
             "daemon_profile_max_age_seconds": args.daemon_profile_max_age_seconds,
+            "vllm_model": args.vllm_model,
         },
         "workloads": [],
     }
@@ -443,7 +620,12 @@ def run_validation(args) -> dict:
                 metrics = []
                 validation_errors.append("invalid_output")
                 validation_errors.append(type(exc).__name__)
-            validation_errors.extend(workload_validation_errors(data_path, metrics))
+            if workload == "vllm-kv":
+                if data:
+                    write_json(data_path, data)
+                validation_errors.extend(vllm_kv_validation_errors(paths, metrics))
+            else:
+                validation_errors.extend(workload_validation_errors(data_path, metrics))
         status = workload_status(args.dry_run, completed.returncode, validation_errors)
         result["workloads"].append(
             {
@@ -470,7 +652,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--workloads",
         default="all",
-        help="Comma-separated: all, model-loading, training-offload",
+        help="Comma-separated: all, model-loading, training-offload, vllm-kv",
     )
     parser.add_argument("--session-id", required=True)
     parser.add_argument("--job-id", default="paper-validation")
@@ -497,6 +679,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json-output")
     parser.add_argument("--summary-output")
     parser.add_argument("--no-copy-summary", action="store_true")
+    parser.add_argument("--vllm-model", default="")
+    parser.add_argument("--vllm-prompt", default="")
+    parser.add_argument("--vllm-prompt-repeat", type=int, default=64)
+    parser.add_argument("--vllm-second-prompt-suffix", default=" Italy")
+    parser.add_argument("--vllm-prefix-key", default="paper-validation-vllm-kv")
+    parser.add_argument("--vllm-restore-blocks", type=int, default=8)
+    parser.add_argument("--vllm-matched-tokens", type=int, default=128)
+    parser.add_argument("--vllm-wait-timeout-seconds", type=float, default=None)
+    parser.add_argument("--vllm-enforce-eager", action="store_true")
+    parser.add_argument("--vllm-enable-multiproc-executor", action="store_true")
     add_daemon_options(parser)
     return parser
 
