@@ -716,6 +716,9 @@ class SchemaTest(unittest.TestCase):
                     link_generation=5,
                     link_width=16,
                     bandwidth_gbps=63.0,
+                    negotiated_speed_gtps=32.0,
+                    switch_hierarchy=("switch-a", "switch-b"),
+                    bandwidth_source="provider",
                 ),
             ),
             fabric_links=(
@@ -725,6 +728,9 @@ class SchemaTest(unittest.TestCase):
                     fabric="nvlink",
                     bandwidth_gbps=100.0,
                     enabled=True,
+                    link_count=2,
+                    capability="nvlink",
+                    raw_link_type="NV2",
                 ),
             ),
             source="test",
@@ -738,7 +744,14 @@ class SchemaTest(unittest.TestCase):
         self.assertEqual(payload["gpus"][1]["vendor"], "amd")
         self.assertFalse(payload["gpus"][1]["visible"])
         self.assertEqual(payload["pcie_paths"][0]["link_width"], 16)
+        self.assertEqual(payload["pcie_paths"][0]["negotiated_speed_gtps"], 32.0)
+        self.assertEqual(
+            payload["pcie_paths"][0]["switch_hierarchy"],
+            ["switch-a", "switch-b"],
+        )
         self.assertEqual(payload["fabric_links"][0]["fabric"], "nvlink")
+        self.assertEqual(payload["fabric_links"][0]["link_count"], 2)
+        self.assertEqual(payload["fabric_links"][0]["raw_link_type"], "NV2")
         self.assertEqual(payload["metadata"]["note"], "injected")
 
     def test_daemon_resource_inventory_validation_rejects_invalid_values(self) -> None:
@@ -747,7 +760,11 @@ class SchemaTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             PciePathRecord(device_id=0, bandwidth_gbps=-1.0)
         with self.assertRaises(ValueError):
+            PciePathRecord(device_id=0, negotiated_speed_gtps=-1.0)
+        with self.assertRaises(ValueError):
             FabricLinkRecord(src_device_id=0, dst_device_id=0)
+        with self.assertRaises(ValueError):
+            FabricLinkRecord(src_device_id=0, dst_device_id=1, link_count=-1)
         with self.assertRaises(ValueError):
             DaemonResourceInventory(source="")
 

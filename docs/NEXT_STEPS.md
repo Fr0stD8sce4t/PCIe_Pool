@@ -117,7 +117,16 @@ boundary, a CUDA/NVML provider backed by `nvidia-smi`, versioned topology
 snapshot ids, and production startup validation that rejects synthetic fixture
 topology or insufficient relay discovery.
 
+Phase 1 Cut 2 is complete. Topology records now normalize GPU NUMA,
+visibility, backend/vendor, PCIe link generation, width, negotiated speed,
+estimated bandwidth, bandwidth source, switch hierarchy, and fabric raw link
+type/capability/link count. `GET_INVENTORY` and relay discovery now expose the
+normalized fields, and relay discovery includes a `path_capabilities` summary
+for each candidate relay.
+
 Current phase: Phase 1, automatic topology discovery.
+
+Current item: Phase 1 Cut 3, topology refresh and relay discovery completion.
 
 ## Phase 0 Code Cuts
 
@@ -375,8 +384,7 @@ Phase 0 is complete.
 
 ## Phase 1 Current Work
 
-Current item: Phase 1 Cut 2, complete GPU, PCIe, and fabric capability
-normalization.
+Current item: Phase 1 Cut 3, topology refresh and relay discovery completion.
 
 Cut 1: topology provider boundary and production startup contract.
 
@@ -399,7 +407,7 @@ Expected output:
 
 Cut 2: complete GPU, PCIe, and fabric capability normalization.
 
-Status: current.
+Status: complete.
 
 - Normalize provider output for GPU UUID, PCI bus id, NUMA node, memory size,
   visibility, and backend/vendor fields.
@@ -417,6 +425,30 @@ Expected output:
   fields with stable topology snapshot ids;
 - the daemon can explain why each candidate relay is eligible or filtered;
 - production startup still fails clearly when policy requirements are not met.
+
+Cut 3: topology refresh and relay discovery completion.
+
+Status: current.
+
+- Add an explicit daemon-owned topology refresh or invalidation path for
+  providers that cache discovery results.
+- Keep synthetic topology confined to explicit fixtures; do not add a
+  production fallback when refresh fails.
+- Ensure `GET_INVENTORY` and `DISCOVER_RELAYS` report stable snapshot ids,
+  version changes after invalidation, eligible relays, filtered relays,
+  filtering reasons, and per-relay path capabilities.
+- Add focused tests for cache invalidation, provider refresh behavior, and
+  relay discovery output after topology changes.
+- Preserve clear production startup failure when discovery or relay policy
+  cannot be satisfied.
+
+Expected output:
+
+- daemon topology refresh changes snapshot id/version when the provider
+  discovers new state;
+- relay discovery can be audited from snapshot id to candidate path
+  capabilities;
+- Phase 1 exit criteria are ready to validate on a real multi-GPU server.
 
 ## After Phase 0
 

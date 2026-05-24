@@ -1607,6 +1607,12 @@ class TurboBusDaemon:
                 if path.device_id == relay
             ],
             "fabric_links": fabric_links,
+            "path_capabilities": _relay_path_capabilities(
+                inventory,
+                relay_gpu=relay,
+                target_gpu=target,
+                fabric_links=fabric_links,
+            ),
         }
 
     def _relay_session_records_locked(self, relay_gpu: int) -> list[dict[str, object]]:
@@ -1779,6 +1785,63 @@ def _topology_unavailable_response() -> DaemonResponse:
         ok=False,
         error="topology provider is required; synthetic topology is test fixture only",
     )
+
+
+def _relay_path_capabilities(
+    inventory,
+    *,
+    relay_gpu: int,
+    target_gpu: int | None,
+    fabric_links: list[dict[str, object]],
+) -> dict[str, object]:
+    pcie_paths = [
+        path for path in inventory.pcie_paths if path.device_id == int(relay_gpu)
+    ]
+    pcie_path = pcie_paths[0] if pcie_paths else None
+    enabled_fabric_links = [
+        link for link in fabric_links if bool(link.get("enabled", False))
+    ]
+    fabric_bandwidths = [
+        float(link.get("bandwidth_gbps", 0.0) or 0.0)
+        for link in enabled_fabric_links
+    ]
+    return {
+        "relay_gpu": int(relay_gpu),
+        "target_gpu": target_gpu,
+        "has_pcie_path": pcie_path is not None,
+        "pcie_root_complex": None if pcie_path is None else pcie_path.root_complex,
+        "pcie_numa_node": None if pcie_path is None else pcie_path.numa_node,
+        "pcie_link_generation": (
+            None if pcie_path is None else pcie_path.link_generation
+        ),
+        "pcie_link_width": None if pcie_path is None else pcie_path.link_width,
+        "pcie_negotiated_speed_gtps": (
+            None if pcie_path is None else pcie_path.negotiated_speed_gtps
+        ),
+        "pcie_bandwidth_gbps": (
+            0.0 if pcie_path is None else pcie_path.bandwidth_gbps
+        ),
+        "pcie_bandwidth_source": (
+            None if pcie_path is None else pcie_path.bandwidth_source
+        ),
+        "pcie_switch_hierarchy": (
+            [] if pcie_path is None else list(pcie_path.switch_hierarchy)
+        ),
+        "fabric_link_count": len(fabric_links),
+        "enabled_fabric_link_count": len(enabled_fabric_links),
+        "fabric_kinds": sorted(
+            {str(link.get("fabric")) for link in enabled_fabric_links}
+        ),
+        "fabric_capabilities": sorted(
+            {
+                str(link.get("capability"))
+                for link in enabled_fabric_links
+                if link.get("capability") is not None
+            }
+        ),
+        "fabric_bandwidth_gbps": sum(fabric_bandwidths),
+        "p2p_enabled": bool(enabled_fabric_links),
+    }
 
 
 def _relay_ranges_from_plan(

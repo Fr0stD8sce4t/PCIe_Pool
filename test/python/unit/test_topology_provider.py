@@ -38,15 +38,31 @@ class TopologyProviderTest(unittest.TestCase):
         self.assertEqual(first.snapshot_id, "topology-cuda_nvml-v1-100.000000")
         self.assertEqual(first.gpus[0].uuid, "GPU-0000")
         self.assertEqual(first.gpus[0].pci_bus_id, "0000:01:00.0")
+        self.assertEqual(first.gpus[0].numa_node, 0)
         self.assertEqual(first.gpus[0].memory_bytes, 80 * 1024 * 1024)
         self.assertEqual(first.pcie_paths[0].root_complex, "0000:01")
+        self.assertEqual(first.pcie_paths[0].numa_node, 0)
+        self.assertEqual(first.pcie_paths[0].link_generation, 5)
+        self.assertEqual(first.pcie_paths[0].link_width, 16)
+        self.assertEqual(first.pcie_paths[0].negotiated_speed_gtps, 32.0)
+        self.assertEqual(first.pcie_paths[0].bandwidth_gbps, 63.008)
+        self.assertEqual(
+            first.pcie_paths[0].bandwidth_source,
+            "estimated_from_pcie_generation_width",
+        )
+        self.assertEqual(first.pcie_paths[0].switch_hierarchy, ("switch-a", "switch-b"))
         self.assertEqual(first.fabric_links[0].fabric, "nvlink")
         self.assertEqual(first.fabric_links[0].src_device_id, 0)
         self.assertEqual(first.fabric_links[0].dst_device_id, 1)
+        self.assertEqual(first.fabric_links[0].link_count, 2)
+        self.assertEqual(first.fabric_links[0].capability, "nvlink")
+        self.assertEqual(first.fabric_links[0].raw_link_type, "NV2")
         self.assertEqual(topology.snapshot_id, first.snapshot_id)
         self.assertEqual(topology.version, 1)
         self.assertEqual(topology.devices[0]["uuid"], "GPU-0000")
         self.assertEqual(topology.pcie_links[0]["root_complex"], "0000:01")
+        self.assertEqual(topology.pcie_links[0]["link_width"], 16)
+        self.assertEqual(topology.fabric_links[0]["link_count"], 2)
 
     def test_cuda_provider_invalidates_cached_snapshot(self) -> None:
         clock = FakeClock(100.0)
@@ -64,6 +80,37 @@ class TopologyProviderTest(unittest.TestCase):
         self.assertIsNot(first, second)
         self.assertEqual(second.version, 2)
         self.assertEqual(second.snapshot_id, "topology-cuda_nvml-v2-101.000000")
+
+    def test_cuda_provider_keeps_missing_pcie_capabilities_explicit(self) -> None:
+        provider = CudaNvmlTopologyProvider(
+            MinimalFakeCudaProbe(),
+            cache_max_age_seconds=0.0,
+            now=FakeClock(100.0),
+        )
+
+        inventory = provider.snapshot()
+
+        self.assertIsNone(inventory.gpus[0].numa_node)
+        self.assertIsNone(inventory.pcie_paths[0].link_generation)
+        self.assertIsNone(inventory.pcie_paths[0].link_width)
+        self.assertIsNone(inventory.pcie_paths[0].negotiated_speed_gtps)
+        self.assertEqual(inventory.pcie_paths[0].bandwidth_gbps, 0.0)
+        self.assertIsNone(inventory.pcie_paths[0].bandwidth_source)
+
+    def test_cuda_provider_normalizes_cuda_p2p_fabric_links(self) -> None:
+        provider = CudaNvmlTopologyProvider(
+            PixFakeCudaProbe(),
+            cache_max_age_seconds=0.0,
+            now=FakeClock(100.0),
+        )
+
+        inventory = provider.snapshot()
+
+        self.assertEqual(inventory.fabric_links[0].fabric, "cuda_p2p")
+        self.assertEqual(inventory.fabric_links[0].capability, "cuda_p2p_pix")
+        self.assertEqual(inventory.fabric_links[0].raw_link_type, "PIX")
+        self.assertIsNone(inventory.fabric_links[0].link_count)
+        self.assertTrue(inventory.fabric_links[0].enabled)
 
     def test_production_startup_selects_eligible_relays_from_provider_inventory(self) -> None:
         config = DaemonStartupConfig(
@@ -84,6 +131,12 @@ class TopologyProviderTest(unittest.TestCase):
         self.assertEqual(payload["requested_relays"], [1])
         self.assertEqual(payload["summary"]["eligible_relay_count"], 1)
         self.assertEqual(payload["relays"][0]["eligibility"]["reason"], "eligible")
+        capabilities = payload["relays"][0]["inventory"]["path_capabilities"]
+        self.assertTrue(capabilities["has_pcie_path"])
+        self.assertEqual(capabilities["enabled_fabric_link_count"], 1)
+        self.assertEqual(capabilities["fabric_kinds"], ["nvlink"])
+        self.assertEqual(capabilities["fabric_bandwidth_gbps"], 100.0)
+        self.assertTrue(capabilities["p2p_enabled"])
 
     def test_production_startup_rejects_fixture_topology(self) -> None:
         config = DaemonStartupConfig(target_gpu=0, min_relay_count=1)
@@ -159,6 +212,38 @@ class FakeCudaProbe:
                 "device_id": 0,
                 "uuid": "GPU-0000",
                 "pci_bus_id": "0000:01:00.0",
+                "numa_node": "0",
+                "memory_mib": "80",
+                "pcie_link_gen_current": "5",
+                "pcie_link_width_current": "16",
+                "switch_hierarchy": ("switch-a", "switch-b"),
+            },
+            {
+                "device_id": 1,
+                "uuid": "GPU-1111",
+                "pci_bus_id": "0000:02:00.0",
+                "numa_node": "0",
+                "memory_mib": "40",
+                "pcie_link_gen_current": "4",
+                "pcie_link_width_current": "16",
+            },
+        )
+
+    def query_topology_matrix(self):
+        return (
+            "        GPU0    GPU1",
+            "GPU0    X       NV2",
+            "GPU1    NV2     X",
+        )
+
+
+class MinimalFakeCudaProbe:
+    def query_gpu_inventory(self):
+        return (
+            {
+                "device_id": 0,
+                "uuid": "GPU-0000",
+                "pci_bus_id": "0000:01:00.0",
                 "memory_mib": "80",
             },
             {
@@ -170,10 +255,15 @@ class FakeCudaProbe:
         )
 
     def query_topology_matrix(self):
+        return ()
+
+
+class PixFakeCudaProbe(FakeCudaProbe):
+    def query_topology_matrix(self):
         return (
             "        GPU0    GPU1",
-            "GPU0    X       NV2",
-            "GPU1    NV2     X",
+            "GPU0    X       PIX",
+            "GPU1    PIX     X",
         )
 
 

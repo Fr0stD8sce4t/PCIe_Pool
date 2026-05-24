@@ -19,6 +19,46 @@ class TopologyDiscoveryError(RuntimeError):
     pass
 
 
+_GPU_QUERY_FIELD_SETS = (
+    (
+        "index",
+        "uuid",
+        "pci.bus_id",
+        "memory.total",
+        "pcie.link.gen.current",
+        "pcie.link.width.current",
+    ),
+    ("index", "uuid", "pci.bus_id", "memory.total"),
+)
+
+_GPU_QUERY_FIELD_KEYS = {
+    "index": "device_id",
+    "uuid": "uuid",
+    "pci.bus_id": "pci_bus_id",
+    "memory.total": "memory_mib",
+    "pcie.link.gen.current": "pcie_link_gen_current",
+    "pcie.link.width.current": "pcie_link_width_current",
+}
+
+_PCIE_EFFECTIVE_GBPS_PER_LANE = {
+    1: 0.25,
+    2: 0.5,
+    3: 0.985,
+    4: 1.969,
+    5: 3.938,
+    6: 7.877,
+}
+
+_PCIE_RAW_GT_PER_SECOND = {
+    1: 2.5,
+    2: 5.0,
+    3: 8.0,
+    4: 16.0,
+    5: 32.0,
+    6: 64.0,
+}
+
+
 class CudaTopologyProbe(Protocol):
     def query_gpu_inventory(self) -> Sequence[Mapping[str, object]]:
         ...
@@ -33,28 +73,36 @@ class NvidiaSmiProbe:
     timeout_seconds: float = 5.0
 
     def query_gpu_inventory(self) -> Sequence[Mapping[str, object]]:
-        command = [
-            self.executable,
-            "--query-gpu=index,uuid,pci.bus_id,memory.total",
-            "--format=csv,noheader,nounits",
-        ]
-        output = self._run(command)
+        last_error: TopologyDiscoveryError | None = None
+        for fields in _GPU_QUERY_FIELD_SETS:
+            try:
+                return self._query_gpu_inventory_fields(fields)
+            except TopologyDiscoveryError as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        return ()
+
+    def _query_gpu_inventory_fields(
+        self,
+        fields: Sequence[str],
+    ) -> Sequence[Mapping[str, object]]:
+        output = self._run(
+            [
+                self.executable,
+                "--query-gpu=" + ",".join(fields),
+                "--format=csv,noheader,nounits",
+            ]
+        )
         rows = []
         for row in csv.reader(output.splitlines()):
             if not row:
                 continue
-            if len(row) < 4:
+            if len(row) < len(fields):
                 raise TopologyDiscoveryError(
                     "nvidia-smi gpu inventory output is missing fields"
                 )
-            rows.append(
-                {
-                    "device_id": row[0].strip(),
-                    "uuid": row[1].strip(),
-                    "pci_bus_id": row[2].strip(),
-                    "memory_mib": row[3].strip(),
-                }
-            )
+            rows.append(_inventory_row_from_query(fields, row))
         return rows
 
     def query_topology_matrix(self) -> Sequence[str]:
@@ -103,13 +151,17 @@ class CudaNvmlTopologyProvider(TopologyProvider):
             if self._cache_max_age_seconds > 0.0 and age <= self._cache_max_age_seconds:
                 return self._cached_inventory
 
-        gpus = tuple(_gpu_record(row) for row in self._probe.query_gpu_inventory())
+        gpu_rows = tuple(self._probe.query_gpu_inventory())
+        gpus = tuple(_gpu_record(row) for row in gpu_rows)
         if not gpus:
             raise TopologyDiscoveryError("cuda-nvml topology discovery found no GPUs")
         self._version += 1
         inventory = DaemonResourceInventory(
             gpus=gpus,
-            pcie_paths=tuple(_pcie_path_for_gpu(gpu) for gpu in gpus),
+            pcie_paths=tuple(
+                _pcie_path_for_gpu(gpu, row)
+                for gpu, row in zip(gpus, gpu_rows)
+            ),
             fabric_links=tuple(
                 _fabric_links_from_topology_matrix(
                     gpus,
@@ -138,21 +190,89 @@ def _gpu_record(row: Mapping[str, object]) -> GpuInventoryRecord:
     memory_bytes = _memory_bytes(row)
     return GpuInventoryRecord(
         device_id=device_id,
-        backend="cuda",
-        vendor="nvidia",
+        backend=_optional_str(row.get("backend")) or "cuda",
+        vendor=_optional_str(row.get("vendor")) or "nvidia",
         uuid=_optional_str(row.get("uuid")),
         pci_bus_id=_optional_str(row.get("pci_bus_id")),
+        numa_node=_first_int(row, ("numa_node", "numa")),
         memory_bytes=memory_bytes,
-        role="general",
-        visible=bool(row.get("visible", True)),
+        role=_optional_str(row.get("role")) or "general",
+        visible=_optional_bool(row.get("visible"), default=True),
     )
 
 
-def _pcie_path_for_gpu(gpu: GpuInventoryRecord) -> PciePathRecord:
+def _pcie_path_for_gpu(
+    gpu: GpuInventoryRecord,
+    row: Mapping[str, object],
+) -> PciePathRecord:
+    link_generation = _first_int(
+        row,
+        (
+            "pcie_link_gen_current",
+            "pcie.link.gen.current",
+            "link_generation",
+        ),
+    )
+    link_width = _first_int(
+        row,
+        (
+            "pcie_link_width_current",
+            "pcie.link.width.current",
+            "link_width",
+        ),
+    )
+    explicit_bandwidth = _first_float(
+        row,
+        ("pcie_bandwidth_gbps", "bandwidth_gbps"),
+    )
+    estimated_bandwidth = _estimate_pcie_bandwidth_gbps(
+        link_generation,
+        link_width,
+    )
+    bandwidth = (
+        explicit_bandwidth
+        if explicit_bandwidth is not None
+        else estimated_bandwidth or 0.0
+    )
+    bandwidth_source = None
+    if explicit_bandwidth is not None:
+        bandwidth_source = "provider"
+    elif estimated_bandwidth is not None:
+        bandwidth_source = "estimated_from_pcie_generation_width"
+    negotiated_speed_gtps = _first_float(
+        row,
+        (
+            "pcie_speed_gtps",
+            "negotiated_speed_gtps",
+            "pcie.link.speed.current",
+        ),
+    )
+    if negotiated_speed_gtps is None:
+        negotiated_speed_gtps = _pcie_raw_gtps_for_generation(link_generation)
     return PciePathRecord(
         device_id=gpu.device_id,
-        root_complex=_root_complex_from_pci_bus_id(gpu.pci_bus_id),
+        numa_node=gpu.numa_node,
+        root_complex=(
+            _optional_str(row.get("root_complex"))
+            or _root_complex_from_pci_bus_id(gpu.pci_bus_id)
+        ),
+        link_generation=link_generation,
+        link_width=link_width,
+        bandwidth_gbps=bandwidth,
+        negotiated_speed_gtps=negotiated_speed_gtps,
+        switch_hierarchy=_switch_hierarchy(row.get("switch_hierarchy")),
+        bandwidth_source=bandwidth_source,
     )
+
+
+def _inventory_row_from_query(
+    fields: Sequence[str],
+    values: Sequence[str],
+) -> Mapping[str, object]:
+    row: dict[str, object] = {}
+    for field, value in zip(fields, values):
+        row[_GPU_QUERY_FIELD_KEYS.get(field, field.replace(".", "_"))] = value.strip()
+    return row
 
 
 def _memory_bytes(row: Mapping[str, object]) -> int | None:
@@ -167,7 +287,92 @@ def _optional_str(value: object | None) -> str | None:
     if value is None:
         return None
     text = str(value).strip()
+    if text.upper() in {"N/A", "NA", "NONE", "UNKNOWN", "[NOT SUPPORTED]"}:
+        return None
     return text or None
+
+
+def _optional_bool(value: object | None, *, default: bool) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "visible"}:
+        return True
+    if text in {"0", "false", "no", "n", "hidden"}:
+        return False
+    return bool(value)
+
+
+def _first_int(
+    row: Mapping[str, object],
+    keys: Sequence[str],
+) -> int | None:
+    for key in keys:
+        value = row.get(key)
+        if value is None:
+            continue
+        text = _optional_str(value)
+        if text is None:
+            continue
+        try:
+            return int(float(text))
+        except ValueError:
+            continue
+    return None
+
+
+def _first_float(
+    row: Mapping[str, object],
+    keys: Sequence[str],
+) -> float | None:
+    for key in keys:
+        value = row.get(key)
+        if value is None:
+            continue
+        text = _optional_str(value)
+        if text is None:
+            continue
+        try:
+            return float(text)
+        except ValueError:
+            continue
+    return None
+
+
+def _switch_hierarchy(value: object | None) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        parts = value.replace(">", ",").replace("/", ",").split(",")
+        return tuple(part.strip() for part in parts if part.strip())
+    if isinstance(value, Sequence):
+        return tuple(
+            text
+            for item in value
+            if (text := str(item).strip())
+        )
+    text = str(value).strip()
+    return (text,) if text else ()
+
+
+def _estimate_pcie_bandwidth_gbps(
+    link_generation: int | None,
+    link_width: int | None,
+) -> float | None:
+    if link_generation is None or link_width is None:
+        return None
+    per_lane = _PCIE_EFFECTIVE_GBPS_PER_LANE.get(int(link_generation))
+    if per_lane is None or int(link_width) <= 0:
+        return None
+    return round(per_lane * int(link_width), 3)
+
+
+def _pcie_raw_gtps_for_generation(link_generation: int | None) -> float | None:
+    if link_generation is None:
+        return None
+    return _PCIE_RAW_GT_PER_SECOND.get(int(link_generation))
 
 
 def _root_complex_from_pci_bus_id(pci_bus_id: str | None) -> str | None:
@@ -205,17 +410,20 @@ def _fabric_links_from_topology_matrix(
             if src > dst:
                 continue
             token = row[column + 1]
-            fabric = _fabric_name(token)
-            if fabric is None:
+            capability = _fabric_capability(token)
+            if capability is None:
                 continue
             links.append(
                 FabricLinkRecord(
                     src_device_id=src,
                     dst_device_id=dst,
-                    fabric=fabric,
+                    fabric=str(capability["fabric"]),
                     bandwidth_gbps=0.0,
                     bidirectional=True,
                     enabled=True,
+                    link_count=capability.get("link_count"),
+                    capability=str(capability["capability"]),
+                    raw_link_type=str(capability["raw_link_type"]),
                 )
             )
     return tuple(links)
@@ -231,15 +439,33 @@ def _matrix_gpu_id(value: str) -> int | None:
         return None
 
 
-def _fabric_name(token: str) -> str | None:
+def _fabric_capability(token: str) -> dict[str, object] | None:
     normalized = str(token).strip().upper()
     if not normalized or normalized in {"X", "N/A", "SYS", "NODE"}:
         return None
     if normalized.startswith("NV"):
-        return "nvlink"
+        fabric = "nvswitch" if normalized in {"NVSW", "NVS", "NVSWITCH"} else "nvlink"
+        return {
+            "fabric": fabric,
+            "capability": fabric,
+            "link_count": _nvlink_count(normalized),
+            "raw_link_type": normalized,
+        }
     if normalized in {"PIX", "PXB", "PHB"}:
-        return "cuda_p2p"
+        return {
+            "fabric": "cuda_p2p",
+            "capability": f"cuda_p2p_{normalized.lower()}",
+            "link_count": None,
+            "raw_link_type": normalized,
+        }
     return None
+
+
+def _nvlink_count(token: str) -> int | None:
+    suffix = str(token).strip().upper()[2:]
+    if not suffix.isdigit():
+        return None
+    return int(suffix)
 
 
 __all__ = [

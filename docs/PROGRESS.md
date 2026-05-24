@@ -118,6 +118,15 @@ The active target architecture is:
   through `create_production_daemon`, rejects synthetic fixture topology for
   production startup, validates relay policy against discovered topology, and
   reports topology snapshot ids in relay discovery.
+- Phase 1 Cut 2 is complete. Topology records now carry normalized PCIe
+  negotiated speed, switch hierarchy, bandwidth source, and fabric
+  raw-link/capability/link-count fields. The CUDA/NVML provider parses richer
+  `nvidia-smi` GPU query output when available, falls back to identity-only
+  query output when required, keeps missing capabilities explicit, estimates
+  PCIe bandwidth from generation and width, and normalizes NVLink/NVSwitch and
+  CUDA P2P topology-matrix tokens. Relay discovery now reports
+  `path_capabilities` for each candidate relay beside eligibility and filtered
+  reasons.
 
 ## Active Phase
 
@@ -134,8 +143,7 @@ Phase 1 covers:
 
 ## Next Work Items
 
-Current item: Phase 1 Cut 2, complete GPU, PCIe, and fabric capability
-normalization.
+Current item: Phase 1 Cut 3, topology refresh and relay discovery completion.
 
 1. Shared schema layer.
    - Status: complete.
@@ -214,11 +222,12 @@ normalization.
    - Cut 1 complete: daemon-owned topology provider boundary, CUDA/NVML
      provider, versioned topology snapshot ids, production startup provider
      selection, fixture rejection, and startup relay policy validation.
-   - Cut 2 current: normalize GPU UUID, PCI bus id, NUMA, memory, PCIe link,
-     and fabric capability fields from production discovery.
-   - Later Phase 1 work: cache invalidation policy, daemon reporting of
-     eligible and filtered relay candidates for real machines, and clear
-     production failure paths when discovery cannot satisfy policy.
+   - Cut 2 complete: normalize GPU UUID, PCI bus id, NUMA, memory, PCIe link,
+     and fabric capability fields from production discovery; expose per-relay
+     path capabilities in daemon discovery output.
+   - Cut 3 current: add daemon topology refresh/invalidation behavior and
+     complete relay discovery reporting so Phase 1 can be validated on a real
+     multi-GPU server.
 
 ## Phase 0 Acceptance Criteria
 
@@ -236,21 +245,20 @@ Phase 0 is complete:
 
 ## Latest Validation
 
-Phase 1 Cut 1 validation:
+Phase 1 Cut 2 validation:
 
-- `python -m unittest test.python.unit.test_topology_provider test.python.unit.test_package_boundaries test.python.integration.test_daemon_state test.python.integration.test_daemon_socket`
-- `python -m compileall -q turbobus\topology turbobus\daemon test\python\unit\test_topology_provider.py test\python\unit\test_package_boundaries.py test\python\integration\test_daemon_state.py test\python\integration\test_daemon_socket.py`
-- `rg -n -g "*.py" -- "--relay-gpus|test_fixture_static|StaticTopologyProvider|synthetic topology|topology provider is required|topology_snapshot_id|CudaNvmlTopologyProvider|DaemonStartupConfig" turbobus\topology turbobus\daemon test\python\unit\test_topology_provider.py test\python\unit\test_package_boundaries.py`
+- `python -m unittest test.python.unit.test_topology_provider test.python.unit.test_schema test.python.integration.test_daemon_state test.python.integration.test_daemon_socket`
+- `python -m compileall -q turbobus\topology turbobus\daemon test\python\unit\test_topology_provider.py test\python\unit\test_schema.py test\python\integration\test_daemon_state.py test\python\integration\test_daemon_socket.py`
 - `git diff --check`
 
 Remaining Phase 1 risk:
 
-- the CUDA/NVML provider currently captures GPU identity, PCI bus id, memory,
-  versioned snapshots, and topology-matrix fabric reachability; PCIe generation,
-  negotiated width, NUMA node, measured bandwidth, and NVSwitch-specific fields
-  still need richer normalization in Cut 2.
+- topology refresh and invalidation are not yet exposed through the daemon
+  control path, so Phase 1 still needs Cut 3 before production discovery can be
+  audited across topology changes.
 - Phase 1 is not complete until daemon discovery can report usable relay
-  candidates and filtered reasons from the local production machine.
+  candidates, filtered reasons, path capabilities, and refresh behavior from
+  the local production machine.
 
 ## Upcoming Phases
 

@@ -53,6 +53,9 @@ class PciePathRecord:
     link_generation: int | None = None
     link_width: int | None = None
     bandwidth_gbps: float = 0.0
+    negotiated_speed_gtps: float | None = None
+    switch_hierarchy: tuple[str, ...] = field(default_factory=tuple)
+    bandwidth_source: str | None = None
 
     def __post_init__(self) -> None:
         device_id = int(self.device_id)
@@ -67,6 +70,11 @@ class PciePathRecord:
         bandwidth = float(self.bandwidth_gbps)
         if bandwidth < 0.0:
             raise ValueError("bandwidth_gbps must be non-negative")
+        if (
+            self.negotiated_speed_gtps is not None
+            and float(self.negotiated_speed_gtps) < 0.0
+        ):
+            raise ValueError("negotiated_speed_gtps must be non-negative")
         object.__setattr__(self, "device_id", device_id)
         if self.numa_node is not None:
             object.__setattr__(self, "numa_node", int(self.numa_node))
@@ -77,6 +85,22 @@ class PciePathRecord:
         if self.link_width is not None:
             object.__setattr__(self, "link_width", int(self.link_width))
         object.__setattr__(self, "bandwidth_gbps", bandwidth)
+        if self.negotiated_speed_gtps is not None:
+            object.__setattr__(
+                self,
+                "negotiated_speed_gtps",
+                float(self.negotiated_speed_gtps),
+            )
+        object.__setattr__(
+            self,
+            "switch_hierarchy",
+            tuple(str(item) for item in self.switch_hierarchy if str(item).strip()),
+        )
+        if self.bandwidth_source is not None:
+            bandwidth_source = str(self.bandwidth_source).strip()
+            if not bandwidth_source:
+                raise ValueError("bandwidth_source must be non-empty")
+            object.__setattr__(self, "bandwidth_source", bandwidth_source)
 
 
 @dataclass(frozen=True)
@@ -87,6 +111,9 @@ class FabricLinkRecord:
     bandwidth_gbps: float = 0.0
     bidirectional: bool = True
     enabled: bool = False
+    link_count: int | None = None
+    capability: str | None = None
+    raw_link_type: str | None = None
 
     def __post_init__(self) -> None:
         src_device_id = int(self.src_device_id)
@@ -100,12 +127,26 @@ class FabricLinkRecord:
         bandwidth = float(self.bandwidth_gbps)
         if bandwidth < 0.0:
             raise ValueError("bandwidth_gbps must be non-negative")
+        if self.link_count is not None and int(self.link_count) < 0:
+            raise ValueError("link_count must be non-negative")
         object.__setattr__(self, "src_device_id", src_device_id)
         object.__setattr__(self, "dst_device_id", dst_device_id)
         object.__setattr__(self, "fabric", str(self.fabric))
         object.__setattr__(self, "bandwidth_gbps", bandwidth)
         object.__setattr__(self, "bidirectional", bool(self.bidirectional))
         object.__setattr__(self, "enabled", bool(self.enabled))
+        if self.link_count is not None:
+            object.__setattr__(self, "link_count", int(self.link_count))
+        if self.capability is not None:
+            capability = str(self.capability).strip()
+            if not capability:
+                raise ValueError("capability must be non-empty")
+            object.__setattr__(self, "capability", capability)
+        if self.raw_link_type is not None:
+            raw_link_type = str(self.raw_link_type).strip()
+            if not raw_link_type:
+                raise ValueError("raw_link_type must be non-empty")
+            object.__setattr__(self, "raw_link_type", raw_link_type)
 
 
 @dataclass(frozen=True)

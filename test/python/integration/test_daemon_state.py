@@ -283,6 +283,9 @@ class DaemonStateTest(unittest.TestCase):
                     link_generation=5,
                     link_width=16,
                     bandwidth_gbps=63.0,
+                    negotiated_speed_gtps=32.0,
+                    switch_hierarchy=("switch-a", "switch-b"),
+                    bandwidth_source="provider",
                 ),
             ),
             fabric_links=(
@@ -292,6 +295,9 @@ class DaemonStateTest(unittest.TestCase):
                     fabric="nvlink",
                     bandwidth_gbps=100.0,
                     enabled=True,
+                    link_count=2,
+                    capability="nvlink",
+                    raw_link_type="NV2",
                 ),
             ),
             source="test",
@@ -312,7 +318,13 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(payload["gpus"][0]["role"], "target")
         self.assertFalse(payload["gpus"][1]["visible"])
         self.assertEqual(payload["pcie_paths"][1]["device_id"], 1)
+        self.assertEqual(payload["pcie_paths"][1]["negotiated_speed_gtps"], 32.0)
+        self.assertEqual(
+            payload["pcie_paths"][1]["switch_hierarchy"],
+            ("switch-a", "switch-b"),
+        )
         self.assertEqual(payload["fabric_links"][0]["fabric"], "nvlink")
+        self.assertEqual(payload["fabric_links"][0]["raw_link_type"], "NV2")
 
     def test_fixture_inventory_comes_from_explicit_static_provider(self) -> None:
         daemon = _daemon(relay_gpus=[2, 1])
@@ -421,6 +433,12 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(relay["relay_gpu"], 1)
         self.assertTrue(relay["configured"])
         self.assertEqual(relay["eligibility"]["reason"], "eligible")
+        self.assertTrue(relay["inventory"]["path_capabilities"]["has_pcie_path"])
+        self.assertEqual(
+            relay["inventory"]["path_capabilities"]["enabled_fabric_link_count"],
+            0,
+        )
+        self.assertFalse(relay["inventory"]["path_capabilities"]["p2p_enabled"])
         self.assertEqual(relay["quota"]["active_sessions"], 2)
         self.assertEqual(relay["quota"]["available_sessions"], 0)
         self.assertEqual(relay["quota"]["active_chunks"], 2)
@@ -588,6 +606,12 @@ class DaemonStateTest(unittest.TestCase):
         self.assertFalse(
             discovered.payload["relay_discovery"]["relays"][0]["eligibility"]["eligible"]
         )
+        capabilities = discovered.payload["relay_discovery"]["relays"][0][
+            "inventory"
+        ]["path_capabilities"]
+        self.assertTrue(capabilities["has_pcie_path"])
+        self.assertEqual(capabilities["enabled_fabric_link_count"], 0)
+        self.assertFalse(capabilities["p2p_enabled"])
         self.assertEqual(
             discovered.payload["relay_discovery"]["relays"][0]["eligibility"]["reason"],
             "missing enabled fabric link",
