@@ -82,14 +82,15 @@ class RecordingWorkerClient:
             state="complete",
             bytes_completed=bytes_completed,
         )
-        cleanup_payload = {"released": []}
+        lease_responses = []
         for lease_id in lease_ids:
             released = self.daemon.release_transfer(lease_id)
-            cleanup_payload["released"].append(released.payload)
+            lease_responses.append(as_daemon_response_dict(released))
         completion = WorkerDataPlaneCompletionEnvelope(
             ok=True,
             transfer_id=worker_request.transfer_id,
             lease_id=request.lease_id,
+            lease_ids=lease_ids,
             final_state="complete",
             staging_slot={
                 "active": True,
@@ -124,7 +125,9 @@ class RecordingWorkerClient:
                 "ok": True,
                 "payload": {
                     "reservation_id": request.lease_id,
-                    "released": cleanup_payload["released"],
+                    "lease_ids": lease_ids,
+                    "released_reservation_ids": lease_ids,
+                    "lease_responses": lease_responses,
                 },
             },
         )
@@ -356,7 +359,18 @@ class WorkerManagedTransferClientTest(unittest.TestCase):
             set(completion.worker_result["metadata"]["relay_gpus"]),
             {1, 2},
         )
+        expected_lease_ids = tuple(token["lease_id"] for token in result.lease_tokens)
+        self.assertEqual(
+            completion.daemon_cleanup_response["payload"]["lease_ids"],
+            expected_lease_ids,
+        )
+        self.assertEqual(
+            completion.daemon_cleanup_response["payload"]["released_reservation_ids"],
+            expected_lease_ids,
+        )
         profile = daemon.describe().payload
+        self.assertEqual(profile["reservations"], {})
+        self.assertEqual(profile["staging_records"], {})
         self.assertEqual(profile["relay_quotas"][1]["active_chunks"], 0)
         self.assertEqual(profile["relay_quotas"][2]["active_chunks"], 0)
         status = daemon.transfer_status(result.transfer_id)

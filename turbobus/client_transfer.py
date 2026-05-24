@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Iterable, Mapping
 
 from .backends.cuda import default_cuda_backend
 from .client import CudaIpcDeviceBuffer, SharedPinnedCpuBuffer
@@ -1055,6 +1055,41 @@ def _require_worker_release_response_matches_request(
         raise _WorkerCompletionEnvelopeError(
             "worker daemon release response reservation mismatch"
         )
+    released_reservation_ids = payload.get("released_reservation_ids")
+    if released_reservation_ids is not None:
+        if isinstance(released_reservation_ids, (str, bytes)) or not isinstance(
+            released_reservation_ids, Iterable
+        ):
+            raise _WorkerCompletionEnvelopeError(
+                "worker daemon release response released reservation ids must be iterable"
+            )
+        released_ids = tuple(str(item) for item in released_reservation_ids)
+        if request.lease_id not in released_ids:
+            raise _WorkerCompletionEnvelopeError(
+                "worker daemon release response missing primary lease"
+            )
+        if not released_ids:
+            raise _WorkerCompletionEnvelopeError(
+                "worker daemon release response missing released reservation ids"
+            )
+    lease_responses = payload.get("lease_responses")
+    if lease_responses is not None:
+        if isinstance(lease_responses, (str, bytes)) or not isinstance(
+            lease_responses,
+            Iterable,
+        ):
+            raise _WorkerCompletionEnvelopeError(
+                "worker daemon release response lease responses must be iterable"
+            )
+        for lease_response in lease_responses:
+            if not isinstance(lease_response, Mapping):
+                raise _WorkerCompletionEnvelopeError(
+                    "worker daemon release response lease response must be a mapping"
+                )
+            if not bool(lease_response.get("ok", False)):
+                raise _WorkerCompletionEnvelopeError(
+                    "worker daemon release response lease response was not ok"
+                )
 
 
 def _require_worker_staging_slot_matches_request(

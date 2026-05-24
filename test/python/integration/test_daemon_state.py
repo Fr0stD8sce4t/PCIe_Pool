@@ -4118,6 +4118,29 @@ class DaemonStateTest(unittest.TestCase):
             expected_chunks[2],
         )
 
+        completed = daemon.transfer_status(
+            planned.payload["transfer_id"],
+            state="complete",
+            bytes_completed=128,
+        )
+        self.assertTrue(completed.ok)
+        for lease_token in planned.payload["lease_tokens"]:
+            released = daemon.release_transfer(lease_token["lease_id"])
+            self.assertTrue(released.ok)
+
+        profile = daemon.describe().payload
+        self.assertEqual(profile["reservations"], {})
+        self.assertEqual(profile["staging_records"], {})
+        self.assertEqual(profile["relay_quotas"][1]["active_chunks"], 0)
+        self.assertEqual(profile["relay_quotas"][2]["active_chunks"], 0)
+        runtime = profile["runtime_resource_state"]
+        self.assertEqual(runtime["summary"]["active_reservation_count"], 0)
+        self.assertEqual(runtime["summary"]["active_lease_count"], 0)
+        self.assertEqual(runtime["summary"]["relay_staging_count"], 0)
+        status = daemon.transfer_status(planned.payload["transfer_id"])
+        self.assertTrue(status.ok)
+        self.assertEqual(status.payload["status"]["state"], "complete")
+
     def test_runtime_state_tracks_relay_staging_and_terminal_updates(self) -> None:
         daemon = _daemon(
             relay_gpus=[1],

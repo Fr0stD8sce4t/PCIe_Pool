@@ -246,9 +246,18 @@ lease set and per-relay staging records for one ticketed pooled transfer, while
 applications and adapters still submit only transfer intent and consume
 receipts.
 
+Phase 4 Cut 3 is complete. Worker cleanup now releases every relay lease for
+completed multi-relay ticketed transfers and cleans every relay lease on
+status-report or worker failure paths. Completion envelopes preserve the full
+lease set, client-side release validation accepts aggregate multi-lease
+responses only when all lease responses are ok, and daemon state tests confirm
+multi-relay staging records, reservations, relay quotas, and runtime state are
+removed after completion.
+
 ## Next Work Items
 
-Current item: Phase 4 Cut 3, staging lifecycle and receipt semantics.
+Current item: Phase 4 Cut 4, legacy Runtime data-plane cleanup and GPU
+correctness gate.
 
 1. Shared schema layer.
    - Status: complete.
@@ -360,8 +369,10 @@ Current item: Phase 4 Cut 3, staging lifecycle and receipt semantics.
      so production paths execute only daemon-issued `ExecutionTicket` plans.
    - Cut 2 complete: extend worker-managed execution from one relay lease to
      daemon-ticketed direct plus multi-relay pooled plans.
-   - Cut 3 current: make staging cleanup and receipt semantics deterministic
+   - Cut 3 complete: make staging cleanup and receipt semantics deterministic
      across H2D, D2H, range, direct, relay, pooled, and failure paths.
+   - Cut 4 current: remove, demote, or reroute the legacy `turbobus.runtime`
+     Runtime-local execution path and add the GPU correctness validation gate.
    - Keep direct, relay, and pooled paths as scheduler outcomes and data-plane
      behaviors, not app-side controls.
 
@@ -381,10 +392,10 @@ Phase 0 is complete:
 
 ## Latest Validation
 
-Phase 4 Cut 2 validation:
+Phase 4 Cut 3 validation:
 
-- `python -m unittest test.python.unit.test_worker_cuda_executor test.python.integration.test_worker_helper test.python.integration.test_client_worker_transfer test.python.integration.test_daemon_state`
-- `python -m compileall -q turbobus\worker turbobus\daemon turbobus\client_transfer.py test\python\unit\test_worker_cuda_executor.py test\python\integration\test_worker_helper.py test\python\integration\test_client_worker_transfer.py test\python\integration\test_daemon_state.py`
+- `python -m unittest test.python.integration.test_worker_helper test.python.integration.test_client_worker_transfer test.python.integration.test_daemon_state`
+- `python -m py_compile turbobus\worker\helper.py turbobus\client_transfer.py turbobus\daemon\server.py test\python\integration\test_worker_helper.py test\python\integration\test_client_worker_transfer.py test\python\integration\test_daemon_state.py`
 - `git diff --check`
 
 Remaining risk:
@@ -396,19 +407,20 @@ Remaining risk:
   relay admission, delayed lease grants, plan expiration, and rescheduling in
   non-GPU control-plane tests. Production behavior still needs to be exercised
   on a real multi-GPU CUDA server under concurrent workload pressure.
-- Phase 4 Cut 2 added ticketed multi-relay worker execution in non-GPU tests.
-  It still needs to be exercised on a real multi-GPU CUDA server.
+- Phase 4 Cut 3 added deterministic multi-relay lease and staging cleanup in
+  non-GPU tests. It still needs to be exercised on a real multi-GPU CUDA
+  server.
 - The legacy `turbobus.runtime` module still contains importable Runtime-local
   execution code and must be removed, demoted to explicit legacy-internal
   tests, or routed through daemon-issued tickets before Phase 4 is considered
   complete.
-- Phase 4 still needs daemon/worker staging lifecycle ownership, shared
-  H2D/D2H/range receipt semantics, and GPU correctness coverage.
+- Phase 4 still needs legacy `turbobus.runtime` removal, demotion, or
+  ticket-routing, plus GPU correctness coverage.
 
 Latest validation:
 
-- `python -m unittest test.python.unit.test_worker_cuda_executor test.python.integration.test_worker_helper test.python.integration.test_client_worker_transfer test.python.integration.test_daemon_state`
-- `python -m compileall -q turbobus\\worker turbobus\\daemon turbobus\\client_transfer.py test\\python\\unit\\test_worker_cuda_executor.py test\\python\\integration\\test_worker_helper.py test\\python\\integration\\test_client_worker_transfer.py test\\python\\integration\\test_daemon_state.py`
+- `python -m unittest test.python.integration.test_worker_helper test.python.integration.test_client_worker_transfer test.python.integration.test_daemon_state`
+- `python -m py_compile turbobus\\worker\\helper.py turbobus\\client_transfer.py turbobus\\daemon\\server.py test\\python\\integration\\test_worker_helper.py test\\python\\integration\\test_client_worker_transfer.py test\\python\\integration\\test_daemon_state.py`
 - `git diff --check`
 
 ## Upcoming Phases

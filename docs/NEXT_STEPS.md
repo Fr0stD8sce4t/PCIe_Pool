@@ -44,7 +44,8 @@ resource state, weighted scheduling inputs, relay admission state, delayed
 lease grants, plan expiration, and rescheduling state without giving
 applications or adapters physical path control.
 
-Current item: Phase 4 Cut 3, staging lifecycle and receipt semantics.
+Current item: Phase 4 Cut 4, legacy Runtime data-plane cleanup and GPU
+correctness gate.
 
 ### Phase 3 Cut 1
 
@@ -108,7 +109,8 @@ Expected output:
 
 ## Phase 4 Current Work
 
-Current item: Phase 4 Cut 3, staging lifecycle and receipt semantics.
+Current item: Phase 4 Cut 4, legacy Runtime data-plane cleanup and GPU
+correctness gate.
 
 Cut 1: data-plane plan boundary and worker input cleanup.
 
@@ -155,7 +157,7 @@ Completed output:
 
 Cut 3: staging lifecycle and receipt semantics.
 
-Status: current.
+Status: complete.
 
 - Make daemon and worker cleanup deterministic for all relay leases and staging
   records in one ticketed pooled transfer.
@@ -165,12 +167,42 @@ Status: current.
 - Add focused correctness tests for direct, relay, pooled, and failure paths
   without adding application-side route controls.
 
-Expected output:
+Completed output:
 
 - daemon profile and audit state show all staging records for ticketed pooled
   transfers and remove them deterministically;
 - `TransferReceipt` data remains traceable to decision id, topology snapshot
   id, ticket id, bytes, path split, and failure state;
+- worker completion and failure cleanup release or clean every relay lease in
+  one daemon-issued ticket, and completion envelopes carry the complete lease
+  set;
+- non-GPU worker, client, and daemon state tests cover multi-relay pooled
+  cleanup, failure cleanup, staging-record removal, and release response
+  validation without adding application-side route controls.
+
+Cut 4: legacy Runtime data-plane cleanup and GPU correctness gate.
+
+Status: current.
+
+- Remove, demote, or reroute the importable `turbobus.runtime` Runtime-local
+  execution path so production data movement cannot bypass daemon-issued
+  `ExecutionTicket` plans.
+- Keep backend primitives such as `fetch_plan_to_gpu` and
+  `offload_plan_to_cpu`, but make any production caller consume daemon-issued
+  tickets or move the old Runtime path into explicit legacy-internal tests.
+- Update tests that still protect old Runtime direct/relay/pool route
+  selection so they either validate backend primitives directly or validate
+  daemon-ticketed execution.
+- Add or document the focused GPU-server correctness command for daemon-issued
+  direct, relay, pooled, H2D, D2H, and range transfers.
+- Do not advance to Phase 5 until the Phase 4 exit criteria can be checked
+  without relying on the legacy Runtime path.
+
+Expected output:
+
+- application code still cannot decide transfer paths;
+- production worker/data-plane execution is ticket-only;
+- legacy Runtime route selection is no longer a Phase 4 blocker;
 - Phase 4 can be closed after focused non-GPU checks and GPU-server
   correctness validation notes.
 

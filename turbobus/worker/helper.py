@@ -322,6 +322,11 @@ class WorkerTransferLifecycleRecord:
             object.__setattr__(self, "status_update", dict(self.status_update))
 
     def as_dict(self) -> dict[str, object]:
+        lease_ids = (
+            _worker_request_lease_ids(self.worker_request)
+            if self.worker_request is not None
+            else (self.authorization_request.lease_id,)
+        )
         cleanup_target = None
         if self.cleanup_target_kind is not None or self.cleanup_target_id is not None:
             cleanup_target = {
@@ -362,6 +367,7 @@ class WorkerTransferLifecycleRecord:
                 if self.cleanup_response is not None
                 else None
             ),
+            "lease_ids": lease_ids,
             "final_state": self.final_state,
             "error": self.error,
         }
@@ -375,6 +381,7 @@ class WorkerDataPlaneCompletionEnvelope:
     ok: bool
     transfer_id: str | None = None
     lease_id: str | None = None
+    lease_ids: tuple[str, ...] = ()
     final_state: str | None = None
     staging_slot: Mapping[str, object] | None = None
     worker_result: Mapping[str, object] | None = None
@@ -404,6 +411,17 @@ class WorkerDataPlaneCompletionEnvelope:
             object.__setattr__(self, "transfer_id", str(self.transfer_id))
         if self.lease_id is not None:
             object.__setattr__(self, "lease_id", str(self.lease_id))
+        object.__setattr__(
+            self,
+            "lease_ids",
+            tuple(str(item) for item in self.lease_ids),
+        )
+        if (
+            self.lease_ids
+            and self.lease_id is not None
+            and self.lease_id not in self.lease_ids
+        ):
+            raise ValueError("lease_id must be included in lease_ids")
         if self.final_state is not None:
             object.__setattr__(self, "final_state", str(self.final_state))
         if self.error is not None:
@@ -421,6 +439,7 @@ class WorkerDataPlaneCompletionEnvelope:
             ok=True,
             transfer_id=_lifecycle_transfer_id(lifecycle),
             lease_id=_lifecycle_lease_id(lifecycle),
+            lease_ids=_lifecycle_lease_ids(lifecycle),
             final_state=lifecycle.final_state,
             staging_slot=payload["staging_slot"],
             worker_result=payload["result"],
@@ -436,6 +455,7 @@ class WorkerDataPlaneCompletionEnvelope:
             "ok": self.ok,
             "transfer_id": self.transfer_id,
             "lease_id": self.lease_id,
+            "lease_ids": self.lease_ids,
             "final_state": self.final_state,
             "staging_slot": (
                 dict(self.staging_slot) if self.staging_slot is not None else None
@@ -615,27 +635,57 @@ class WorkerTransferCleanupCoordinator:
             raise TypeError("request must be a WorkerTransferRequest")
         if not isinstance(result, WorkerTransferResult):
             raise TypeError("result must be a WorkerTransferResult")
+        lease_ids = _worker_request_lease_ids(request)
+        if target_kind == "session":
+            return self._cleanup(
+                target_kind=target_kind,
+                target_id=_cleanup_target_id(
+                    target_kind,
+                    lease_id=request.authorization.lease_id,
+                    session_id=request.authorization.session_id,
+                ),
+                reason=reason or f"worker_{result.state.value}",
+                force=force,
+            )
         if result.state == WorkerTransferState.COMPLETE:
-            release = getattr(self.daemon_client, "release_transfer", None)
-            if not callable(release):
-                raise WorkerCleanupError(
-                    "daemon client cannot release completed worker transfer"
-                )
-            response: DaemonResponse = release(request.authorization.lease_id)
-            if not response.ok:
-                raise WorkerCleanupError(
-                    response.error or "worker completion release failed"
-                )
-            return response
-        return self._cleanup(
+            if len(lease_ids) == 1:
+                release = getattr(self.daemon_client, "release_transfer", None)
+                if not callable(release):
+                    raise WorkerCleanupError(
+                        "daemon client cannot release completed worker transfer"
+                    )
+                response: DaemonResponse = release(request.authorization.lease_id)
+                if not response.ok:
+                    raise WorkerCleanupError(
+                        response.error or "worker completion release failed"
+                    )
+                return response
+            return self._cleanup_worker_leases(
+                request,
+                lease_ids=lease_ids,
+                target_kind=target_kind,
+                reason=reason or "worker_complete",
+                force=force,
+                release_completed=True,
+            )
+        if len(lease_ids) == 1:
+            return self._cleanup(
+                target_kind=target_kind,
+                target_id=_cleanup_target_id(
+                    target_kind,
+                    lease_id=request.authorization.lease_id,
+                    session_id=request.authorization.session_id,
+                ),
+                reason=reason or f"worker_{result.state.value}",
+                force=force,
+            )
+        return self._cleanup_worker_leases(
+            request,
+            lease_ids=lease_ids,
             target_kind=target_kind,
-            target_id=_cleanup_target_id(
-                target_kind,
-                lease_id=request.authorization.lease_id,
-                session_id=request.authorization.session_id,
-            ),
             reason=reason or f"worker_{result.state.value}",
             force=force,
+            release_completed=False,
         )
 
     def cleanup_status_report_failure(
@@ -647,15 +697,36 @@ class WorkerTransferCleanupCoordinator:
     ) -> DaemonResponse:
         if not isinstance(request, WorkerTransferRequest):
             raise TypeError("request must be a WorkerTransferRequest")
-        return self._cleanup(
+        lease_ids = _worker_request_lease_ids(request)
+        if target_kind == "session":
+            return self._cleanup(
+                target_kind=target_kind,
+                target_id=_cleanup_target_id(
+                    target_kind,
+                    lease_id=request.authorization.lease_id,
+                    session_id=request.authorization.session_id,
+                ),
+                reason=reason,
+                force=force,
+            )
+        if len(lease_ids) == 1:
+            return self._cleanup(
+                target_kind=target_kind,
+                target_id=_cleanup_target_id(
+                    target_kind,
+                    lease_id=request.authorization.lease_id,
+                    session_id=request.authorization.session_id,
+                ),
+                reason=reason,
+                force=force,
+            )
+        return self._cleanup_worker_leases(
+            request,
+            lease_ids=lease_ids,
             target_kind=target_kind,
-            target_id=_cleanup_target_id(
-                target_kind,
-                lease_id=request.authorization.lease_id,
-                session_id=request.authorization.session_id,
-            ),
             reason=reason,
             force=force,
+            release_completed=False,
         )
 
     def _cleanup(
@@ -674,6 +745,59 @@ class WorkerTransferCleanupCoordinator:
         if not response.ok:
             raise WorkerCleanupError(response.error or "worker cleanup failed")
         return response
+
+    def _cleanup_worker_leases(
+        self,
+        request: WorkerTransferRequest,
+        *,
+        lease_ids: tuple[str, ...],
+        target_kind: str,
+        reason: str,
+        force: bool,
+        release_completed: bool,
+    ) -> DaemonResponse:
+        release = getattr(self.daemon_client, "release_transfer", None)
+        cleanup = getattr(self.daemon_client, "cleanup", None)
+        if release_completed and not callable(release):
+            raise WorkerCleanupError(
+                "daemon client cannot release completed worker transfer"
+            )
+        if not release_completed and not callable(cleanup):
+            raise WorkerCleanupError("daemon client cannot clean worker transfer")
+        responses: list[dict[str, object]] = []
+        released_ids: list[str] = []
+        errors: list[str] = []
+        for lease_id in lease_ids:
+            if release_completed:
+                response = release(lease_id)
+            else:
+                response = cleanup(
+                    target_kind=target_kind,
+                    target_id=lease_id,
+                    reason=reason,
+                    force=force,
+                )
+            responses.append(asdict(response))
+            if response.ok:
+                payload = response.payload if isinstance(response.payload, Mapping) else {}
+                reservation_id = payload.get("reservation_id")
+                released_ids.append(
+                    str(reservation_id) if reservation_id is not None else str(lease_id)
+                )
+                continue
+            errors.append(f"{lease_id}: {response.error or 'worker cleanup failed'}")
+        if errors:
+            raise WorkerCleanupError("; ".join(errors))
+        payload = {
+            "reservation_id": lease_ids[0],
+            "lease_ids": lease_ids,
+            "released_reservation_ids": tuple(released_ids),
+            "lease_responses": tuple(responses),
+            "cleanup_kind": target_kind,
+            "reason": reason,
+            "cleanup_mode": "release" if release_completed else "cleanup",
+        }
+        return DaemonResponse(ok=True, payload=payload)
 
 
 class WorkerTransferClient:
@@ -1411,6 +1535,18 @@ def _cleanup_target_id(target_kind: str, lease_id: str, session_id: str) -> str:
     raise ValueError("worker cleanup target must be reservation or session")
 
 
+def _worker_request_lease_ids(request: WorkerTransferRequest) -> tuple[str, ...]:
+    lease_ids = request.data_plane.metadata.get("lease_ids")
+    if lease_ids is None:
+        return (request.authorization.lease_id,)
+    resolved = tuple(str(item) for item in lease_ids)
+    if not resolved:
+        raise ValueError("worker request has no lease ids")
+    if request.authorization.lease_id not in resolved:
+        raise ValueError("worker request primary lease is not authorized")
+    return resolved
+
+
 def _execute_worker_transfer(
     executor,
     request: WorkerTransferRequest,
@@ -1441,6 +1577,18 @@ def _lifecycle_lease_id(lifecycle: WorkerTransferLifecycleRecord) -> str:
     if lifecycle.worker_request is not None:
         return lifecycle.worker_request.authorization.lease_id
     return lifecycle.authorization_request.lease_id
+
+
+def _lifecycle_lease_ids(lifecycle: WorkerTransferLifecycleRecord) -> tuple[str, ...]:
+    if lifecycle.worker_request is not None:
+        data_plane = lifecycle.worker_request.data_plane
+        lease_ids = data_plane.metadata.get("lease_ids") if data_plane is not None else None
+        if lease_ids is not None:
+            resolved = tuple(str(item) for item in lease_ids)
+            if resolved:
+                return resolved
+        return (lifecycle.worker_request.authorization.lease_id,)
+    return (lifecycle.authorization_request.lease_id,)
 
 
 __all__ = [

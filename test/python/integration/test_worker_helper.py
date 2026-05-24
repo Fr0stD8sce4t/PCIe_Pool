@@ -1123,6 +1123,99 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(daemon_client.release_requests, ["lease-1"])
         self.assertEqual(daemon_client.cleanup_requests, [])
 
+    def test_cleanup_coordinator_releases_multi_lease_complete_transfer(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(
+                ok=True,
+                payload=ticket_authorization_payload(
+                    plan=multi_relay_daemon_worker_plan(),
+                    ranges=relay_ranges_for_plan(multi_relay_daemon_worker_plan()),
+                    relay_gpu=1,
+                    relay_gpus=(1, 2),
+                    lease_ids=("lease-1", "lease-2"),
+                ),
+            )
+        )
+        coordinator = WorkerTransferCleanupCoordinator(daemon_client)
+        request = WorkerTransferRequest.from_authorization_payload(
+            ticket_authorization_payload(
+                plan=multi_relay_daemon_worker_plan(),
+                ranges=relay_ranges_for_plan(multi_relay_daemon_worker_plan()),
+                relay_gpu=1,
+                relay_gpus=(1, 2),
+                lease_ids=("lease-1", "lease-2"),
+            )
+        )
+
+        response = coordinator.cleanup_execution_failure(
+            request,
+            WorkerTransferResult(
+                transfer_id="transfer-1",
+                state=WorkerTransferState.COMPLETE,
+                bytes_completed=128,
+            ),
+        )
+
+        self.assertTrue(response.ok)
+        self.assertEqual(daemon_client.release_requests, ["lease-1", "lease-2"])
+        self.assertEqual(daemon_client.cleanup_requests, [])
+        self.assertEqual(
+            response.payload["released_reservation_ids"],
+            ("lease-1", "lease-2"),
+        )
+        self.assertEqual(response.payload["lease_ids"], ("lease-1", "lease-2"))
+        self.assertEqual(response.payload["reservation_id"], "lease-1")
+
+    def test_cleanup_coordinator_cleans_multi_lease_worker_failure(self) -> None:
+        daemon_client = FakeDaemonClient(
+            DaemonResponse(
+                ok=True,
+                payload=ticket_authorization_payload(
+                    plan=multi_relay_daemon_worker_plan(),
+                    ranges=relay_ranges_for_plan(multi_relay_daemon_worker_plan()),
+                    relay_gpu=1,
+                    relay_gpus=(1, 2),
+                    lease_ids=("lease-1", "lease-2"),
+                ),
+            )
+        )
+        coordinator = WorkerTransferCleanupCoordinator(daemon_client)
+        request = WorkerTransferRequest.from_authorization_payload(
+            ticket_authorization_payload(
+                plan=multi_relay_daemon_worker_plan(),
+                ranges=relay_ranges_for_plan(multi_relay_daemon_worker_plan()),
+                relay_gpu=1,
+                relay_gpus=(1, 2),
+                lease_ids=("lease-1", "lease-2"),
+            )
+        )
+
+        response = coordinator.cleanup_status_report_failure(request)
+
+        self.assertTrue(response.ok)
+        self.assertEqual(
+            daemon_client.cleanup_requests,
+            [
+                {
+                    "target_kind": "reservation",
+                    "target_id": "lease-1",
+                    "reason": "worker_status_report_failed",
+                    "force": True,
+                },
+                {
+                    "target_kind": "reservation",
+                    "target_id": "lease-2",
+                    "reason": "worker_status_report_failed",
+                    "force": True,
+                },
+            ],
+        )
+        self.assertEqual(
+            response.payload["released_reservation_ids"],
+            ("lease-1", "lease-2"),
+        )
+        self.assertEqual(response.payload["reservation_id"], "lease-1")
+
     def test_cleanup_coordinator_raises_on_daemon_rejection(self) -> None:
         daemon_client = FakeDaemonClient(
             DaemonResponse(ok=True, payload=authorization_payload()),
