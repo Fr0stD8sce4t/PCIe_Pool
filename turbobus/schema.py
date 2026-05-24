@@ -54,6 +54,27 @@ class TransferStatusState(str, Enum):
     CANCELED = "canceled"
 
 
+class BufferKind(str, Enum):
+    CPU = "cpu"
+    CPU_PINNED = "cpu_pinned"
+    GPU = "gpu"
+    RELAY_STAGING = "relay_staging"
+
+
+class WorkloadKind(str, Enum):
+    GENERIC = "generic"
+    KV_CACHE = "kv_cache"
+    MODEL_WEIGHTS = "model_weights"
+    TRAINING_STATE = "training_state"
+    OPTIMIZER_STATE = "optimizer_state"
+
+
+class SchedulingDecisionState(str, Enum):
+    PLANNED = "planned"
+    FALLBACK = "fallback"
+    REJECTED = "rejected"
+
+
 @dataclass(frozen=True)
 class JobIdentity:
     job_id: str
@@ -63,19 +84,456 @@ class JobIdentity:
     process_id: int | None = None
 
     def __post_init__(self) -> None:
-        if not str(self.job_id).strip():
-            raise ValueError("job_id must be non-empty")
+        job_id = _require_non_empty_str(self.job_id, "job_id")
         if self.process_id is not None and int(self.process_id) < 0:
             raise ValueError("process_id must be non-negative")
-        object.__setattr__(self, "job_id", str(self.job_id))
+        object.__setattr__(self, "job_id", job_id)
         if self.user_id is not None:
-            object.__setattr__(self, "user_id", str(self.user_id))
+            object.__setattr__(
+                self,
+                "user_id",
+                _require_non_empty_str(self.user_id, "user_id"),
+            )
         if self.session_id is not None:
-            object.__setattr__(self, "session_id", str(self.session_id))
+            object.__setattr__(
+                self,
+                "session_id",
+                _require_non_empty_str(self.session_id, "session_id"),
+            )
         if self.container_id is not None:
-            object.__setattr__(self, "container_id", str(self.container_id))
+            object.__setattr__(
+                self,
+                "container_id",
+                _require_non_empty_str(self.container_id, "container_id"),
+            )
         if self.process_id is not None:
             object.__setattr__(self, "process_id", int(self.process_id))
+
+
+@dataclass(frozen=True)
+class BufferHandle:
+    buffer_id: str
+    job_id: str
+    session_id: str
+    kind: BufferKind | str
+    size_bytes: int
+    device_index: int | None = None
+    address: int | None = None
+    pinned: bool = False
+    handle_type: str = "registered_buffer"
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        buffer_id = _require_non_empty_str(self.buffer_id, "buffer_id")
+        job_id = _require_non_empty_str(self.job_id, "job_id")
+        session_id = _require_non_empty_str(self.session_id, "session_id")
+        kind = BufferKind(self.kind)
+        size_bytes = int(self.size_bytes)
+        if size_bytes < 0:
+            raise ValueError("size_bytes must be non-negative")
+        if self.device_index is not None and int(self.device_index) < 0:
+            raise ValueError("device_index must be non-negative")
+        if self.address is not None and int(self.address) < 0:
+            raise ValueError("address must be non-negative")
+        if kind is BufferKind.GPU and self.device_index is None:
+            raise ValueError("gpu buffer handles require device_index")
+        if kind is BufferKind.CPU_PINNED and not bool(self.pinned):
+            raise ValueError("cpu_pinned buffer handles require pinned=True")
+        handle_type = _require_non_empty_str(self.handle_type, "handle_type").lower()
+        metadata = _normalize_buffer_handle_metadata(
+            kind=kind.value,
+            pinned=bool(self.pinned),
+            device_index=self.device_index,
+            size_bytes=size_bytes,
+            handle_type=handle_type,
+            metadata=_copy_mapping(self.metadata, "metadata"),
+        )
+        object.__setattr__(self, "buffer_id", buffer_id)
+        object.__setattr__(self, "job_id", job_id)
+        object.__setattr__(self, "session_id", session_id)
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "size_bytes", size_bytes)
+        object.__setattr__(self, "pinned", bool(self.pinned))
+        object.__setattr__(self, "handle_type", handle_type)
+        object.__setattr__(self, "metadata", metadata)
+        if self.device_index is not None:
+            object.__setattr__(self, "device_index", int(self.device_index))
+        if self.address is not None:
+            object.__setattr__(self, "address", int(self.address))
+
+
+@dataclass(frozen=True)
+class TransferIntent:
+    intent_id: str
+    job_id: str
+    session_id: str
+    source_buffer_id: str
+    destination_buffer_id: str
+    direction: str
+    total_bytes: int
+    ranges: tuple[Mapping[str, int], ...]
+    workload_kind: WorkloadKind | str = WorkloadKind.GENERIC
+    priority: int = 0
+    policy_hints: Mapping[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        total_bytes = int(self.total_bytes)
+        if total_bytes <= 0:
+            raise ValueError("total_bytes must be positive")
+        ranges = _normalize_contract_ranges(self.ranges)
+        if not ranges:
+            raise ValueError("transfer intent requires at least one byte range")
+        _validate_ranges_match_total(total_bytes, ranges, "total_bytes")
+        source_buffer_id = _require_non_empty_str(
+            self.source_buffer_id,
+            "source_buffer_id",
+        )
+        destination_buffer_id = _require_non_empty_str(
+            self.destination_buffer_id,
+            "destination_buffer_id",
+        )
+        if source_buffer_id == destination_buffer_id:
+            raise ValueError("source and destination buffers must be different")
+        policy_hints = _normalize_policy_hints(self.policy_hints)
+        object.__setattr__(
+            self,
+            "intent_id",
+            _require_non_empty_str(self.intent_id, "intent_id"),
+        )
+        object.__setattr__(
+            self,
+            "job_id",
+            _require_non_empty_str(self.job_id, "job_id"),
+        )
+        object.__setattr__(
+            self,
+            "session_id",
+            _require_non_empty_str(self.session_id, "session_id"),
+        )
+        object.__setattr__(self, "source_buffer_id", source_buffer_id)
+        object.__setattr__(self, "destination_buffer_id", destination_buffer_id)
+        object.__setattr__(self, "direction", _normalize_transfer_direction(self.direction))
+        object.__setattr__(self, "total_bytes", total_bytes)
+        object.__setattr__(self, "ranges", ranges)
+        object.__setattr__(self, "workload_kind", WorkloadKind(self.workload_kind))
+        object.__setattr__(self, "priority", int(self.priority))
+        object.__setattr__(self, "policy_hints", policy_hints)
+        object.__setattr__(self, "metadata", _copy_mapping(self.metadata, "metadata"))
+
+
+@dataclass(frozen=True)
+class TopologySnapshot:
+    snapshot_id: str
+    source: str
+    discovered_at: float
+    version: int = 0
+    devices: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
+    pcie_links: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
+    fabric_links: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
+    numa_nodes: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        discovered_at = float(self.discovered_at)
+        if discovered_at < 0:
+            raise ValueError("discovered_at must be non-negative")
+        version = int(self.version)
+        if version < 0:
+            raise ValueError("version must be non-negative")
+        object.__setattr__(
+            self,
+            "snapshot_id",
+            _require_non_empty_str(self.snapshot_id, "snapshot_id"),
+        )
+        object.__setattr__(self, "source", _require_non_empty_str(self.source, "source"))
+        object.__setattr__(self, "discovered_at", discovered_at)
+        object.__setattr__(self, "version", version)
+        object.__setattr__(
+            self,
+            "devices",
+            _normalize_mapping_tuple(self.devices, "devices"),
+        )
+        object.__setattr__(
+            self,
+            "pcie_links",
+            _normalize_mapping_tuple(self.pcie_links, "pcie_links"),
+        )
+        object.__setattr__(
+            self,
+            "fabric_links",
+            _normalize_mapping_tuple(self.fabric_links, "fabric_links"),
+        )
+        object.__setattr__(
+            self,
+            "numa_nodes",
+            _normalize_mapping_tuple(self.numa_nodes, "numa_nodes"),
+        )
+        object.__setattr__(self, "metadata", _copy_mapping(self.metadata, "metadata"))
+
+
+@dataclass(frozen=True)
+class SchedulingDecision:
+    decision_id: str
+    intent_id: str
+    topology_snapshot_id: str
+    job_id: str
+    session_id: str
+    state: SchedulingDecisionState | str
+    plan: Mapping[str, Any] = field(default_factory=dict)
+    path_summary: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
+    fallback_reason: str | None = None
+    rejection_reason: str | None = None
+    issued_at: float = 0.0
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        state = SchedulingDecisionState(self.state)
+        plan = _copy_mapping(self.plan, "plan")
+        if state is SchedulingDecisionState.REJECTED:
+            if plan:
+                raise ValueError("rejected scheduling decisions must not include a plan")
+            if self.rejection_reason is None or not str(self.rejection_reason).strip():
+                raise ValueError("rejected scheduling decisions require rejection_reason")
+        else:
+            if not plan:
+                raise ValueError("planned scheduling decisions require a plan")
+            if state is SchedulingDecisionState.FALLBACK:
+                if self.fallback_reason is None or not str(self.fallback_reason).strip():
+                    raise ValueError("fallback scheduling decisions require fallback_reason")
+        issued_at = float(self.issued_at)
+        if issued_at < 0:
+            raise ValueError("issued_at must be non-negative")
+        object.__setattr__(
+            self,
+            "decision_id",
+            _require_non_empty_str(self.decision_id, "decision_id"),
+        )
+        object.__setattr__(
+            self,
+            "intent_id",
+            _require_non_empty_str(self.intent_id, "intent_id"),
+        )
+        object.__setattr__(
+            self,
+            "topology_snapshot_id",
+            _require_non_empty_str(self.topology_snapshot_id, "topology_snapshot_id"),
+        )
+        object.__setattr__(
+            self,
+            "job_id",
+            _require_non_empty_str(self.job_id, "job_id"),
+        )
+        object.__setattr__(
+            self,
+            "session_id",
+            _require_non_empty_str(self.session_id, "session_id"),
+        )
+        object.__setattr__(self, "state", state)
+        object.__setattr__(self, "plan", plan)
+        object.__setattr__(
+            self,
+            "path_summary",
+            _normalize_mapping_tuple(self.path_summary, "path_summary"),
+        )
+        if self.fallback_reason is not None:
+            object.__setattr__(
+                self,
+                "fallback_reason",
+                _require_non_empty_str(self.fallback_reason, "fallback_reason"),
+            )
+        if self.rejection_reason is not None:
+            object.__setattr__(
+                self,
+                "rejection_reason",
+                _require_non_empty_str(self.rejection_reason, "rejection_reason"),
+            )
+        object.__setattr__(self, "issued_at", issued_at)
+        object.__setattr__(self, "metadata", _copy_mapping(self.metadata, "metadata"))
+
+
+@dataclass(frozen=True)
+class ExecutionTicket:
+    ticket_id: str
+    decision_id: str
+    intent_id: str
+    topology_snapshot_id: str
+    job_id: str
+    session_id: str
+    source_buffer_id: str
+    destination_buffer_id: str
+    direction: str
+    total_bytes: int
+    ranges: tuple[Mapping[str, int], ...]
+    plan: Mapping[str, Any]
+    issued_at: float
+    expires_at: float
+    lease_ids: tuple[str, ...] = field(default_factory=tuple)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        total_bytes = int(self.total_bytes)
+        if total_bytes <= 0:
+            raise ValueError("ticket total_bytes must be positive")
+        ranges = _normalize_contract_ranges(self.ranges)
+        if not ranges:
+            raise ValueError("execution ticket requires at least one byte range")
+        _validate_ranges_match_total(total_bytes, ranges, "ticket total_bytes")
+        plan = _copy_mapping(self.plan, "plan")
+        if not plan:
+            raise ValueError("execution ticket requires daemon-issued plan")
+        issued_at = float(self.issued_at)
+        expires_at = float(self.expires_at)
+        if issued_at < 0:
+            raise ValueError("issued_at must be non-negative")
+        if expires_at <= issued_at:
+            raise ValueError("expires_at must be later than issued_at")
+        source_buffer_id = _require_non_empty_str(
+            self.source_buffer_id,
+            "source_buffer_id",
+        )
+        destination_buffer_id = _require_non_empty_str(
+            self.destination_buffer_id,
+            "destination_buffer_id",
+        )
+        if source_buffer_id == destination_buffer_id:
+            raise ValueError("source and destination buffers must be different")
+        object.__setattr__(
+            self,
+            "ticket_id",
+            _require_non_empty_str(self.ticket_id, "ticket_id"),
+        )
+        object.__setattr__(
+            self,
+            "decision_id",
+            _require_non_empty_str(self.decision_id, "decision_id"),
+        )
+        object.__setattr__(
+            self,
+            "intent_id",
+            _require_non_empty_str(self.intent_id, "intent_id"),
+        )
+        object.__setattr__(
+            self,
+            "topology_snapshot_id",
+            _require_non_empty_str(self.topology_snapshot_id, "topology_snapshot_id"),
+        )
+        object.__setattr__(
+            self,
+            "job_id",
+            _require_non_empty_str(self.job_id, "job_id"),
+        )
+        object.__setattr__(
+            self,
+            "session_id",
+            _require_non_empty_str(self.session_id, "session_id"),
+        )
+        object.__setattr__(self, "source_buffer_id", source_buffer_id)
+        object.__setattr__(self, "destination_buffer_id", destination_buffer_id)
+        object.__setattr__(self, "direction", _normalize_transfer_direction(self.direction))
+        object.__setattr__(self, "total_bytes", total_bytes)
+        object.__setattr__(self, "ranges", ranges)
+        object.__setattr__(self, "plan", plan)
+        object.__setattr__(self, "issued_at", issued_at)
+        object.__setattr__(self, "expires_at", expires_at)
+        object.__setattr__(
+            self,
+            "lease_ids",
+            _normalize_non_empty_str_tuple(self.lease_ids, "lease_ids"),
+        )
+        object.__setattr__(self, "metadata", _copy_mapping(self.metadata, "metadata"))
+
+
+@dataclass(frozen=True)
+class TransferReceipt:
+    receipt_id: str
+    ticket_id: str
+    intent_id: str
+    decision_id: str
+    topology_snapshot_id: str
+    job_id: str
+    session_id: str
+    state: TransferStatusState | str
+    bytes_total: int
+    bytes_completed: int
+    started_at: float = 0.0
+    completed_at: float | None = None
+    path_stats: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
+    error: str | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        state = TransferStatusState(self.state)
+        bytes_total = int(self.bytes_total)
+        bytes_completed = int(self.bytes_completed)
+        if bytes_total < 0:
+            raise ValueError("bytes_total must be non-negative")
+        if bytes_completed < 0:
+            raise ValueError("bytes_completed must be non-negative")
+        if bytes_completed > bytes_total:
+            raise ValueError("bytes_completed cannot exceed bytes_total")
+        if state is TransferStatusState.COMPLETE:
+            if bytes_completed != bytes_total:
+                raise ValueError("complete receipt must report all bytes completed")
+            if self.error is not None:
+                raise ValueError("complete receipt cannot include error")
+        if state in {TransferStatusState.FAILED, TransferStatusState.CANCELED}:
+            if self.error is None or not str(self.error).strip():
+                raise ValueError("failed or canceled receipt requires error")
+        started_at = float(self.started_at)
+        if started_at < 0:
+            raise ValueError("started_at must be non-negative")
+        completed_at = None if self.completed_at is None else float(self.completed_at)
+        if completed_at is not None and completed_at < started_at:
+            raise ValueError("completed_at must not be earlier than started_at")
+        object.__setattr__(
+            self,
+            "receipt_id",
+            _require_non_empty_str(self.receipt_id, "receipt_id"),
+        )
+        object.__setattr__(
+            self,
+            "ticket_id",
+            _require_non_empty_str(self.ticket_id, "ticket_id"),
+        )
+        object.__setattr__(
+            self,
+            "intent_id",
+            _require_non_empty_str(self.intent_id, "intent_id"),
+        )
+        object.__setattr__(
+            self,
+            "decision_id",
+            _require_non_empty_str(self.decision_id, "decision_id"),
+        )
+        object.__setattr__(
+            self,
+            "topology_snapshot_id",
+            _require_non_empty_str(self.topology_snapshot_id, "topology_snapshot_id"),
+        )
+        object.__setattr__(
+            self,
+            "job_id",
+            _require_non_empty_str(self.job_id, "job_id"),
+        )
+        object.__setattr__(
+            self,
+            "session_id",
+            _require_non_empty_str(self.session_id, "session_id"),
+        )
+        object.__setattr__(self, "state", state)
+        object.__setattr__(self, "bytes_total", bytes_total)
+        object.__setattr__(self, "bytes_completed", bytes_completed)
+        object.__setattr__(self, "started_at", started_at)
+        object.__setattr__(self, "completed_at", completed_at)
+        object.__setattr__(
+            self,
+            "path_stats",
+            _normalize_mapping_tuple(self.path_stats, "path_stats"),
+        )
+        if self.error is not None:
+            object.__setattr__(self, "error", str(self.error))
+        object.__setattr__(self, "metadata", _copy_mapping(self.metadata, "metadata"))
 
 
 @dataclass(frozen=True)
@@ -583,6 +1041,87 @@ def _normalize_worker_ranges(ranges: tuple[dict[str, int], ...]) -> tuple[dict[s
     return tuple(normalized_ranges)
 
 
+def _require_non_empty_str(value: object, field_name: str) -> str:
+    normalized = str(value)
+    if not normalized.strip():
+        raise ValueError(f"{field_name} must be non-empty")
+    return normalized
+
+
+def _copy_mapping(value: Mapping[str, Any], field_name: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{field_name} must be a mapping")
+    return dict(value)
+
+
+def _normalize_mapping_tuple(
+    value: tuple[Mapping[str, Any], ...],
+    field_name: str,
+) -> tuple[dict[str, Any], ...]:
+    normalized: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise TypeError(f"{field_name} entries must be mappings")
+        normalized.append(dict(item))
+    return tuple(normalized)
+
+
+def _normalize_non_empty_str_tuple(
+    value: tuple[str, ...],
+    field_name: str,
+) -> tuple[str, ...]:
+    return tuple(_require_non_empty_str(item, field_name) for item in value)
+
+
+def _normalize_transfer_direction(value: object) -> str:
+    direction = str(value).lower()
+    if direction not in {"h2d", "d2h"}:
+        raise ValueError("direction must be h2d or d2h")
+    return direction
+
+
+def _normalize_contract_ranges(
+    ranges: tuple[Mapping[str, int], ...],
+) -> tuple[dict[str, int], ...]:
+    return _normalize_worker_ranges(ranges)
+
+
+def _validate_ranges_match_total(
+    total_bytes: int,
+    ranges: tuple[dict[str, int], ...],
+    field_name: str,
+) -> None:
+    range_bytes = sum(item["bytes"] for item in ranges)
+    if range_bytes != total_bytes:
+        raise ValueError(f"{field_name} must equal the sum of range bytes")
+
+
+def _normalize_policy_hints(value: Mapping[str, Any]) -> dict[str, Any]:
+    policy_hints = _copy_mapping(value, "policy_hints")
+    forbidden_keys = {
+        "mode",
+        "path",
+        "paths",
+        "route",
+        "routes",
+        "relay",
+        "relays",
+        "relay_gpu",
+        "relay_gpus",
+        "target_device",
+        "target_gpu",
+    }
+    invalid_keys = sorted(
+        key for key in policy_hints if str(key).lower() in forbidden_keys
+    )
+    if invalid_keys:
+        raise ValueError(
+            "policy_hints must not choose physical paths: "
+            + ", ".join(str(key) for key in invalid_keys)
+        )
+    return policy_hints
+
+
 def _validate_worker_range_bounds(
     ranges: tuple[dict[str, int], ...],
     *,
@@ -783,19 +1322,28 @@ class DaemonResponse:
 
 __all__ = [
     "AutoTransferDecision",
+    "BufferHandle",
+    "BufferKind",
     "BufferRegistration",
     "CleanupRequest",
     "DaemonRequest",
     "DaemonResponse",
+    "ExecutionTicket",
     "JobIdentity",
     "LeaseToken",
     "RelayQuota",
     "RequestType",
+    "SchedulingDecision",
+    "SchedulingDecisionState",
     "Session",
+    "TopologySnapshot",
+    "TransferIntent",
     "TransferMode",
+    "TransferReceipt",
     "TransferReservation",
     "TransferStatus",
     "TransferStatusState",
+    "WorkloadKind",
     "WorkerTransferAuthorization",
     "WorkerTransferAuthorizationRequest",
     "WorkerBufferHandle",

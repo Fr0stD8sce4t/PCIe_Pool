@@ -29,6 +29,11 @@ The active target architecture is:
 - Phase 0 Cut 1 is complete. `docs/PHASE0_CONTRACT_INVENTORY.md` records the
   current transfer entry points, tests, examples, benchmarks, and the target
   classification for the daemon-first architecture.
+- Phase 0 Cut 2 is complete. `turbobus/schema.py` now defines the shared
+  daemon-first schema objects for BufferHandle, TransferIntent,
+  TopologySnapshot, SchedulingDecision, ExecutionTicket, and TransferReceipt.
+  `test/python/unit/test_contract_schema.py` validates serialization and
+  rejection behavior for the new contracts.
 
 ## Active Phase
 
@@ -46,14 +51,16 @@ Phase 0 covers:
 
 ## Next Work Items
 
-Current item: Cut 2, Shared schema layer.
+Current item: Cut 3, Package boundary setup.
 
 1. Shared schema layer.
+   - Status: complete.
    - Add JobIdentity, BufferHandle, TransferIntent, TopologySnapshot,
      SchedulingDecision, ExecutionTicket, and TransferReceipt.
    - Add validation tests under `test/python/unit/`.
 
 2. Package boundary setup.
+   - Status: current.
    - Introduce `api`, `control`, `topology`, `scheduler`, and `data_plane`
      package boundaries.
    - Keep adapters under `adapters`.

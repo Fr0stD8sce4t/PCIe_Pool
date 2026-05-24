@@ -33,10 +33,13 @@ creates the contracts needed for the rest of the system:
 
 ## Current
 
-Cut 2: Shared Schema Layer.
+Cut 3: Package Boundary Setup.
 
 Cut 1 is complete. The contract inventory is recorded in
 `docs/PHASE0_CONTRACT_INVENTORY.md`.
+
+Cut 2 is complete. The shared daemon-first schema objects now live in
+`turbobus/schema.py`, with contract tests under `test/python/unit/`.
 
 ## Phase 0 Code Cuts
 
@@ -58,7 +61,7 @@ Expected output:
 
 ### Cut 2: Shared Schema Layer
 
-Status: current.
+Status: complete.
 
 - Add the new schema objects.
 - Add validation rules for ownership, byte ranges, directions, workload kind,
@@ -71,6 +74,8 @@ Expected output:
 - no framework adapter changes yet.
 
 ### Cut 3: Package Boundary Setup
+
+Status: current.
 
 Introduce the new package layout:
 
