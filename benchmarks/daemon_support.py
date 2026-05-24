@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict
+from enum import Enum
 import os
 import uuid
 
@@ -85,7 +86,7 @@ def submit_benchmark_transfer_intent(
 
 
 def receipt_to_trace(receipt: TransferReceipt) -> dict[str, object]:
-    trace = asdict(receipt)
+    trace = _json_ready(asdict(receipt))
     direct_bytes = 0
     relay_bytes = 0
     direct_chunks = 0
@@ -163,3 +164,13 @@ def _format_status_line(prefix: str, data: dict[str, object]) -> str:
     if not fields:
         return ""
     return " ".join([prefix, *fields])
+
+
+def _json_ready(value):
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, Mapping):
+        return {str(key): _json_ready(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(item) for item in value]
+    return value

@@ -60,6 +60,17 @@ Cut 6 is complete. Tests now live under `test/python/unit/`,
 of widening the root public API, and synthetic topology remains an explicit
 fixture.
 
+Cut 7 Substage 7.1 is complete. The daemon can accept public
+`TransferIntent` submission and return `TransferReceipt` records for benchmark
+code.
+
+Cut 7 Substage 7.2 is complete. The model-loading benchmark now submits
+model-weight `TransferIntent` objects through the public client API, treats
+benchmark policy as metadata instead of physical path selection, and reports
+daemon receipt ids, path split, bytes, timing, and fallback reason.
+
+Current substage: Cut 7 Substage 7.3, training-offload benchmark rewrite.
+
 ## Phase 0 Code Cuts
 
 ### Cut 1: Contract Inventory
@@ -186,7 +197,7 @@ Status: complete.
 
 Substage 7.2: model-loading benchmark rewrite.
 
-Status: current.
+Status: complete.
 
 - Replace Runtime-owned physical mode selection with public client
   `TransferIntent` submission.
@@ -195,7 +206,7 @@ Status: current.
 
 Substage 7.3: training-offload benchmark rewrite.
 
-Status: pending.
+Status: current.
 
 - Submit H2D prefetch and D2H offload intent through the public client API.
 - Report separate prefetch/offload receipt ids, decision ids, ticket ids, bytes,

@@ -56,6 +56,17 @@ The active target architecture is:
   `test/python/fixtures/`. Moved tests now use explicit fixture and internal
   module imports, so the root package remains focused on daemon-first public
   API exports instead of old planner, transfer, and offload internals.
+- Phase 0 Cut 7 Substage 7.1 is complete. Benchmark helper code can construct
+  workload `TransferIntent` objects, submit them through the public client API,
+  and format `TransferReceipt` traces with decision id, topology snapshot id,
+  ticket id, bytes, path split, and fallback reason.
+- Phase 0 Cut 7 Substage 7.2 is complete. `benchmarks/model_loading.py` no
+  longer builds torch tensors, constructs a `Runtime`, or accepts
+  application-side `direct`, `relay`, or `pool` controls. It now submits
+  model-weight `TransferIntent` objects through `TurboBusClient`, stores
+  benchmark policy as metadata, and reads actual path split and ids from daemon
+  receipts. Focused validation covered the model-loading benchmark contract and
+  JSON-safe receipt output.
 
 ## Active Phase
 
@@ -112,10 +123,13 @@ Current item: Cut 7, Benchmark and example rewrite.
      execution ticket id, bytes, path split, and fallback reason. Benchmark
      helper code can construct workload intent and format receipt traces
      without physical path hints.
-   - Current substage: rewrite model-loading benchmark to submit through the
-     public client API and consume daemon receipts.
-   - Remaining substages: training-offload benchmark rewrite, then examples and
-     paper-validation command/output rewrite.
+   - Substage 7.2 complete: model-loading benchmark submission now goes through
+     the public client API and consumes daemon receipts. It no longer exposes
+     target GPU, relay GPU, or physical transfer mode CLI controls.
+   - Current substage: rewrite training-offload benchmark to submit H2D
+     prefetch and D2H offload intent through the public client API and consume
+     daemon receipts.
+   - Remaining substages: examples and paper-validation command/output rewrite.
 
 7. Adapter thinning.
    - Update vLLM, model loading, and training adapters to submit TransferIntent.
@@ -134,6 +148,20 @@ Phase 0 is done when:
 - `python -m compileall` passes;
 - non-GPU tests pass;
 - GPU tests are clearly marked and runnable on CUDA hardware.
+
+## Latest Validation
+
+Phase 0 Cut 7 Substage 7.2 validation:
+
+- `python -m unittest test.python.e2e.test_model_loading_benchmark test.python.e2e.test_benchmark_daemon_support test.python.unit.test_public_client_api`
+- `python -m compileall -q benchmarks\model_loading.py benchmarks\daemon_support.py test\python\e2e\test_model_loading_benchmark.py`
+- `git diff --check`
+
+Remaining Phase 0 risk:
+
+- `benchmarks/training_offload.py`, examples, paper-validation command
+  construction, and adapters still need the same daemon-first rewrite before
+  Phase 0 can be marked complete.
 
 ## Upcoming Phases
 
