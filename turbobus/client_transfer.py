@@ -6,7 +6,12 @@ from typing import Iterable, Mapping
 from .backends.cuda import default_cuda_backend
 from .client import CudaIpcDeviceBuffer, SharedPinnedCpuBuffer
 from .runtime_engine import RuntimeOptions
-from .schema import BufferRegistration, DaemonResponse, WorkerTransferAuthorizationRequest
+from .schema import (
+    BufferRegistration,
+    DaemonResponse,
+    ExecutionTicket,
+    WorkerTransferAuthorizationRequest,
+)
 from .transfer import TransferRange, TransferRequest
 from .worker import (
     CudaWorkerExecutor,
@@ -373,18 +378,26 @@ def _execute_direct_fallback_transfer(
 ) -> WorkerManagedTransferResult:
     transfer_id = str(planned_payload["transfer_id"])
     try:
+        ticket = _direct_ticket_from_planned_payload(
+            planned_payload,
+            transfer_request=transfer_request,
+            transfer_id=transfer_id,
+            job_id=job_id,
+            source_buffer_id=source.buffer_id,
+            target_buffer_id=target.buffer_id,
+        )
         bytes_completed = _execute_direct_plan(
             backend=backend,
             runtime_options=runtime_options,
             direction=transfer_request.direction.value,
-            plan_payload=dict(planned_payload["plan"]),
+            plan_payload=dict(ticket.plan),
             source=source,
             target=target,
         )
-        if bytes_completed != transfer_request.total_bytes:
+        if bytes_completed != ticket.total_bytes:
             raise RuntimeError(
                 "direct fallback completed "
-                f"{bytes_completed} of {transfer_request.total_bytes} daemon-planned bytes"
+                f"{bytes_completed} of {ticket.total_bytes} daemon-ticketed bytes"
             )
     except Exception as exc:
         daemon_client.transfer_status(
@@ -405,7 +418,7 @@ def _execute_direct_fallback_transfer(
     final_status = dict(status.payload["status"])
     _require_daemon_transfer_complete(
         final_status,
-        expected_bytes=transfer_request.total_bytes,
+        expected_bytes=ticket.total_bytes,
     )
     return WorkerManagedTransferResult(
         transfer_id=transfer_id,
@@ -515,6 +528,84 @@ def _run_direct_plan(
         )
     finally:
         host_buffer.unregister_from_cuda()
+
+
+def _direct_ticket_from_planned_payload(
+    planned_payload: Mapping[str, object],
+    *,
+    transfer_request: TransferRequest,
+    transfer_id: str,
+    job_id: str,
+    source_buffer_id: str,
+    target_buffer_id: str,
+) -> ExecutionTicket:
+    ticket_payload = planned_payload.get("ticket")
+    if not isinstance(ticket_payload, Mapping):
+        raise RuntimeError("daemon direct transfer did not include execution ticket")
+    ticket = ExecutionTicket(**dict(ticket_payload))
+    if ticket.metadata.get("issuer") != "turbobus-daemon":
+        raise RuntimeError("daemon direct ticket was not issued by turbobus-daemon")
+    plan_generation = planned_payload.get("plan_generation")
+    if (
+        plan_generation is not None
+        and int(ticket.metadata.get("plan_generation", 0)) != int(plan_generation)
+    ):
+        raise RuntimeError("daemon direct ticket plan generation mismatch")
+    if ticket.metadata.get("transfer_id") != str(transfer_id):
+        raise RuntimeError("daemon direct ticket transfer mismatch")
+    if ticket.job_id != str(job_id):
+        raise RuntimeError("daemon direct ticket job mismatch")
+    if ticket.source_buffer_id != str(source_buffer_id):
+        raise RuntimeError("daemon direct ticket source buffer mismatch")
+    if ticket.destination_buffer_id != str(target_buffer_id):
+        raise RuntimeError("daemon direct ticket destination buffer mismatch")
+    if ticket.direction != transfer_request.direction.value:
+        raise RuntimeError("daemon direct ticket direction mismatch")
+    if ticket.total_bytes != transfer_request.total_bytes:
+        raise RuntimeError("daemon direct ticket byte total mismatch")
+    if not _ticket_ranges_cover_transfer_request(ticket, transfer_request):
+        raise RuntimeError("daemon direct ticket ranges mismatch")
+    if dict(ticket.plan) != dict(planned_payload.get("plan") or {}):
+        raise RuntimeError("daemon direct ticket plan mismatch")
+    if ticket.lease_ids:
+        raise RuntimeError("daemon direct ticket must not include relay leases")
+    return ticket
+
+
+def _ticket_ranges_cover_transfer_request(
+    ticket: ExecutionTicket,
+    transfer_request: TransferRequest,
+) -> bool:
+    request_ranges = tuple(item.as_dict() for item in transfer_request.ranges)
+    if not request_ranges:
+        return False
+    ticket_total = 0
+    for ticket_range in ticket.ranges:
+        ticket_total += int(ticket_range["bytes"])
+        if not any(
+            _range_contains(request_range, ticket_range)
+            for request_range in request_ranges
+        ):
+            return False
+    return ticket_total == transfer_request.total_bytes
+
+
+def _range_contains(
+    outer: Mapping[str, int],
+    inner: Mapping[str, int],
+) -> bool:
+    outer_src = int(outer["src_offset"])
+    outer_dst = int(outer["dst_offset"])
+    outer_bytes = int(outer["bytes"])
+    inner_src = int(inner["src_offset"])
+    inner_dst = int(inner["dst_offset"])
+    inner_bytes = int(inner["bytes"])
+    return (
+        outer_src <= inner_src
+        and outer_dst <= inner_dst
+        and inner_src + inner_bytes <= outer_src + outer_bytes
+        and inner_dst + inner_bytes <= outer_dst + outer_bytes
+    )
 
 
 def _set_cuda_device_for_direct_plan(backend, target_device: int) -> None:

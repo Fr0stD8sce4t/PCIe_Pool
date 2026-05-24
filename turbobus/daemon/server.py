@@ -946,7 +946,6 @@ class TurboBusDaemon:
             return DaemonResponse(
                 ok=True,
                 payload={
-                    "authorization": asdict(authorization),
                     "ticket": asdict(ticket),
                     "decision": None if decision is None else asdict(decision),
                     "src_buffer": asdict(src_buffer),
@@ -954,6 +953,10 @@ class TurboBusDaemon:
                     "relay_gpu": lease.relay_gpu,
                     "lease_id": request.lease_id,
                     "transfer_id": request.transfer_id,
+                    "plan_generation": self._transfer_plan_generations.get(
+                        request.transfer_id,
+                        0,
+                    ),
                     "staging_record": dict(staging_record),
                 },
             )
@@ -1087,6 +1090,21 @@ class TurboBusDaemon:
                 now=now,
             )
             self._touch_session_locked(session.session_id, now)
+            if (
+                not reservations
+                and len(buffer_ids_tuple) >= 2
+                and _decision_is_direct_only(decision)
+            ):
+                ticket = self._execution_ticket_for_plan_locked(
+                    transfer_id=transfer_id,
+                    decision=decision,
+                    source_buffer_id=buffer_ids_tuple[0],
+                    destination_buffer_id=buffer_ids_tuple[1],
+                    now=now,
+                    lease_ids=(),
+                )
+                self._execution_tickets[ticket.ticket_id] = ticket
+                self._transfer_tickets[transfer_id] = ticket.ticket_id
             payload = self._planned_transfer_payload_locked(
                 transfer_id=transfer_id,
                 decision=decision,
@@ -1631,6 +1649,12 @@ class TurboBusDaemon:
             for reservation in reservations
             if reservation.reservation_id in self._lease_tokens
         ]
+        ticket_id = self._transfer_tickets.get(str(transfer_id))
+        payload["ticket"] = (
+            None
+            if ticket_id is None
+            else asdict(self._execution_tickets[ticket_id])
+        )
         return payload
 
     def _validate_transfer_admission_locked(
@@ -2114,27 +2138,14 @@ class TurboBusDaemon:
         expires_at = float(lease.expires_at or (float(now) + 30.0))
         if expires_at <= float(now):
             raise ValueError("lease expired")
-        ticket_ranges = _ticket_ranges_for_plan(
-            decision.plan,
-            direction=authorization.direction,
-        )
-        return ExecutionTicket(
-            ticket_id=f"ticket-{transfer_id}",
-            decision_id=decision.decision_id,
-            intent_id=decision.intent_id,
-            topology_snapshot_id=decision.topology_snapshot_id,
-            job_id=authorization.job_id,
-            session_id=authorization.session_id,
+        return self._execution_ticket_for_plan_locked(
+            transfer_id=transfer_id,
+            decision=decision,
             source_buffer_id=authorization.src_buffer.buffer_id,
             destination_buffer_id=authorization.dst_buffer.buffer_id,
-            direction=authorization.direction,
-            total_bytes=sum(item["bytes"] for item in ticket_ranges),
-            ranges=ticket_ranges,
-            plan=dict(decision.plan),
-            issued_at=float(now),
+            now=now,
             expires_at=expires_at,
             lease_ids=(authorization.lease_id,),
-            metadata={"transfer_id": transfer_id},
         )
 
     def _execution_ticket_for_intent_locked(
@@ -2145,7 +2156,6 @@ class TurboBusDaemon:
         decision: SchedulingDecision,
         now: float,
     ) -> ExecutionTicket:
-        ticket_ranges = _ticket_ranges_for_plan(decision.plan, direction=intent.direction)
         lease_ids = tuple(
             reservation_id
             for reservation_id, mapped_transfer_id in sorted(
@@ -2162,23 +2172,65 @@ class TurboBusDaemon:
                 and float(self._lease_tokens[lease_id].expires_at) > float(now)
             ]
         )
+        return self._execution_ticket_for_plan_locked(
+            transfer_id=transfer_id,
+            decision=decision,
+            source_buffer_id=intent.source_buffer_id,
+            destination_buffer_id=intent.destination_buffer_id,
+            now=now,
+            expires_at=expires_at,
+            lease_ids=lease_ids,
+        )
+
+    def _execution_ticket_for_plan_locked(
+        self,
+        *,
+        transfer_id: str,
+        decision: SchedulingDecision,
+        source_buffer_id: str,
+        destination_buffer_id: str,
+        now: float,
+        expires_at: float | None = None,
+        lease_ids: tuple[str, ...] = (),
+    ) -> ExecutionTicket:
+        direction = _decision_direction(decision)
+        ticket_ranges = _ticket_ranges_for_plan(decision.plan, direction=direction)
+        resolved_expires_at = (
+            float(expires_at)
+            if expires_at is not None
+            else float(
+                self._transfer_plan_expirations.get(
+                    str(transfer_id),
+                    float(now) + _DEFAULT_PLAN_TTL_SECONDS,
+                )
+            )
+        )
+        if resolved_expires_at <= float(now):
+            resolved_expires_at = float(now) + _DEFAULT_PLAN_TTL_SECONDS
         return ExecutionTicket(
             ticket_id=f"ticket-{transfer_id}",
             decision_id=decision.decision_id,
-            intent_id=intent.intent_id,
+            intent_id=decision.intent_id,
             topology_snapshot_id=decision.topology_snapshot_id,
-            job_id=intent.job_id,
-            session_id=intent.session_id,
-            source_buffer_id=intent.source_buffer_id,
-            destination_buffer_id=intent.destination_buffer_id,
-            direction=intent.direction,
+            job_id=decision.job_id,
+            session_id=decision.session_id,
+            source_buffer_id=source_buffer_id,
+            destination_buffer_id=destination_buffer_id,
+            direction=direction,
             total_bytes=sum(item["bytes"] for item in ticket_ranges),
             ranges=ticket_ranges,
             plan=dict(decision.plan),
             issued_at=float(now),
-            expires_at=expires_at,
+            expires_at=resolved_expires_at,
             lease_ids=lease_ids,
-            metadata={"transfer_id": transfer_id},
+            metadata={
+                "issuer": "turbobus-daemon",
+                "transfer_id": transfer_id,
+                "plan_generation": self._transfer_plan_generations.get(
+                    str(transfer_id),
+                    0,
+                ),
+            },
         )
 
     def _receipt_for_intent_locked(self, intent_id: str) -> TransferReceipt:
@@ -3730,6 +3782,34 @@ def _ticket_ranges_for_plan(
     if not ranges:
         raise ValueError("daemon plan has no authorized chunks")
     return tuple(ranges)
+
+
+def _decision_direction(decision: SchedulingDecision) -> str:
+    for assignment in decision.plan.get("assignments", ()) or ():
+        if not isinstance(assignment, dict):
+            continue
+        path = assignment.get("path")
+        if not isinstance(path, dict):
+            continue
+        direction = str(path.get("direction", "")).lower()
+        if direction in {"h2d", "d2h"}:
+            return direction
+    raise ValueError("scheduling decision plan has no direction")
+
+
+def _decision_is_direct_only(decision: SchedulingDecision) -> bool:
+    assignments = decision.plan.get("assignments", ()) or ()
+    if not assignments:
+        return False
+    for assignment in assignments:
+        if not isinstance(assignment, dict):
+            return False
+        path = assignment.get("path")
+        if not isinstance(path, dict):
+            return False
+        if str(path.get("kind", "")).lower() != "direct":
+            return False
+    return True
 
 
 def _runtime_state_without_transfer(

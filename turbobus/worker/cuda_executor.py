@@ -280,6 +280,8 @@ def _validate_request_and_slot(
 ) -> None:
     if not isinstance(request, WorkerTransferRequest):
         raise TypeError("request must be a WorkerTransferRequest")
+    if request.ticket is None:
+        raise ValueError("CUDA worker executor requires a daemon-issued ExecutionTicket")
     if not isinstance(staging_slot, WorkerStagingSlot):
         raise TypeError("staging_slot must be a WorkerStagingSlot")
     if staging_slot.transfer_id != request.transfer_id:

@@ -226,9 +226,19 @@ Phase 4 covers:
 - shared ticket and receipt semantics for H2D, D2H, and range transfers;
 - correctness tests for direct, relay, pooled, and failure paths.
 
+Phase 4 Cut 1 is complete. Worker request construction now rejects daemon
+responses without `ExecutionTicket` payloads, non-daemon-issued tickets,
+missing plan generations, stale plan generations, and mismatched ticket,
+decision, buffer, lease, range, or plan fields before any worker staging or
+backend execution. Worker-managed direct fallback now also consumes the
+daemon-issued ticket plan instead of executing a bare daemon plan payload.
+Daemon worker authorization returns ticket, decision, source buffer,
+destination buffer, lease, transfer id, plan generation, and staging record
+data without exposing a separate executable authorization plan.
+
 ## Next Work Items
 
-Current item: Phase 4 Cut 1, exact daemon-issued data-plane plan boundary.
+Current item: Phase 4 Cut 2, multi-relay worker execution.
 
 1. Shared schema layer.
    - Status: complete.
@@ -336,8 +346,10 @@ Current item: Phase 4 Cut 1, exact daemon-issued data-plane plan boundary.
 
 12. Daemon-plan data plane.
    - Status: current.
-   - Cut 1 current: audit and tighten worker/data-plane execution entry points
+   - Cut 1 complete: audit and tighten worker/data-plane execution entry points
      so production paths execute only daemon-issued `ExecutionTicket` plans.
+   - Cut 2 current: extend worker-managed execution from one relay lease to
+     daemon-ticketed direct plus multi-relay pooled plans.
    - Keep direct, relay, and pooled paths as scheduler outcomes and data-plane
      behaviors, not app-side controls.
 
@@ -357,10 +369,10 @@ Phase 0 is complete:
 
 ## Latest Validation
 
-Phase 2 Cut 4 validation:
+Phase 4 Cut 1 validation:
 
-- `python -m unittest test.python.integration.test_daemon_state test.python.integration.test_daemon_socket test.python.integration.test_worker_helper test.python.integration.test_client_worker_transfer`
-- `python -m compileall -q turbobus\schema.py turbobus\daemon turbobus\worker turbobus\client_transfer.py test\python\integration\test_daemon_state.py test\python\integration\test_daemon_socket.py test\python\integration\test_worker_helper.py test\python\integration\test_client_worker_transfer.py`
+- `python -m unittest test.python.integration.test_client_worker_transfer test.python.integration.test_worker_helper test.python.unit.test_worker_cuda_executor test.python.integration.test_daemon_state test.python.integration.test_daemon_socket`
+- `python -m compileall -q turbobus\worker turbobus\data_plane turbobus\daemon turbobus\client_transfer.py test\python\integration\test_worker_helper.py test\python\unit\test_worker_cuda_executor.py test\python\integration\test_client_worker_transfer.py test\python\integration\test_daemon_state.py test\python\integration\test_daemon_socket.py`
 - `git diff --check`
 
 Remaining risk:
@@ -372,13 +384,19 @@ Remaining risk:
   relay admission, delayed lease grants, plan expiration, and rescheduling in
   non-GPU control-plane tests. Production behavior still needs to be exercised
   on a real multi-GPU CUDA server under concurrent workload pressure.
-- Phase 4 has not yet tightened every worker and backend data-plane execution
-  entry point around exact daemon-issued tickets.
+- Phase 4 Cut 1 tightened worker-managed direct, relay, and pooled execution
+  entry points around exact daemon-issued tickets. The legacy `turbobus.runtime`
+  module still contains importable Runtime-local execution code and must be
+  removed, demoted to explicit legacy-internal tests, or routed through
+  daemon-issued tickets before Phase 4 is considered complete.
+- Phase 4 still needs multi-relay worker execution, daemon/worker staging
+  lifecycle ownership, shared H2D/D2H/range receipt semantics, and GPU
+  correctness coverage.
 
 Latest validation:
 
-- `python -m unittest test.python.unit.test_daemon_scheduler test.python.unit.test_schema test.python.unit.test_contract_schema test.python.integration.test_daemon_state test.python.integration.test_daemon_socket`
-- `python -m compileall -q turbobus\\schema.py turbobus\\daemon turbobus\\scheduler test\\python\\unit\\test_daemon_scheduler.py test\\python\\integration\\test_daemon_state.py test\\python\\integration\\test_daemon_socket.py`
+- `python -m unittest test.python.integration.test_client_worker_transfer test.python.integration.test_worker_helper test.python.unit.test_worker_cuda_executor test.python.integration.test_daemon_state test.python.integration.test_daemon_socket`
+- `python -m compileall -q turbobus\\worker turbobus\\data_plane turbobus\\daemon turbobus\\client_transfer.py test\\python\\integration\\test_worker_helper.py test\\python\\unit\\test_worker_cuda_executor.py test\\python\\integration\\test_client_worker_transfer.py test\\python\\integration\\test_daemon_state.py test\\python\\integration\\test_daemon_socket.py`
 - `git diff --check`
 
 ## Upcoming Phases

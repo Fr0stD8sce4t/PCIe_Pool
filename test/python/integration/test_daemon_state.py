@@ -54,6 +54,20 @@ def _relay_ranges(plan: dict, relay_gpu: int) -> tuple[dict[str, int], ...]:
     return tuple(ranges)
 
 
+def _all_plan_ranges(plan: dict) -> tuple[dict[str, int], ...]:
+    ranges = []
+    for assignment in plan["assignments"]:
+        ranges.extend(
+            {
+                "src_offset": int(chunk["src_offset"]),
+                "dst_offset": int(chunk["dst_offset"]),
+                "bytes": int(chunk["bytes"]),
+            }
+            for chunk in assignment["chunks"]
+        )
+    return tuple(ranges)
+
+
 def _relay_profile() -> dict:
     return {
         "target_device": 0,
@@ -1961,7 +1975,9 @@ class DaemonStateTest(unittest.TestCase):
             )
         )
         self.assertTrue(authorized.ok)
-        self.assertEqual(authorized.payload["authorization"]["job_id"], "job-1")
+        self.assertEqual(authorized.payload["ticket"]["job_id"], "job-1")
+        self.assertEqual(authorized.payload["src_buffer"]["job_id"], "job-1")
+        self.assertEqual(authorized.payload["dst_buffer"]["job_id"], "job-1")
 
     def test_authenticated_peer_cannot_plan_transfer_with_other_job_buffers(self) -> None:
         daemon = _daemon(
@@ -2540,23 +2556,25 @@ class DaemonStateTest(unittest.TestCase):
         )
 
         self.assertTrue(authorized.ok)
-        authorization = authorized.payload["authorization"]
-        self.assertEqual(authorization["transfer_id"], transfer_id)
-        self.assertEqual(authorization["src_buffer"]["buffer_id"], "cpu-buffer")
-        self.assertEqual(authorization["dst_buffer"]["buffer_id"], "gpu-buffer")
-        self.assertEqual(authorization["src_buffer"]["handle_type"], "shared_pinned_cpu")
+        src_buffer = authorized.payload["src_buffer"]
+        dst_buffer = authorized.payload["dst_buffer"]
+        ticket = authorized.payload["ticket"]
+        self.assertEqual(authorized.payload["transfer_id"], transfer_id)
+        self.assertEqual(src_buffer["buffer_id"], "cpu-buffer")
+        self.assertEqual(dst_buffer["buffer_id"], "gpu-buffer")
+        self.assertEqual(src_buffer["handle_type"], "shared_pinned_cpu")
         self.assertEqual(
-            authorization["src_buffer"]["metadata"]["shared_memory_name"],
+            src_buffer["metadata"]["shared_memory_name"],
             "tb-job-1-src",
         )
-        self.assertEqual(authorization["dst_buffer"]["handle_type"], "cuda_ipc_device")
+        self.assertEqual(dst_buffer["handle_type"], "cuda_ipc_device")
         self.assertEqual(
-            authorization["dst_buffer"]["metadata"]["cuda_ipc_handle"],
+            dst_buffer["metadata"]["cuda_ipc_handle"],
             CUDA_IPC_TARGET_HANDLE,
         )
-        self.assertEqual(authorization["ranges"], _relay_ranges(planned.payload["plan"], 1))
-        self.assertEqual(authorization["relay_gpu"], 1)
-        self.assertEqual(authorization["plan"], planned.payload["plan"])
+        self.assertEqual(ticket["ranges"], _all_plan_ranges(planned.payload["plan"]))
+        self.assertEqual(authorized.payload["relay_gpu"], 1)
+        self.assertEqual(ticket["plan"], planned.payload["plan"])
         self.assertEqual(authorized.payload["decision"]["decision_id"], planned.payload["decision_id"])
         staging_record = authorized.payload["staging_record"]
         self.assertEqual(staging_record["lease_id"], lease_token["lease_id"])
@@ -2566,13 +2584,12 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(staging_record["relay_gpu"], 1)
         self.assertEqual(
             staging_record["requested_bytes"],
-            sum(item["bytes"] for item in authorization["ranges"]),
+            sum(item["bytes"] for item in _relay_ranges(planned.payload["plan"], 1)),
         )
         self.assertIn(
             lease_token["lease_id"],
             daemon.describe().payload["staging_records"],
         )
-        ticket = authorized.payload["ticket"]
         self.assertEqual(ticket["decision_id"], planned.payload["decision_id"])
         self.assertEqual(ticket["topology_snapshot_id"], planned.payload["topology_snapshot_id"])
         self.assertEqual(ticket["job_id"], "job-1")
@@ -2581,7 +2598,9 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(ticket["destination_buffer_id"], "gpu-buffer")
         self.assertEqual(ticket["plan"], planned.payload["plan"])
         self.assertEqual(ticket["lease_ids"], (lease_token["lease_id"],))
+        self.assertEqual(ticket["metadata"]["issuer"], "turbobus-daemon")
         self.assertEqual(ticket["metadata"]["transfer_id"], transfer_id)
+        self.assertEqual(ticket["metadata"]["plan_generation"], authorized.payload["plan_generation"])
 
         wrong_transfer = daemon.authorize_worker_transfer(
             WorkerTransferAuthorizationRequest(

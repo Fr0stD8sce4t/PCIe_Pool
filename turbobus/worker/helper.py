@@ -43,33 +43,21 @@ class WorkerCleanupError(RuntimeError):
 @dataclass(frozen=True)
 class WorkerTransferRequest:
     authorization: WorkerTransferAuthorization
+    ticket: ExecutionTicket
     data_plane: WorkerDataPlaneRequest | None = None
-    ticket: ExecutionTicket | None = None
 
     @classmethod
     def from_authorization_payload(
         cls,
         payload: Mapping[str, object],
     ) -> "WorkerTransferRequest":
-        if payload.get("ticket") is not None:
-            return cls.from_execution_ticket_payload(payload)
-        authorization_payload = payload.get("authorization", payload)
-        if not isinstance(authorization_payload, Mapping):
+        if not isinstance(payload, Mapping):
             raise ValueError("authorization payload must be a mapping")
-        return cls.from_authorization(
-            WorkerTransferAuthorization(
-                transfer_id=str(authorization_payload["transfer_id"]),
-                lease_id=str(authorization_payload["lease_id"]),
-                session_id=str(authorization_payload["session_id"]),
-                job_id=str(authorization_payload["job_id"]),
-                src_buffer=_buffer_from_payload(authorization_payload["src_buffer"]),
-                dst_buffer=_buffer_from_payload(authorization_payload["dst_buffer"]),
-                direction=str(authorization_payload["direction"]),
-                ranges=tuple(authorization_payload.get("ranges", ())),
-                relay_gpu=authorization_payload.get("relay_gpu"),
-                plan=dict(authorization_payload.get("plan") or {}),
+        if payload.get("ticket") is None:
+            raise ValueError(
+                "daemon worker authorization response must include execution ticket"
             )
-        )
+        return cls.from_execution_ticket_payload(payload)
 
     @classmethod
     def from_execution_ticket_payload(
@@ -94,6 +82,7 @@ class WorkerTransferRequest:
                 if decision_payload is None
                 else SchedulingDecision(**dict(decision_payload))
             ),
+            plan_generation=payload.get("plan_generation"),
         )
 
     @classmethod
@@ -101,9 +90,9 @@ class WorkerTransferRequest:
         cls,
         authorization: WorkerTransferAuthorization,
     ) -> "WorkerTransferRequest":
-        return cls(
-            authorization=authorization,
-            data_plane=WorkerDataPlaneRequest.from_authorization(authorization),
+        raise ValueError(
+            "worker transfer requests must be built from daemon-issued "
+            "ExecutionTicket objects"
         )
 
     @classmethod
@@ -117,8 +106,10 @@ class WorkerTransferRequest:
         lease_id: str | None = None,
         transfer_id: str | None = None,
         decision: SchedulingDecision | None = None,
+        plan_generation: object | None = None,
     ) -> "WorkerTransferRequest":
         _validate_ticket_matches_buffers(ticket, src_buffer, dst_buffer)
+        _validate_daemon_issued_ticket(ticket, plan_generation=plan_generation)
         if decision is not None:
             _validate_ticket_matches_decision(ticket, decision)
         relay = _relay_gpu_for_ticket(ticket, relay_gpu)
@@ -171,10 +162,10 @@ class WorkerTransferRequest:
             raise ValueError("data-plane ranges do not match authorization")
         if data_plane.plan != self.authorization.plan:
             raise ValueError("data-plane plan does not match authorization")
-        if self.ticket is not None:
-            if not isinstance(self.ticket, ExecutionTicket):
-                raise TypeError("ticket must be an ExecutionTicket")
-            _validate_ticket_matches_worker_request(self.ticket, self.authorization)
+        if not isinstance(self.ticket, ExecutionTicket):
+            raise TypeError("ticket must be an ExecutionTicket")
+        _validate_daemon_issued_ticket(self.ticket)
+        _validate_ticket_matches_worker_request(self.ticket, self.authorization)
         object.__setattr__(self, "data_plane", data_plane)
 
     @property
@@ -185,7 +176,7 @@ class WorkerTransferRequest:
         return {
             "authorization": asdict(self.authorization),
             "data_plane": asdict(self.data_plane),
-            "ticket": None if self.ticket is None else asdict(self.ticket),
+            "ticket": asdict(self.ticket),
         }
 
 
@@ -1157,6 +1148,36 @@ def _validate_ticket_matches_decision(
         raise ValueError("ticket session_id does not match scheduling decision")
     if dict(ticket.plan) != dict(decision.plan):
         raise ValueError("ticket plan does not match scheduling decision")
+    ticket_generation = ticket.metadata.get("plan_generation")
+    decision_generation = decision.metadata.get("plan_generation")
+    if (
+        ticket_generation is not None
+        and decision_generation is not None
+        and int(ticket_generation) != int(decision_generation)
+    ):
+        raise ValueError("ticket plan_generation does not match scheduling decision")
+
+
+def _validate_daemon_issued_ticket(
+    ticket: ExecutionTicket,
+    *,
+    plan_generation: object | None = None,
+) -> None:
+    if not isinstance(ticket, ExecutionTicket):
+        raise TypeError("ticket must be an ExecutionTicket")
+    issuer = str(ticket.metadata.get("issuer", ""))
+    if issuer != "turbobus-daemon":
+        raise ValueError("execution ticket must be issued by turbobus-daemon")
+    generation = ticket.metadata.get("plan_generation")
+    if generation is None:
+        raise ValueError("execution ticket missing plan_generation")
+    if int(generation) <= 0:
+        raise ValueError("execution ticket plan_generation must be positive")
+    if plan_generation is not None and int(plan_generation) != int(generation):
+        raise ValueError("execution ticket plan_generation is stale")
+    transfer_id = ticket.metadata.get("transfer_id")
+    if transfer_id is None or not str(transfer_id).strip():
+        raise ValueError("execution ticket missing transfer_id")
 
 
 def _validate_ticket_matches_worker_request(

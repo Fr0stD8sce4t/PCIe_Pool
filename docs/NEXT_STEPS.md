@@ -44,7 +44,7 @@ resource state, weighted scheduling inputs, relay admission state, delayed
 lease grants, plan expiration, and rescheduling state without giving
 applications or adapters physical path control.
 
-Current item: Phase 4 Cut 1, exact daemon-issued data-plane plan boundary.
+Current item: Phase 4 Cut 2, multi-relay worker execution.
 
 ### Phase 3 Cut 1
 
@@ -108,11 +108,11 @@ Expected output:
 
 ## Phase 4 Current Work
 
-Current item: Phase 4 Cut 1, exact daemon-issued data-plane plan boundary.
+Current item: Phase 4 Cut 2, multi-relay worker execution.
 
 Cut 1: data-plane plan boundary and worker input cleanup.
 
-Status: current.
+Status: complete.
 
 - Audit current worker and data-plane entry points that execute transfer plans.
 - Remove or rewrite any production path that can execute a plan not issued by
@@ -122,13 +122,36 @@ Status: current.
 - Add focused tests proving workers and data-plane helpers reject missing,
   stale, mismatched, or non-daemon-issued plans.
 
-Expected output:
+Completed output:
 
 - workers and data-plane helpers execute only daemon-issued `ExecutionTicket`
   plans in production paths;
 - direct, relay, and pooled paths remain scheduling outcomes, not app controls;
 - Phase 4 can add multi-relay pooled execution without widening application
   APIs.
+
+Cut 2: multi-relay worker execution.
+
+Status: current.
+
+- Extend worker request construction so one daemon-issued `ExecutionTicket`
+  can authorize multiple relay leases and relay GPU paths.
+- Split ticketed relay chunks by relay device without letting applications or
+  adapters name relays.
+- Update CUDA worker execution to initialize all relay devices required by the
+  ticketed plan and preserve direct plus multi-relay path stats.
+- Keep `fetch_plan_to_gpu` and `offload_plan_to_cpu` as backend primitives fed
+  by the exact daemon ticket plan.
+- Add focused tests for H2D and D2H pooled plans containing direct chunks plus
+  at least two relay paths.
+
+Expected output:
+
+- workers can execute daemon-ticketed direct plus multi-relay pooled plans;
+- relay leases, ticket metadata, and worker staging records remain tied to the
+  daemon plan generation;
+- applications and adapters still submit only `TransferIntent` and consume
+  `TransferReceipt`.
 
 ## Phase 0 Code Cuts
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 import unittest
 
 from turbobus.schema import (
@@ -100,11 +100,7 @@ class FakeCudaBackend:
 
 def authorization_payload() -> dict:
     ranges = ({"src_offset": 0, "dst_offset": 0, "bytes": 16},)
-    authorization = WorkerTransferAuthorization(
-        transfer_id="transfer-1",
-        lease_id="lease-1",
-        session_id="session-1",
-        job_id="job-1",
+    return ticket_authorization_payload(
         src_buffer=BufferRegistration(
             buffer_id="cpu-buffer",
             job_id="job-1",
@@ -129,21 +125,14 @@ def authorization_payload() -> dict:
         ),
         direction="h2d",
         ranges=ranges,
-        relay_gpu=1,
-        plan=daemon_worker_plan(direction="h2d", ranges=ranges),
     )
-    return WorkerTransferRequest(authorization=authorization).as_dict()
 
 
 def authorization_payload_for_shared_cpu(
     source_buffer: SharedPinnedCpuBuffer,
 ) -> dict:
     ranges = ({"src_offset": 0, "dst_offset": 0, "bytes": 16},)
-    authorization = WorkerTransferAuthorization(
-        transfer_id="transfer-1",
-        lease_id="lease-1",
-        session_id="session-1",
-        job_id="job-1",
+    return ticket_authorization_payload(
         src_buffer=source_buffer.buffer_registration(),
         dst_buffer=BufferRegistration(
             buffer_id="gpu-buffer",
@@ -156,21 +145,14 @@ def authorization_payload_for_shared_cpu(
         ),
         direction="h2d",
         ranges=ranges,
-        relay_gpu=1,
-        plan=daemon_worker_plan(direction="h2d", ranges=ranges),
     )
-    return WorkerTransferRequest(authorization=authorization).as_dict()
 
 
 def d2h_authorization_payload_for_shared_cpu(
     destination_buffer: SharedPinnedCpuBuffer,
 ) -> dict:
     ranges = ({"src_offset": 0, "dst_offset": 0, "bytes": 16},)
-    authorization = WorkerTransferAuthorization(
-        transfer_id="transfer-1",
-        lease_id="lease-1",
-        session_id="session-1",
-        job_id="job-1",
+    return ticket_authorization_payload(
         src_buffer=BufferRegistration(
             buffer_id="gpu-buffer",
             job_id="job-1",
@@ -183,10 +165,7 @@ def d2h_authorization_payload_for_shared_cpu(
         dst_buffer=destination_buffer.buffer_registration(),
         direction="d2h",
         ranges=ranges,
-        relay_gpu=1,
-        plan=daemon_worker_plan(direction="d2h", ranges=ranges),
     )
-    return WorkerTransferRequest(authorization=authorization).as_dict()
 
 
 def daemon_worker_plan(
@@ -216,7 +195,15 @@ def daemon_worker_plan(
     }
 
 
-def scheduling_decision_payload() -> dict:
+def scheduling_decision_payload(
+    *,
+    direction: str = "h2d",
+    ranges: tuple[dict[str, int], ...] = ({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
+    plan: dict[str, object] | None = None,
+    plan_generation: int = 1,
+) -> dict:
+    if plan is None:
+        plan = daemon_worker_plan(direction=direction, ranges=ranges)
     return {
         "decision_id": "decision-1",
         "intent_id": "intent-1",
@@ -224,16 +211,34 @@ def scheduling_decision_payload() -> dict:
         "job_id": "job-1",
         "session_id": "session-1",
         "state": SchedulingDecisionState.PLANNED.value,
-        "plan": daemon_worker_plan(
-            direction="h2d",
-            ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
-        ),
+        "plan": plan,
         "path_summary": ({"kind": "relay", "bytes": 16},),
         "issued_at": 1.0,
+        "metadata": {"plan_generation": int(plan_generation)},
     }
 
 
 def execution_ticket_payload(**overrides) -> dict:
+    plan = overrides.get(
+        "plan",
+        daemon_worker_plan(
+            direction="h2d",
+            ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
+        ),
+    )
+    ranges = tuple(
+        overrides.get("ranges", ({"src_offset": 0, "dst_offset": 0, "bytes": 16},))
+    )
+    metadata = dict(
+        overrides.get(
+            "metadata",
+            {
+                "issuer": "turbobus-daemon",
+                "transfer_id": "transfer-1",
+                "plan_generation": 1,
+            },
+        )
+    )
     payload = {
         "ticket_id": "ticket-1",
         "decision_id": "decision-1",
@@ -244,32 +249,84 @@ def execution_ticket_payload(**overrides) -> dict:
         "source_buffer_id": "cpu-buffer",
         "destination_buffer_id": "gpu-buffer",
         "direction": "h2d",
-        "total_bytes": 16,
-        "ranges": ({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
-        "plan": daemon_worker_plan(
-            direction="h2d",
-            ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
-        ),
+        "total_bytes": sum(int(item["bytes"]) for item in ranges),
+        "ranges": ranges,
+        "plan": plan,
         "issued_at": 1.0,
         "expires_at": 10.0,
         "lease_ids": ("lease-1",),
-        "metadata": {"transfer_id": "transfer-1"},
+        "metadata": metadata,
     }
     payload.update(overrides)
     return payload
 
 
-def ticket_authorization_payload(**ticket_overrides) -> dict:
-    payload = authorization_payload()
-    authorization = payload["authorization"]
+def ticket_authorization_payload(
+    *,
+    src_buffer: BufferRegistration | None = None,
+    dst_buffer: BufferRegistration | None = None,
+    direction: str = "h2d",
+    ranges: tuple[dict[str, int], ...] = ({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
+    relay_gpu: int = 1,
+    plan: dict[str, object] | None = None,
+    plan_generation: int = 1,
+    **ticket_overrides,
+) -> dict:
+    if src_buffer is None:
+        src_buffer = BufferRegistration(
+            buffer_id="cpu-buffer",
+            job_id="job-1",
+            kind="cpu_pinned",
+            size_bytes=64,
+            pinned=True,
+            handle_type="shared_pinned_cpu",
+            metadata={
+                "shared_memory_name": "tb-job-1-src",
+                "offset_bytes": 0,
+                "shared_memory_size_bytes": 64,
+            },
+        )
+    if dst_buffer is None:
+        dst_buffer = BufferRegistration(
+            buffer_id="gpu-buffer",
+            job_id="job-1",
+            kind="gpu",
+            size_bytes=64,
+            device_index=0,
+            handle_type="cuda_ipc_device",
+            metadata={"cuda_ipc_handle": (b"t" * 64).hex()},
+        )
+    if plan is None:
+        plan = daemon_worker_plan(direction=direction, ranges=ranges, relay_gpu=relay_gpu)
+    metadata = dict(ticket_overrides.pop("metadata", {}))
+    metadata.setdefault("issuer", "turbobus-daemon")
+    metadata.setdefault("transfer_id", "transfer-1")
+    metadata.setdefault("plan_generation", int(plan_generation))
+    ticket_fields = {
+        "source_buffer_id": src_buffer.buffer_id,
+        "destination_buffer_id": dst_buffer.buffer_id,
+        "direction": direction,
+        "total_bytes": sum(int(item["bytes"]) for item in ranges),
+        "ranges": ranges,
+        "plan": plan,
+        "metadata": metadata,
+    }
+    ticket_fields.update(ticket_overrides)
+    ticket_payload = execution_ticket_payload(**ticket_fields)
     return {
-        "ticket": execution_ticket_payload(**ticket_overrides),
-        "decision": scheduling_decision_payload(),
-        "src_buffer": authorization["src_buffer"],
-        "dst_buffer": authorization["dst_buffer"],
-        "relay_gpu": 1,
+        "ticket": ticket_payload,
+        "decision": scheduling_decision_payload(
+            direction=direction,
+            ranges=ranges,
+            plan=plan,
+            plan_generation=plan_generation,
+        ),
+        "src_buffer": asdict(src_buffer),
+        "dst_buffer": asdict(dst_buffer),
+        "relay_gpu": relay_gpu,
         "lease_id": "lease-1",
         "transfer_id": "transfer-1",
+        "plan_generation": int(plan_generation),
     }
 
 
@@ -444,15 +501,23 @@ class FakeDaemonClient:
 
 
 class WorkerHelperTest(unittest.TestCase):
-    def test_worker_request_parses_daemon_authorization_payload(self) -> None:
+    def test_worker_request_rejects_non_ticketed_authorization_payload(self) -> None:
+        payload = dict(authorization_payload())
+        payload.pop("ticket")
+
+        with self.assertRaisesRegex(ValueError, "execution ticket"):
+            WorkerTransferRequest.from_authorization_payload(payload)
+
+    def test_worker_request_parses_daemon_ticket_payload(self) -> None:
         request = WorkerTransferRequest.from_authorization_payload(authorization_payload())
 
         self.assertEqual(request.transfer_id, "transfer-1")
         self.assertEqual(request.authorization.src_buffer.buffer_id, "cpu-buffer")
         self.assertEqual(request.authorization.dst_buffer.buffer_id, "gpu-buffer")
         self.assertEqual(request.authorization.ranges[0]["bytes"], 16)
+        self.assertIsInstance(request.ticket, ExecutionTicket)
 
-    def test_worker_request_builds_data_plane_request_from_authorization(self) -> None:
+    def test_worker_request_builds_data_plane_request_from_execution_ticket(self) -> None:
         request = WorkerTransferRequest.from_authorization_payload(authorization_payload())
 
         self.assertIsInstance(request.data_plane, WorkerDataPlaneRequest)
@@ -478,7 +543,7 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(request.data_plane.staging.total_bytes, 16)
         self.assertEqual(request.as_dict()["data_plane"]["staging"]["chunk_count"], 1)
 
-    def test_worker_request_builds_data_plane_request_from_execution_ticket(self) -> None:
+    def test_worker_request_parses_explicit_execution_ticket_payload(self) -> None:
         request = WorkerTransferRequest.from_execution_ticket_payload(
             ticket_authorization_payload()
         )
@@ -503,6 +568,27 @@ class WorkerHelperTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "source buffer"):
             WorkerTransferRequest.from_execution_ticket_payload(payload)
 
+    def test_worker_request_rejects_non_daemon_issued_ticket(self) -> None:
+        payload = ticket_authorization_payload()
+        payload["ticket"]["metadata"].pop("issuer")
+
+        with self.assertRaisesRegex(ValueError, "issued by turbobus-daemon"):
+            WorkerTransferRequest.from_execution_ticket_payload(payload)
+
+    def test_worker_request_rejects_stale_ticket_generation(self) -> None:
+        payload = ticket_authorization_payload(plan_generation=2)
+        payload["plan_generation"] = 1
+
+        with self.assertRaisesRegex(ValueError, "plan_generation is stale"):
+            WorkerTransferRequest.from_execution_ticket_payload(payload)
+
+    def test_worker_request_rejects_ticket_without_plan_generation(self) -> None:
+        payload = ticket_authorization_payload()
+        payload["ticket"]["metadata"].pop("plan_generation")
+
+        with self.assertRaisesRegex(ValueError, "plan_generation"):
+            WorkerTransferRequest.from_execution_ticket_payload(payload)
+
     def test_worker_request_rejects_mismatched_data_plane_authority(self) -> None:
         request = WorkerTransferRequest.from_authorization_payload(authorization_payload())
         bad_data_plane = WorkerDataPlaneRequest(
@@ -522,6 +608,7 @@ class WorkerHelperTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "transfer id"):
             WorkerTransferRequest(
                 authorization=request.authorization,
+                ticket=request.ticket,
                 data_plane=bad_data_plane,
             )
 
@@ -547,6 +634,7 @@ class WorkerHelperTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "src handle"):
             WorkerTransferRequest(
                 authorization=request.authorization,
+                ticket=request.ticket,
                 data_plane=bad_data_plane,
             )
 
@@ -600,7 +688,8 @@ class WorkerHelperTest(unittest.TestCase):
         self,
     ) -> None:
         payload = authorization_payload()
-        payload["authorization"]["plan"] = {}
+        payload["ticket"]["plan"] = {}
+        payload["decision"]["plan"] = {}
         daemon_client = FakeDaemonClient(DaemonResponse(ok=True, payload=payload))
         staging_pool = WorkerStagingPool()
         client = WorkerTransferClient(daemon_client, staging_pool=staging_pool)
@@ -608,7 +697,7 @@ class WorkerHelperTest(unittest.TestCase):
         lifecycle = client.submit_report_cleanup_lifecycle(authorization_request())
 
         self.assertEqual(lifecycle.final_state, "authorization_failed")
-        self.assertIn("transfer plan", lifecycle.error)
+        self.assertIn("daemon-issued plan", lifecycle.error)
         self.assertIsNone(lifecycle.worker_request)
         self.assertIsNone(lifecycle.staging_slot)
         self.assertIsNone(lifecycle.staging_release)
@@ -619,7 +708,7 @@ class WorkerHelperTest(unittest.TestCase):
         self,
     ) -> None:
         payload = authorization_payload()
-        payload["authorization"]["src_buffer"]["size_bytes"] = 8
+        payload["src_buffer"]["size_bytes"] = 8
         daemon_client = FakeDaemonClient(DaemonResponse(ok=True, payload=payload))
         staging_pool = WorkerStagingPool()
         client = WorkerTransferClient(daemon_client, staging_pool=staging_pool)
@@ -637,7 +726,7 @@ class WorkerHelperTest(unittest.TestCase):
         self,
     ) -> None:
         payload = authorization_payload()
-        payload["authorization"]["plan"] = {
+        plan = {
             "total_bytes": 24,
             "chunk_bytes": 16,
             "assignments": [
@@ -667,6 +756,8 @@ class WorkerHelperTest(unittest.TestCase):
                 },
             ],
         }
+        payload["ticket"]["plan"] = plan
+        payload["decision"]["plan"] = plan
         daemon_client = FakeDaemonClient(DaemonResponse(ok=True, payload=payload))
         staging_pool = WorkerStagingPool()
         client = WorkerTransferClient(daemon_client, staging_pool=staging_pool)
@@ -684,7 +775,8 @@ class WorkerHelperTest(unittest.TestCase):
         self,
     ) -> None:
         payload = authorization_payload()
-        payload["authorization"]["plan"]["total_bytes"] = 32
+        payload["ticket"]["plan"]["total_bytes"] = 32
+        payload["decision"]["plan"]["total_bytes"] = 32
         daemon_client = FakeDaemonClient(DaemonResponse(ok=True, payload=payload))
         staging_pool = WorkerStagingPool()
         client = WorkerTransferClient(daemon_client, staging_pool=staging_pool)
@@ -702,7 +794,8 @@ class WorkerHelperTest(unittest.TestCase):
         self,
     ) -> None:
         payload = authorization_payload()
-        payload["authorization"]["plan"]["assignments"][0]["path"]["target_device"] = 2
+        payload["ticket"]["plan"]["assignments"][0]["path"]["target_device"] = 2
+        payload["decision"]["plan"]["assignments"][0]["path"]["target_device"] = 2
         daemon_client = FakeDaemonClient(DaemonResponse(ok=True, payload=payload))
         staging_pool = WorkerStagingPool()
         client = WorkerTransferClient(daemon_client, staging_pool=staging_pool)
@@ -720,7 +813,8 @@ class WorkerHelperTest(unittest.TestCase):
         self,
     ) -> None:
         payload = authorization_payload()
-        payload["authorization"]["plan"]["assignments"][0]["path"]["enabled"] = False
+        payload["ticket"]["plan"]["assignments"][0]["path"]["enabled"] = False
+        payload["decision"]["plan"]["assignments"][0]["path"]["enabled"] = False
         daemon_client = FakeDaemonClient(DaemonResponse(ok=True, payload=payload))
         staging_pool = WorkerStagingPool()
         client = WorkerTransferClient(daemon_client, staging_pool=staging_pool)
@@ -736,8 +830,8 @@ class WorkerHelperTest(unittest.TestCase):
 
     def test_worker_client_rejects_handle_mismatch_before_staging(self) -> None:
         payload = authorization_payload()
-        payload["authorization"]["src_buffer"] = dict(payload["authorization"]["dst_buffer"])
-        payload["authorization"]["src_buffer"]["buffer_id"] = "cpu-buffer"
+        payload["src_buffer"] = dict(payload["dst_buffer"])
+        payload["src_buffer"]["buffer_id"] = "cpu-buffer"
         daemon_client = FakeDaemonClient(DaemonResponse(ok=True, payload=payload))
         staging_pool = WorkerStagingPool()
         client = WorkerTransferClient(daemon_client, staging_pool=staging_pool)
@@ -1300,10 +1394,9 @@ class WorkerHelperTest(unittest.TestCase):
         backend = FakeCudaBackend()
         with allocator.allocate("cpu-buffer", "job-1", 64) as source_buffer:
             payload = authorization_payload_for_shared_cpu(source_buffer)
-            payload["authorization"]["dst_buffer"]["device_index"] = 2
-            payload["authorization"]["plan"]["assignments"][0]["path"][
-                "target_device"
-            ] = 2
+            payload["dst_buffer"]["device_index"] = 2
+            payload["ticket"]["plan"]["assignments"][0]["path"]["target_device"] = 2
+            payload["decision"]["plan"]["assignments"][0]["path"]["target_device"] = 2
             daemon_client = FakeDaemonClient(
                 DaemonResponse(ok=True, payload=payload)
             )

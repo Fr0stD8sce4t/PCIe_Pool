@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from turbobus.schema import BufferRegistration, WorkerTransferAuthorization
+from turbobus.schema import BufferRegistration, ExecutionTicket, WorkerTransferAuthorization
 from turbobus.worker import (
     CudaWorkerExecutor,
     WorkerDataPlaneResources,
@@ -242,7 +242,36 @@ def worker_request(
         relay_gpu=1,
         plan=plan,
     )
-    return WorkerTransferRequest.from_authorization(authorization)
+    ticket = ExecutionTicket(
+        ticket_id="ticket-1",
+        decision_id="decision-1",
+        intent_id="intent-1",
+        topology_snapshot_id="topology-1",
+        job_id="job-1",
+        session_id="session-1",
+        source_buffer_id=authorization.src_buffer.buffer_id,
+        destination_buffer_id=authorization.dst_buffer.buffer_id,
+        direction=direction,
+        total_bytes=sum(int(item["bytes"]) for item in ranges),
+        ranges=ranges,
+        plan=plan,
+        issued_at=1.0,
+        expires_at=10.0,
+        lease_ids=("lease-1",),
+        metadata={
+            "issuer": "turbobus-daemon",
+            "transfer_id": "transfer-1",
+            "plan_generation": 1,
+        },
+    )
+    return WorkerTransferRequest.from_execution_ticket(
+        ticket,
+        src_buffer=authorization.src_buffer,
+        dst_buffer=authorization.dst_buffer,
+        relay_gpu=1,
+        lease_id="lease-1",
+        transfer_id="transfer-1",
+    )
 
 
 class CudaWorkerExecutorTest(unittest.TestCase):
@@ -288,24 +317,32 @@ class CudaWorkerExecutorTest(unittest.TestCase):
         self.assertEqual(result.state, WorkerTransferState.FAILED)
         self.assertIn("bound data-plane resources", result.error)
 
+    def test_worker_request_rejects_non_ticketed_construction(self) -> None:
+        authorization = worker_request().authorization
+
+        with self.assertRaisesRegex(ValueError, "ExecutionTicket"):
+            WorkerTransferRequest.from_authorization(authorization)
+
     def test_executor_requires_daemon_plan(self) -> None:
-        request = worker_request(plan={})
-        slot = WorkerStagingPool().allocate(request.data_plane)
-        resources = WorkerDataPlaneResources(
-            request=request.data_plane,
-            cpu_buffer=FakeCpuBuffer(),
-            device_ptr=2000,
-            device_bytes=64,
-        )
+        request = worker_request()
 
-        result = CudaWorkerExecutor(backend=FakeBackend()).execute_bound(
-            request,
-            slot,
-            resources,
-        )
-
-        self.assertEqual(result.state, WorkerTransferState.FAILED)
-        self.assertIn("daemon-issued transfer plan", result.error)
+        with self.assertRaisesRegex(ValueError, "data-plane plan"):
+            WorkerTransferRequest(
+                authorization=WorkerTransferAuthorization(
+                    transfer_id=request.authorization.transfer_id,
+                    lease_id=request.authorization.lease_id,
+                    session_id=request.authorization.session_id,
+                    job_id=request.authorization.job_id,
+                    src_buffer=request.authorization.src_buffer,
+                    dst_buffer=request.authorization.dst_buffer,
+                    direction=request.authorization.direction,
+                    ranges=request.authorization.ranges,
+                    relay_gpu=request.authorization.relay_gpu,
+                    plan={},
+                ),
+                ticket=request.ticket,
+                data_plane=request.data_plane,
+            )
 
     def test_executor_rejects_daemon_plan_total_byte_mismatch_before_backend(
         self,
