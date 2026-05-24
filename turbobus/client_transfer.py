@@ -471,6 +471,11 @@ def _run_direct_plan(
     device_bytes: int,
     direction: str,
 ) -> None:
+    _require_direct_plan_matches_target(
+        plan_payload,
+        target_device=int(target_device),
+        direction=direction,
+    )
     native_plan = backend.make_transfer_plan(plan_payload)
     runtime = backend.create_runtime(runtime_options)
     backend.initialize_runtime(runtime, int(target_device), [])
@@ -497,6 +502,37 @@ def _run_direct_plan(
         backend.wait(runtime, handle)
     finally:
         host_buffer.unregister_from_cuda()
+
+
+def _require_direct_plan_matches_target(
+    plan_payload: Mapping[str, object],
+    *,
+    target_device: int,
+    direction: str,
+) -> None:
+    assignments = plan_payload.get("assignments", ()) or ()
+    if not assignments:
+        raise RuntimeError("daemon direct plan has no assignments")
+    expected_direction = str(direction).lower()
+    found_chunks = False
+    for assignment in assignments:
+        if not isinstance(assignment, Mapping):
+            raise RuntimeError("daemon direct plan assignment must be a mapping")
+        path = assignment.get("path")
+        if not isinstance(path, Mapping):
+            raise RuntimeError("daemon direct plan assignment has no path")
+        if str(path.get("kind", "")).lower() != "direct":
+            raise RuntimeError("daemon direct fallback requires direct paths")
+        if str(path.get("direction", "")).lower() != expected_direction:
+            raise RuntimeError("daemon direct plan direction does not match request")
+        if int(path.get("target_device", target_device)) != int(target_device):
+            raise RuntimeError("daemon direct plan target does not match buffer device")
+        if not bool(path.get("enabled", True)):
+            raise RuntimeError("daemon direct plan path is disabled")
+        if assignment.get("chunks"):
+            found_chunks = True
+    if not found_chunks:
+        raise RuntimeError("daemon direct plan has no chunk assignments")
 
 
 def _require_device_pointer(buffer: CudaIpcDeviceBuffer) -> None:

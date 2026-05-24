@@ -221,6 +221,10 @@ Completed current code cut:
   `python -m turbobus.verification --mode direct` now starts only the daemon
   and the direct data path; relay and pool modes still start the worker helper
   because they need daemon-authorized relay execution.
+- Bind daemon-issued direct fallback plans to the registered CUDA buffer
+  device before native execution. A direct-only plan whose `target_device`
+  does not match the local CUDA IPC source or destination is rejected before
+  host registration or exact-plan submission.
 - Require worker-opened shared pinned CPU handles to carry explicit logical
   backing size metadata. `SharedPinnedCpuBuffer.open_from_registration` now
   rejects daemon-authorized shared CPU handles that omit
@@ -422,6 +426,8 @@ Completed current code cut:
      before relay staging allocation.
    - Reject disabled daemon-plan paths during worker authorization before
      relay staging allocation.
+   - Reject daemon-issued direct fallback plans whose target device does not
+     match the registered CUDA IPC buffer before local native execution.
    - Clear or protect reused relay staging buffers; done for the native CUDA
      relay staging slots, pending CUDA-server verification.
    - Release reservations on failure or completion; done for worker executor
