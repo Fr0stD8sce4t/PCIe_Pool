@@ -146,6 +146,14 @@ The active target architecture is:
   authorization now enforce daemon-side authenticated job ownership. Cross-peer
   attempts to register or use another job's buffers are rejected before
   scheduling, lease use, or worker ticket construction.
+- Phase 2 Cut 3 is complete. Session close, stale session timeout, socket
+  disconnect for explicitly connection-scoped sessions, worker failure, and
+  detected completion mismatch now release daemon-owned reservations, lease
+  tokens, staging records, buffers, relay quota, and transfer state. Cleanup
+  responses report released resource counts, failed workers release staging
+  resources without client policy, repeated cleanup is idempotent, and direct
+  transfers without relay reservations are canceled when their owning job or
+  buffer is cleaned.
 
 ## Active Phase
 
@@ -170,7 +178,7 @@ Phase 2 covers:
 
 ## Next Work Items
 
-Current item: Phase 2 Cut 3, lifecycle cleanup for stale resources.
+Current item: Phase 2 Cut 4, audit records for relay use and failures.
 
 1. Shared schema layer.
    - Status: complete.
@@ -261,9 +269,10 @@ Current item: Phase 2 Cut 3, lifecycle cleanup for stale resources.
    - Cut 1 complete: add peer identity and socket credential foundation.
    - Cut 2 complete: enforce buffer ownership for registration, transfer,
      lease, and worker authorization paths.
-   - Cut 3 current: clean stale resources after disconnects, timeouts, worker
+   - Cut 3 complete: clean stale resources after disconnects, timeouts, worker
      failures, and detected mismatches.
-   - Later Phase 2 work: emit audit records.
+   - Cut 4 current: emit audit records for relay use, ownership, bytes,
+     duration, cleanup, and failures.
 
 ## Phase 0 Acceptance Criteria
 
@@ -281,10 +290,10 @@ Phase 0 is complete:
 
 ## Latest Validation
 
-Phase 2 Cut 2 validation:
+Phase 2 Cut 3 validation:
 
-- `python -m unittest test.python.unit.test_schema test.python.integration.test_daemon_state test.python.integration.test_daemon_socket`
-- `python -m compileall -q turbobus\schema.py turbobus\daemon test\python\unit\test_schema.py test\python\integration\test_daemon_state.py test\python\integration\test_daemon_socket.py`
+- `python -m unittest test.python.integration.test_daemon_state test.python.integration.test_daemon_socket test.python.integration.test_worker_helper test.python.integration.test_client_worker_transfer`
+- `python -m compileall -q turbobus\schema.py turbobus\daemon turbobus\worker turbobus\client_transfer.py test\python\integration\test_daemon_state.py test\python\integration\test_daemon_socket.py test\python\integration\test_worker_helper.py test\python\integration\test_client_worker_transfer.py`
 - `git diff --check`
 
 Remaining risk:
@@ -292,9 +301,10 @@ Remaining risk:
 - Phase 1 implementation is complete, but production topology behavior still
   needs to be exercised on a real multi-GPU CUDA server with `nvidia-smi topo
   -m` available.
-- Phase 2 now rejects cross-peer buffer registration and transfer use, but
-  daemon-triggered cleanup still needs to be extended for socket disconnects,
-  worker failures, and mismatch handling in Cut 3.
+- Phase 2 now rejects cross-peer buffer registration and transfer use and
+  cleans stale resources after timeout, disconnect, worker failure, and
+  mismatch. Phase 2 still needs daemon-owned audit records before entering
+  cross-job dynamic scheduling.
 
 ## Upcoming Phases
 

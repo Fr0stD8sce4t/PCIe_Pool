@@ -136,7 +136,7 @@ eligibility, filtered reasons, and per-relay path capabilities.
 
 Current phase: Phase 2, privileged daemon control plane.
 
-Current item: Phase 2 Cut 3, lifecycle cleanup for stale resources.
+Current item: Phase 2 Cut 4, audit records for relay use and failures.
 
 ## Phase 0 Code Cuts
 
@@ -477,7 +477,7 @@ Phase 1 is complete.
 
 ## Phase 2 Current Work
 
-Current item: Phase 2 Cut 3, lifecycle cleanup for stale resources.
+Current item: Phase 2 Cut 4, audit records for relay use and failures.
 
 Cut 1: peer identity and socket credential foundation.
 
@@ -522,7 +522,7 @@ Expected output:
 
 Cut 3: lifecycle cleanup for stale resources.
 
-Status: current.
+Status: complete.
 
 - Make session close, timeout, socket disconnect, worker failure, and detected
   mismatch release all related leases, reservations, transfer state, staging
@@ -542,6 +542,29 @@ Expected output:
 - transfer state reaches complete, failed, or canceled deterministically;
 - cleanup records identify the owner, resource ids, reason, and released
   resource counts.
+
+Cut 4: audit records for relay use and failures.
+
+Status: current.
+
+- Add daemon-owned audit records for relay use, bytes moved, duration, owner,
+  transfer id, decision id, ticket id, lease id, session id, job id, and
+  failure reason.
+- Emit audit records for worker completion, worker failure, cleanup, timeout,
+  socket disconnect, lease expiration, and detected mismatch.
+- Keep audit recording inside the daemon control plane; clients, adapters,
+  benchmarks, and workers may report status but must not author audit truth.
+- Expose audit records through machine-readable daemon profile or a dedicated
+  control-plane response without widening application-side path control.
+- Add focused tests that prove audit records exist for successful relay use,
+  failed worker cleanup, mismatch cleanup, and stale session cleanup.
+
+Expected output:
+
+- transfer ownership and relay resource use can be traced from daemon state;
+- failure and cleanup records carry owner, reason, bytes, duration, and related
+  resource ids;
+- Phase 2 exit criteria can be checked before entering cross-job scheduling.
 
 ## After Phase 0
 

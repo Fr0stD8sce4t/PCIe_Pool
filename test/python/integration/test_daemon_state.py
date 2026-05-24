@@ -54,6 +54,91 @@ def _relay_ranges(plan: dict, relay_gpu: int) -> tuple[dict[str, int], ...]:
     return tuple(ranges)
 
 
+def _relay_profile() -> dict:
+    return {
+        "target_device": 0,
+        "direct_h2d_bw_gbps": 7.5,
+        "direct_d2h_bw_gbps": 6.5,
+        "relays": [
+            {
+                "relay_device": 1,
+                "target_device": 0,
+                "h2d_bw_gbps": 7.5,
+                "d2h_bw_gbps": 6.5,
+                "p2p_bw_gbps": 40.0,
+                "effective_bw_gbps": 7.5,
+                "effective_d2h_bw_gbps": 6.5,
+                "p2p_enabled": True,
+            }
+        ],
+    }
+
+
+def _authorized_relay_transfer(daemon: TurboBusDaemon):
+    register = daemon.register_session(
+        target_gpu=0,
+        requested_relays=[1],
+        max_inflight_chunks=8,
+    )
+    session_id = register.payload["session"]["session_id"]
+    assert daemon.register_job(job_id="job-1", session_id=session_id).ok
+    assert daemon.register_buffer(
+        buffer_id="cpu-buffer",
+        job_id="job-1",
+        kind="cpu_pinned",
+        size_bytes=64,
+        pinned=True,
+        handle_type="shared_pinned_cpu",
+        metadata={
+            "shared_memory_name": "tb-job-1-src",
+            "offset_bytes": 0,
+            "shared_memory_size_bytes": 64,
+        },
+    ).ok
+    assert daemon.register_buffer(
+        buffer_id="gpu-buffer",
+        job_id="job-1",
+        kind="gpu",
+        size_bytes=64,
+        device_index=0,
+        handle_type="cuda_ipc_device",
+        metadata={"cuda_ipc_handle": CUDA_IPC_TARGET_HANDLE},
+    ).ok
+    assert daemon.put_profile(target_gpu=0, relay_gpus=[1], profile=_relay_profile()).ok
+    planned = daemon.handle_request(
+        DaemonRequest(
+            request_type=RequestType.PLAN_TRANSFER,
+            session_id=session_id,
+            payload={
+                "total_bytes": 64,
+                "chunk_bytes": 16,
+                "mode": "pool",
+                "direction": "h2d",
+                "job_id": "job-1",
+                "buffer_ids": ["cpu-buffer", "gpu-buffer"],
+            },
+        )
+    )
+    assert planned.ok
+    transfer_id = planned.payload["transfer_id"]
+    lease_token = planned.payload["lease_tokens"][0]
+    authorized = daemon.authorize_worker_transfer(
+        WorkerTransferAuthorizationRequest(
+            transfer_id=transfer_id,
+            lease_id=lease_token["lease_id"],
+            token=lease_token["token"],
+            session_id=session_id,
+            job_id="job-1",
+            src_buffer_id="cpu-buffer",
+            dst_buffer_id="gpu-buffer",
+            direction="h2d",
+            relay_gpu=1,
+        )
+    )
+    assert authorized.ok
+    return session_id, planned, lease_token, authorized
+
+
 class DaemonStateTest(unittest.TestCase):
     def test_session_lifecycle_releases_quota(self) -> None:
         daemon = _daemon(relay_gpus=[1], max_sessions_per_relay=1)
@@ -411,6 +496,59 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(cleanup.payload["removed"]["buffers"], 1)
         self.assertEqual(daemon.describe().payload["jobs"], {})
         self.assertEqual(daemon.describe().payload["buffers"], {})
+
+    def test_cleanup_job_cancels_direct_transfer_without_reservation(self) -> None:
+        daemon = _daemon(relay_gpus=[1])
+        session = daemon.register_session(target_gpu=0, requested_relays=[1])
+        self.assertTrue(session.ok)
+        session_id = session.payload["session"]["session_id"]
+        self.assertTrue(daemon.register_job("job-1", session_id=session_id).ok)
+        self.assertTrue(
+            daemon.register_buffer(
+                buffer_id="cpu-buffer",
+                job_id="job-1",
+                kind="cpu_pinned",
+                size_bytes=64,
+                pinned=True,
+            ).ok
+        )
+        self.assertTrue(
+            daemon.register_buffer(
+                buffer_id="gpu-buffer",
+                job_id="job-1",
+                kind="gpu",
+                size_bytes=64,
+                device_index=0,
+            ).ok
+        )
+        planned = daemon.plan_transfer(
+            session_id=session_id,
+            total_bytes=64,
+            chunk_bytes=16,
+            mode="direct",
+            direction="h2d",
+            job_id="job-1",
+            buffer_ids=["cpu-buffer", "gpu-buffer"],
+        )
+        self.assertTrue(planned.ok)
+        self.assertEqual(planned.payload["reservations"], [])
+        transfer_id = planned.payload["transfer_id"]
+
+        cleanup = daemon.cleanup(
+            target_kind="job",
+            target_id="job-1",
+            reason="job_exit",
+            force=True,
+        )
+
+        self.assertTrue(cleanup.ok)
+        self.assertEqual(cleanup.payload["removed"]["jobs"], 1)
+        self.assertEqual(cleanup.payload["removed"]["buffers"], 2)
+        self.assertEqual(cleanup.payload["removed"]["transfers"], 1)
+        status = daemon.transfer_status(transfer_id)
+        self.assertTrue(status.ok)
+        self.assertEqual(status.payload["status"]["state"], "canceled")
+        self.assertEqual(status.payload["status"]["error"], "job_exit")
 
     def test_handle_request_profile(self) -> None:
         daemon = _daemon(relay_gpus=[1, 2], max_sessions_per_relay=2)
@@ -2348,6 +2486,20 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(authorization["relay_gpu"], 1)
         self.assertEqual(authorization["plan"], planned.payload["plan"])
         self.assertEqual(authorized.payload["decision"]["decision_id"], planned.payload["decision_id"])
+        staging_record = authorized.payload["staging_record"]
+        self.assertEqual(staging_record["lease_id"], lease_token["lease_id"])
+        self.assertEqual(staging_record["transfer_id"], transfer_id)
+        self.assertEqual(staging_record["session_id"], session_id)
+        self.assertEqual(staging_record["job_id"], "job-1")
+        self.assertEqual(staging_record["relay_gpu"], 1)
+        self.assertEqual(
+            staging_record["requested_bytes"],
+            sum(item["bytes"] for item in authorization["ranges"]),
+        )
+        self.assertIn(
+            lease_token["lease_id"],
+            daemon.describe().payload["staging_records"],
+        )
         ticket = authorized.payload["ticket"]
         self.assertEqual(ticket["decision_id"], planned.payload["decision_id"])
         self.assertEqual(ticket["topology_snapshot_id"], planned.payload["topology_snapshot_id"])
@@ -2616,7 +2768,10 @@ class DaemonStateTest(unittest.TestCase):
         )
 
         self.assertFalse(validated.ok)
-        self.assertIn("transfer is terminal", validated.error)
+        self.assertIn("unknown lease", validated.error)
+        profile = daemon.describe().payload
+        self.assertEqual(profile["reservations"], {})
+        self.assertEqual(profile["relay_quotas"][1]["active_chunks"], 0)
 
     def test_plan_transfer_requires_completion_status_before_release_completes(self) -> None:
         daemon = _daemon(
@@ -2848,19 +3003,13 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(updated.payload["status"]["state"], "running")
         self.assertEqual(updated.payload["status"]["bytes_completed"], 32)
 
-    def test_transfer_status_rejects_incomplete_complete_update(self) -> None:
-        daemon = _daemon(relay_gpus=[1])
-        register = daemon.register_session(target_gpu=0, requested_relays=[1])
-        session_id = register.payload["session"]["session_id"]
-
-        planned = daemon.plan_transfer(
-            session_id=session_id,
-            total_bytes=64,
-            chunk_bytes=16,
-            mode="direct",
-            direction="h2d",
-            job_id="job-1",
+    def test_transfer_status_mismatch_fails_transfer_and_releases_resources(self) -> None:
+        daemon = _daemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=1,
+            max_inflight_chunks_per_relay=8,
         )
+        session_id, planned, lease_token, _ = _authorized_relay_transfer(daemon)
         transfer_id = planned.payload["transfer_id"]
 
         rejected = daemon.handle_request(
@@ -2876,10 +3025,35 @@ class DaemonStateTest(unittest.TestCase):
 
         self.assertFalse(rejected.ok)
         self.assertIn("bytes_total completed", rejected.error)
+        self.assertEqual(rejected.payload["status"]["state"], "failed")
+        self.assertEqual(rejected.payload["removed"]["reservations"], 1)
+        self.assertEqual(rejected.payload["removed"]["staging_records"], 1)
         status = daemon.transfer_status(transfer_id)
         self.assertTrue(status.ok)
-        self.assertEqual(status.payload["status"]["state"], "submitted")
+        self.assertEqual(status.payload["status"]["state"], "failed")
         self.assertEqual(status.payload["status"]["bytes_completed"], 0)
+        profile = daemon.describe().payload
+        self.assertEqual(profile["reservations"], {})
+        self.assertEqual(profile["staging_records"], {})
+        self.assertEqual(profile["relay_quotas"][1]["active_chunks"], 0)
+        self.assertIn(
+            {
+                "target_kind": "reservation",
+                "target_id": lease_token["lease_id"],
+                "reason": "transfer_status_mismatch",
+                "force": True,
+            },
+            profile["system_cleanup_events"],
+        )
+        idempotent = daemon.cleanup(
+            target_kind="reservation",
+            target_id=lease_token["lease_id"],
+            reason="transfer_status_mismatch",
+            force=True,
+        )
+        self.assertTrue(idempotent.ok)
+        self.assertEqual(idempotent.payload["removed"]["reservations"], 0)
+        self.assertEqual(idempotent.payload["removed"]["staging_records"], 0)
 
     def test_transfer_status_rejects_terminal_state_rewrite(self) -> None:
         daemon = _daemon(relay_gpus=[1])
@@ -2995,6 +3169,73 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(status.payload["status"]["state"], "failed")
         self.assertEqual(status.payload["status"]["bytes_completed"], 0)
         self.assertEqual(status.payload["status"]["error"], "worker failed")
+
+    def test_worker_failure_status_releases_reservation_and_staging_record(self) -> None:
+        daemon = _daemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=1,
+            max_inflight_chunks_per_relay=8,
+        )
+        _, planned, lease_token, _ = _authorized_relay_transfer(daemon)
+        transfer_id = planned.payload["transfer_id"]
+
+        failed = daemon.transfer_status(
+            transfer_id,
+            state="failed",
+            bytes_completed=0,
+            error="worker_failed",
+        )
+
+        self.assertTrue(failed.ok)
+        self.assertEqual(failed.payload["removed"]["reservations"], 1)
+        self.assertEqual(failed.payload["removed"]["staging_records"], 1)
+        profile = daemon.describe().payload
+        self.assertEqual(profile["transfer_statuses"][transfer_id]["state"], "failed")
+        self.assertEqual(profile["reservations"], {})
+        self.assertEqual(profile["staging_records"], {})
+        self.assertEqual(profile["relay_quotas"][1]["active_chunks"], 0)
+        self.assertIn(
+            {
+                "target_kind": "reservation",
+                "target_id": lease_token["lease_id"],
+                "reason": "worker_failed",
+                "force": True,
+            },
+            profile["system_cleanup_events"],
+        )
+
+    def test_stale_session_reap_releases_staging_records_and_owner_state(self) -> None:
+        daemon = _daemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=1,
+            max_inflight_chunks_per_relay=8,
+            session_timeout_seconds=1.0,
+        )
+        session_id, planned, lease_token, _ = _authorized_relay_transfer(daemon)
+        transfer_id = planned.payload["transfer_id"]
+        self.assertIn(lease_token["lease_id"], daemon.describe().payload["staging_records"])
+
+        daemon._sessions[session_id].last_seen = time.time() - 10.0
+        expired = daemon.reap_stale_sessions(now=time.time())
+
+        self.assertEqual(expired, [session_id])
+        profile = daemon.describe().payload
+        self.assertEqual(profile["sessions"], {})
+        self.assertEqual(profile["jobs"], {})
+        self.assertEqual(profile["buffers"], {})
+        self.assertEqual(profile["session_peer_identities"], {})
+        self.assertEqual(profile["reservations"], {})
+        self.assertEqual(profile["staging_records"], {})
+        self.assertEqual(profile["transfer_statuses"][transfer_id]["state"], "canceled")
+        self.assertIn(
+            {
+                "target_kind": "reservation",
+                "target_id": lease_token["lease_id"],
+                "reason": "stale_session_timeout",
+                "force": True,
+            },
+            profile["system_cleanup_events"],
+        )
 
     def test_plan_transfer_falls_back_direct_when_relay_quota_is_unavailable(self) -> None:
         daemon = _daemon(

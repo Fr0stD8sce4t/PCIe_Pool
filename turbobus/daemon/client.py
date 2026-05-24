@@ -46,15 +46,19 @@ class TurboBusDaemonClient:
         target_gpu: int,
         relay_gpus: list[int],
         max_inflight_chunks: int = 8,
+        connection_scoped: bool = False,
     ) -> DaemonResponse:
+        payload = {
+            "target_gpu": int(target_gpu),
+            "relay_gpus": [int(gpu) for gpu in relay_gpus],
+            "max_inflight_chunks": int(max_inflight_chunks),
+        }
+        if connection_scoped:
+            payload["connection_scoped"] = True
         return self.send(
             DaemonRequest(
                 request_type=RequestType.REGISTER_SESSION,
-                payload={
-                    "target_gpu": int(target_gpu),
-                    "relay_gpus": [int(gpu) for gpu in relay_gpus],
-                    "max_inflight_chunks": int(max_inflight_chunks),
-                },
+                payload=payload,
             )
         )
 

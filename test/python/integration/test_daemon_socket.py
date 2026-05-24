@@ -55,6 +55,19 @@ def send_raw_request(path: str, request: bytes) -> dict:
         client.close()
 
 
+def send_persistent_request(client: socket.socket, request: dict) -> dict:
+    client.sendall((json.dumps(request) + "\n").encode("utf-8"))
+    data = b""
+    while True:
+        chunk = client.recv(65536)
+        if not chunk:
+            break
+        data += chunk
+        if b"\n" in data:
+            break
+    return json.loads(data.decode("utf-8"))
+
+
 class RecordingDaemonClient(TurboBusDaemonClient):
     def __init__(self) -> None:
         self.requests = []
@@ -358,6 +371,97 @@ class DaemonSocketTest(unittest.TestCase):
                 },
             )
             self.assertTrue(closed["ok"])
+
+    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
+    def test_connection_scoped_session_cleanup_on_socket_disconnect(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            socket_path = os.path.join(tmpdir, "turbobusd.sock")
+            daemon = TurboBusDaemon(relay_gpus=[1], max_sessions_per_relay=2)
+            thread = threading.Thread(
+                target=daemon.serve_forever,
+                args=(socket_path,),
+                daemon=True,
+            )
+            thread.start()
+
+            for _ in range(100):
+                if os.path.exists(socket_path):
+                    break
+                time.sleep(0.01)
+            self.assertTrue(os.path.exists(socket_path))
+
+            normal_client = TurboBusDaemonClient(socket_path)
+            normal = normal_client.register_session(target_gpu=0, relay_gpus=[1])
+            self.assertTrue(normal.ok)
+            normal_session_id = normal.payload["session"]["session_id"]
+
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                client.connect(socket_path)
+                scoped = send_persistent_request(
+                    client,
+                    {
+                        "request_type": "REGISTER_SESSION",
+                        "payload": {
+                            "target_gpu": 0,
+                            "relay_gpus": [1],
+                            "connection_scoped": True,
+                        },
+                    },
+                )
+                self.assertTrue(scoped["ok"])
+                scoped_session_id = scoped["payload"]["session"]["session_id"]
+                self.assertTrue(scoped["payload"]["connection_scoped"])
+                job = send_persistent_request(
+                    client,
+                    {
+                        "request_type": "REGISTER_JOB",
+                        "payload": {
+                            "job_id": "scoped-job",
+                            "session_id": scoped_session_id,
+                        },
+                    },
+                )
+                self.assertTrue(job["ok"])
+                buffer = send_persistent_request(
+                    client,
+                    {
+                        "request_type": "REGISTER_BUFFER",
+                        "payload": {
+                            "buffer_id": "scoped-buffer",
+                            "job_id": "scoped-job",
+                            "kind": "cpu_pinned",
+                            "size_bytes": 64,
+                            "pinned": True,
+                        },
+                    },
+                )
+                self.assertTrue(buffer["ok"])
+            finally:
+                client.close()
+
+            for _ in range(100):
+                profile = normal_client.describe()
+                self.assertTrue(profile.ok)
+                if scoped_session_id not in profile.payload["sessions"]:
+                    break
+                time.sleep(0.01)
+
+            profile = normal_client.describe()
+            self.assertTrue(profile.ok)
+            self.assertIn(normal_session_id, profile.payload["sessions"])
+            self.assertNotIn(scoped_session_id, profile.payload["sessions"])
+            self.assertNotIn("scoped-job", profile.payload["jobs"])
+            self.assertNotIn("scoped-buffer", profile.payload["buffers"])
+            self.assertIn(
+                {
+                    "target_kind": "session",
+                    "target_id": scoped_session_id,
+                    "reason": "socket_disconnect",
+                    "force": True,
+                },
+                profile.payload["system_cleanup_events"],
+            )
 
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
     def test_invalid_socket_request_returns_error_and_keeps_daemon_alive(self) -> None:

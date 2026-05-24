@@ -78,6 +78,9 @@ class TurboBusDaemon:
         self._transfer_tickets: dict[str, str] = {}
         self._lease_tokens: dict[str, LeaseToken] = {}
         self._transfer_statuses: dict[str, TransferStatus] = {}
+        self._staging_records: dict[str, dict[str, object]] = {}
+        self._connection_scoped_sessions: set[str] = set()
+        self._connection_scoped_session_connections: dict[str, str] = {}
         self._cleanup_events: list[CleanupRequest] = []
         self._system_cleanup_events: list[CleanupRequest] = []
         self._profile_cache: dict[str, dict] = {}
@@ -170,6 +173,8 @@ class TurboBusDaemon:
         requested_relays: Iterable[int],
         max_inflight_chunks: int = 8,
         peer_identity: PeerIdentity | None = None,
+        connection_scoped: bool = False,
+        connection_id: str | None = None,
     ) -> DaemonResponse:
         relays = self._normalize_relays(requested_relays)
         max_inflight = int(max_inflight_chunks)
@@ -202,11 +207,17 @@ class TurboBusDaemon:
             self._sessions[session_id] = session
             if peer_identity is not None:
                 self._session_peer_identities[session_id] = peer_identity
+            if connection_scoped:
+                self._connection_scoped_sessions.add(session_id)
+                if connection_id is not None:
+                    self._connection_scoped_session_connections[session_id] = str(connection_id)
             for gpu in relays:
                 self._relay_quotas[gpu].sessions.add(session_id)
             payload = {"session": asdict(session)}
             if peer_identity is not None:
                 payload["peer_identity"] = asdict(peer_identity)
+            if connection_scoped:
+                payload["connection_scoped"] = True
             return DaemonResponse(ok=True, payload=payload)
 
     def register_job(
@@ -314,39 +325,64 @@ class TurboBusDaemon:
             force=force,
         )
         with self._lock:
-            removed: dict[str, object] = {"jobs": 0, "buffers": 0, "sessions": 0, "reservations": 0}
+            removed = _empty_removed_summary()
             if cleanup.target_kind == "job":
-                if cleanup.target_id not in self._jobs:
+                if cleanup.target_id not in self._jobs and not cleanup.force:
                     return DaemonResponse(ok=False, error="unknown job")
-                self._jobs.pop(cleanup.target_id, None)
-                self._job_peer_identities.pop(cleanup.target_id, None)
-                removed["jobs"] = 1
-                for buffer_id, buffer in list(self._buffers.items()):
-                    if buffer.job_id == cleanup.target_id:
-                        self._buffers.pop(buffer_id, None)
-                        removed["buffers"] = int(removed["buffers"]) + 1
+                _merge_removed(
+                    removed,
+                    self._cleanup_job_locked(
+                        cleanup.target_id,
+                        reason=cleanup.reason,
+                    ),
+                )
             elif cleanup.target_kind == "buffer":
-                buffer = self._buffers.pop(cleanup.target_id, None)
-                if buffer is None:
+                if cleanup.target_id not in self._buffers and not cleanup.force:
                     return DaemonResponse(ok=False, error="unknown buffer")
-                removed["buffers"] = 1
+                transfer_ids = self._transfer_ids_for_buffer_locked(cleanup.target_id)
+                for lease_id in self._active_buffer_lease_ids_locked(cleanup.target_id):
+                    _merge_removed(
+                        removed,
+                        self._release_reservation_and_count_locked(
+                            lease_id,
+                            final_state=TransferStatusState.CANCELED,
+                            cleanup_reason=cleanup.reason,
+                        ),
+                    )
+                buffer = self._buffers.pop(cleanup.target_id, None)
+                if buffer is not None:
+                    removed["buffers"] = int(removed["buffers"]) + 1
+                for transfer_id in transfer_ids:
+                    status = self._transfer_statuses.get(transfer_id)
+                    if status is None or status.state in _TERMINAL_TRANSFER_STATES:
+                        continue
+                    self._mark_transfer_terminal_locked(
+                        transfer_id,
+                        TransferStatusState.CANCELED,
+                        error=cleanup.reason,
+                    )
+                    removed["transfers"] = int(removed["transfers"]) + 1
             elif cleanup.target_kind == "session":
                 session = self._close_session_locked(
                     cleanup.target_id,
                     reason=cleanup.reason,
                     removed=removed,
                 )
-                if session is None:
+                if session is None and not cleanup.force:
                     return DaemonResponse(ok=False, error="unknown session")
-                removed["sessions"] = 1
             elif cleanup.target_kind == "reservation":
-                reservation = self._release_reservation_locked(
+                released = self._release_reservation_and_count_locked(
                     cleanup.target_id,
                     final_state=TransferStatusState.CANCELED,
+                    cleanup_reason=cleanup.reason,
                 )
-                if reservation is None:
+                if (
+                    int(released["reservations"]) == 0
+                    and int(released["staging_records"]) == 0
+                    and not cleanup.force
+                ):
                     return DaemonResponse(ok=False, error="unknown reservation")
-                removed["reservations"] = 1
+                _merge_removed(removed, released)
             else:
                 return DaemonResponse(ok=False, error="unsupported cleanup target")
             self._cleanup_events.append(cleanup)
@@ -358,10 +394,18 @@ class TurboBusDaemon:
     def close_session(self, session_id: str) -> DaemonResponse:
         with self._lock:
             self._reap_stale_sessions_locked(time.time())
-            session = self._close_session_locked(session_id, reason="session_closed")
+            removed = _empty_removed_summary()
+            session = self._close_session_locked(
+                session_id,
+                reason="session_closed",
+                removed=removed,
+            )
             if session is None:
                 return DaemonResponse(ok=False, error="unknown session")
-            return DaemonResponse(ok=True, payload={"session_id": session_id})
+            return DaemonResponse(
+                ok=True,
+                payload={"session_id": session_id, "removed": removed},
+            )
 
     def reserve_transfer(
         self,
@@ -484,9 +528,48 @@ class TurboBusDaemon:
                     error=status.error if error is None else error,
                 )
             except ValueError as exc:
+                if requested_state is TransferStatusState.COMPLETE:
+                    mismatch = str(exc)
+                    failed = self._mark_transfer_terminal_locked(
+                        status.transfer_id,
+                        TransferStatusState.FAILED,
+                        error=mismatch,
+                    )
+                    removed = self._release_reservations_for_transfer_locked(
+                        status.transfer_id,
+                        final_state=TransferStatusState.FAILED,
+                        cleanup_reason="transfer_status_mismatch",
+                    )
+                    return DaemonResponse(
+                        ok=False,
+                        error=mismatch,
+                        payload={"status": asdict(failed), "removed": removed},
+                    )
                 return DaemonResponse(ok=False, error=str(exc))
             self._transfer_statuses[updated.transfer_id] = updated
-            return DaemonResponse(ok=True, payload={"status": asdict(updated)})
+            removed = _empty_removed_summary()
+            if updated.state is TransferStatusState.FAILED:
+                _merge_removed(
+                    removed,
+                    self._release_reservations_for_transfer_locked(
+                        updated.transfer_id,
+                        final_state=TransferStatusState.FAILED,
+                        cleanup_reason=updated.error or "worker_failed",
+                    ),
+                )
+            elif updated.state is TransferStatusState.CANCELED:
+                _merge_removed(
+                    removed,
+                    self._release_reservations_for_transfer_locked(
+                        updated.transfer_id,
+                        final_state=TransferStatusState.CANCELED,
+                        cleanup_reason=updated.error or "transfer_canceled",
+                    ),
+                )
+            return DaemonResponse(
+                ok=True,
+                payload={"status": asdict(updated), "removed": removed},
+            )
 
     def submit_transfer_intent(
         self,
@@ -750,6 +833,14 @@ class TurboBusDaemon:
                 relay_gpu=lease.relay_gpu,
                 plan=plan,
             )
+            staging_record = self._register_staging_record_locked(
+                lease=lease,
+                transfer_id=request.transfer_id,
+                direction=request.direction,
+                ranges=authorized_ranges,
+                requested_bytes=requested_bytes,
+                now=now,
+            )
             ticket = self._execution_ticket_for_worker_locked(
                 authorization,
                 lease=lease,
@@ -768,6 +859,7 @@ class TurboBusDaemon:
                     "relay_gpu": lease.relay_gpu,
                     "lease_id": request.lease_id,
                     "transfer_id": request.transfer_id,
+                    "staging_record": dict(staging_record),
                 },
             )
 
@@ -971,6 +1063,7 @@ class TurboBusDaemon:
         if reservation is None:
             return None
         self._lease_tokens.pop(reservation_id, None)
+        self._staging_records.pop(reservation_id, None)
         transfer_id = self._reservation_transfers.pop(reservation_id, None)
         session = self._sessions.get(reservation.session_id)
         if session is not None:
@@ -980,7 +1073,7 @@ class TurboBusDaemon:
             quota.active_chunks = max(0, quota.active_chunks - reservation.chunks)
         if transfer_id is not None:
             self._mark_transfer_terminal_if_unblocked_locked(transfer_id, final_state)
-        if final_state is TransferStatusState.CANCELED and cleanup_reason is not None:
+        if cleanup_reason is not None:
             self._system_cleanup_events.append(
                 CleanupRequest(
                     target_kind="reservation",
@@ -990,6 +1083,53 @@ class TurboBusDaemon:
                 )
             )
         return reservation
+
+    def _release_reservation_and_count_locked(
+        self,
+        reservation_id: str,
+        final_state: TransferStatusState,
+        cleanup_reason: str | None = None,
+    ) -> dict[str, int]:
+        removed = _empty_removed_summary()
+        transfer_id = self._reservation_transfers.get(str(reservation_id))
+        status_before = (
+            None if transfer_id is None else self._transfer_statuses.get(transfer_id)
+        )
+        staging_record = self._staging_records.get(str(reservation_id))
+        reservation = self._release_reservation_locked(
+            str(reservation_id),
+            final_state=final_state,
+            cleanup_reason=cleanup_reason,
+        )
+        if reservation is not None:
+            removed["reservations"] += 1
+        if staging_record is not None:
+            removed["staging_records"] += 1
+        if status_before is not None and status_before.state not in _TERMINAL_TRANSFER_STATES:
+            status_after = self._transfer_statuses.get(status_before.transfer_id)
+            if status_after is not None and status_after.state in _TERMINAL_TRANSFER_STATES:
+                removed["transfers"] += 1
+        return removed
+
+    def _release_reservations_for_transfer_locked(
+        self,
+        transfer_id: str,
+        final_state: TransferStatusState,
+        cleanup_reason: str | None = None,
+    ) -> dict[str, int]:
+        removed = _empty_removed_summary()
+        for reservation_id, mapped_transfer_id in list(self._reservation_transfers.items()):
+            if mapped_transfer_id != str(transfer_id):
+                continue
+            _merge_removed(
+                removed,
+                self._release_reservation_and_count_locked(
+                    reservation_id,
+                    final_state=final_state,
+                    cleanup_reason=cleanup_reason,
+                ),
+            )
+        return removed
 
     def _commit_scheduler_leases_locked(
         self,
@@ -1184,6 +1324,112 @@ class TurboBusDaemon:
             if lease_id in self._reservations and normalized in lease.buffer_ids
         )
 
+    def _register_staging_record_locked(
+        self,
+        *,
+        lease: LeaseToken,
+        transfer_id: str,
+        direction: str,
+        ranges: tuple[dict[str, int], ...],
+        requested_bytes: int,
+        now: float,
+    ) -> dict[str, object]:
+        record = {
+            "staging_record_id": f"staging-{lease.lease_id}",
+            "lease_id": lease.lease_id,
+            "transfer_id": str(transfer_id),
+            "session_id": lease.session_id,
+            "job_id": lease.job_id,
+            "relay_gpu": lease.relay_gpu,
+            "buffer_ids": lease.buffer_ids,
+            "direction": str(direction).lower(),
+            "ranges": tuple(dict(item) for item in ranges),
+            "requested_bytes": int(requested_bytes),
+            "state": "authorized",
+            "created_at": float(now),
+        }
+        self._staging_records[lease.lease_id] = record
+        return record
+
+    def _cleanup_job_locked(self, job_id: str, reason: str) -> dict[str, int]:
+        removed = _empty_removed_summary()
+        job = self._jobs.pop(str(job_id), None)
+        if job is not None:
+            removed["jobs"] += 1
+        self._job_peer_identities.pop(str(job_id), None)
+        transfer_ids = self._transfer_ids_for_job_locked(str(job_id))
+        for reservation_id, lease in list(self._lease_tokens.items()):
+            if lease.job_id == str(job_id):
+                _merge_removed(
+                    removed,
+                    self._release_reservation_and_count_locked(
+                        reservation_id,
+                        final_state=TransferStatusState.CANCELED,
+                        cleanup_reason=reason,
+                    ),
+                )
+        for transfer_id in transfer_ids:
+            status = self._transfer_statuses.get(transfer_id)
+            if status is None or status.state in _TERMINAL_TRANSFER_STATES:
+                continue
+            self._mark_transfer_terminal_locked(
+                transfer_id,
+                TransferStatusState.CANCELED,
+                error=reason,
+            )
+            removed["transfers"] += 1
+        for buffer_id, buffer in list(self._buffers.items()):
+            if buffer.job_id == str(job_id):
+                self._buffers.pop(buffer_id, None)
+                removed["buffers"] += 1
+        return removed
+
+    def _transfer_ids_for_job_locked(self, job_id: str) -> tuple[str, ...]:
+        transfer_ids = {
+            transfer_id
+            for transfer_id, status in self._transfer_statuses.items()
+            if status.job_id == str(job_id)
+        }
+        for intent_id, intent in self._transfer_intents.items():
+            if intent.job_id == str(job_id):
+                transfer_id = self._intent_transfers.get(intent_id)
+                if transfer_id is not None:
+                    transfer_ids.add(transfer_id)
+        for reservation_id, lease in self._lease_tokens.items():
+            if lease.job_id == str(job_id):
+                transfer_id = self._reservation_transfers.get(reservation_id)
+                if transfer_id is not None:
+                    transfer_ids.add(transfer_id)
+        return tuple(sorted(transfer_ids))
+
+    def _transfer_ids_for_session_locked(self, session_id: str) -> tuple[str, ...]:
+        transfer_ids = {
+            transfer_id
+            for transfer_id, status in self._transfer_statuses.items()
+            if status.session_id == str(session_id)
+        }
+        for intent_id, intent in self._transfer_intents.items():
+            if intent.session_id == str(session_id):
+                transfer_id = self._intent_transfers.get(intent_id)
+                if transfer_id is not None:
+                    transfer_ids.add(transfer_id)
+        return tuple(sorted(transfer_ids))
+
+    def _transfer_ids_for_buffer_locked(self, buffer_id: str) -> tuple[str, ...]:
+        normalized = str(buffer_id)
+        transfer_ids = set()
+        for intent_id, intent in self._transfer_intents.items():
+            if normalized in {intent.source_buffer_id, intent.destination_buffer_id}:
+                transfer_id = self._intent_transfers.get(intent_id)
+                if transfer_id is not None:
+                    transfer_ids.add(transfer_id)
+        for reservation_id, lease in self._lease_tokens.items():
+            if normalized in lease.buffer_ids:
+                transfer_id = self._reservation_transfers.get(reservation_id)
+                if transfer_id is not None:
+                    transfer_ids.add(transfer_id)
+        return tuple(sorted(transfer_ids))
+
     def _validate_peer_owns_job_locked(
         self,
         *,
@@ -1293,6 +1539,34 @@ class TurboBusDaemon:
             error=status.error,
         )
 
+    def _mark_transfer_terminal_locked(
+        self,
+        transfer_id: str,
+        final_state: TransferStatusState,
+        error: str | None = None,
+    ) -> TransferStatus:
+        status = self._transfer_statuses.get(str(transfer_id))
+        if status is None:
+            raise ValueError("unknown transfer")
+        if status.state in _TERMINAL_TRANSFER_STATES:
+            return status
+        completed = (
+            status.bytes_total
+            if final_state is TransferStatusState.COMPLETE
+            else status.bytes_completed
+        )
+        terminal = TransferStatus(
+            transfer_id=status.transfer_id,
+            job_id=status.job_id,
+            state=final_state,
+            bytes_total=status.bytes_total,
+            bytes_completed=completed,
+            session_id=status.session_id,
+            error=status.error if error is None else error,
+        )
+        self._transfer_statuses[terminal.transfer_id] = terminal
+        return terminal
+
     def _close_session_locked(
         self,
         session_id: str,
@@ -1312,19 +1586,37 @@ class TurboBusDaemon:
                 force=True,
             )
         )
+        transfer_ids = self._transfer_ids_for_session_locked(session_id)
         for reservation_id, reservation in list(self._reservations.items()):
             if reservation.session_id == session_id:
-                self._release_reservation_locked(
-                    reservation_id,
-                    final_state=TransferStatusState.CANCELED,
-                    cleanup_reason=reason,
+                _merge_removed(
+                    removed,
+                    self._release_reservation_and_count_locked(
+                        reservation_id,
+                        final_state=TransferStatusState.CANCELED,
+                        cleanup_reason=reason,
+                    ),
                 )
+        for transfer_id in transfer_ids:
+            status = self._transfer_statuses.get(transfer_id)
+            if status is None or status.state in _TERMINAL_TRANSFER_STATES:
+                continue
+            self._mark_transfer_terminal_locked(
+                transfer_id,
+                TransferStatusState.CANCELED,
+                error=reason,
+            )
+            if removed is not None:
+                removed["transfers"] = int(removed["transfers"]) + 1
         for gpu in session.relay_gpus:
             quota = self._relay_quotas.get(gpu)
             if quota is not None:
                 quota.sessions.discard(session_id)
+        self._connection_scoped_sessions.discard(session_id)
+        self._connection_scoped_session_connections.pop(session_id, None)
         removed_jobs = self._remove_session_jobs_and_buffers_locked(session_id)
         if removed is not None:
+            removed["sessions"] = int(removed["sessions"]) + 1
             removed["jobs"] = int(removed["jobs"]) + removed_jobs["jobs"]
             removed["buffers"] = int(removed["buffers"]) + removed_jobs["buffers"]
         return session
@@ -1336,8 +1628,6 @@ class TurboBusDaemon:
             if job.session_id == session_id
         }
         removed = {"jobs": 0, "buffers": 0}
-        if not job_ids:
-            return removed
         for job_id in job_ids:
             if self._jobs.pop(job_id, None) is not None:
                 removed["jobs"] += 1
@@ -1347,6 +1637,28 @@ class TurboBusDaemon:
                 self._buffers.pop(buffer_id, None)
                 removed["buffers"] += 1
         self._session_peer_identities.pop(session_id, None)
+        return removed
+
+    def _cleanup_connection_scoped_sessions_locked(
+        self,
+        peer_identity: PeerIdentity | None,
+        connection_id: str | None = None,
+        reason: str = "socket_disconnect",
+    ) -> dict[str, int]:
+        removed = _empty_removed_summary()
+        if peer_identity is None:
+            return removed
+        for session_id in sorted(tuple(self._connection_scoped_sessions)):
+            if connection_id is not None:
+                session_connection_id = self._connection_scoped_session_connections.get(
+                    session_id
+                )
+                if session_connection_id != str(connection_id):
+                    continue
+            session_peer = self._session_peer_identities.get(session_id)
+            if not _peer_identity_same_connection(session_peer, peer_identity):
+                continue
+            self._close_session_locked(session_id, reason=reason, removed=removed)
         return removed
 
     def _touch_session_locked(self, session_id: str, now: float | None = None) -> None:
@@ -1422,6 +1734,12 @@ class TurboBusDaemon:
                     "reservations": {
                         key: asdict(value) for key, value in self._reservations.items()
                     },
+                    "staging_records": {
+                        key: dict(value) for key, value in self._staging_records.items()
+                    },
+                    "connection_scoped_sessions": sorted(
+                        self._connection_scoped_sessions
+                    ),
                     "transfer_statuses": {
                         key: asdict(value) for key, value in self._transfer_statuses.items()
                     },
@@ -1445,13 +1763,21 @@ class TurboBusDaemon:
                 },
             )
 
-    def handle_request(self, request: DaemonRequest) -> DaemonResponse:
+    def handle_request(
+        self,
+        request: DaemonRequest,
+        connection_id: str | None = None,
+    ) -> DaemonResponse:
         try:
-            return self._handle_request(request)
+            return self._handle_request(request, connection_id=connection_id)
         except (KeyError, TypeError, ValueError) as exc:
             return DaemonResponse(ok=False, error=f"invalid request: {exc}")
 
-    def _handle_request(self, request: DaemonRequest) -> DaemonResponse:
+    def _handle_request(
+        self,
+        request: DaemonRequest,
+        connection_id: str | None = None,
+    ) -> DaemonResponse:
         if request.request_type == RequestType.REGISTER_JOB:
             payload = request.payload
             return self.register_job(
@@ -1502,6 +1828,8 @@ class TurboBusDaemon:
                 requested_relays=payload.get("relay_gpus", []),
                 max_inflight_chunks=int(payload.get("max_inflight_chunks", 8)),
                 peer_identity=request.peer_identity,
+                connection_scoped=bool(payload.get("connection_scoped", False)),
+                connection_id=connection_id,
             )
         if request.request_type == RequestType.CLOSE_SESSION:
             if request.session_id is None:
@@ -1888,6 +2216,7 @@ class TurboBusDaemon:
         self,
         data: bytes | str,
         peer_identity: PeerIdentity | None = None,
+        connection_id: str | None = None,
     ) -> DaemonResponse:
         try:
             text = data.decode("utf-8") if isinstance(data, bytes) else str(data)
@@ -1905,7 +2234,7 @@ class TurboBusDaemon:
             )
         except Exception as exc:
             return DaemonResponse(ok=False, error=f"invalid request: {exc}")
-        return self.handle_request(request)
+        return self.handle_request(request, connection_id=connection_id)
 
     @staticmethod
     def _profile_key(target_gpu: int, relay_gpus: Iterable[int]) -> str:
@@ -1962,21 +2291,33 @@ class TurboBusDaemon:
                 conn, _ = server.accept()
                 with conn:
                     peer_identity = _peer_identity_from_socket(conn)
+                    connection_id = str(uuid.uuid4())
                     data = b""
-                    while True:
-                        chunk = conn.recv(65536)
-                        if not chunk:
-                            break
-                        data += chunk
-                        if b"\n" in data:
-                            break
-
-                    if not data:
-                        continue
-
-                    line, _, _ = data.partition(b"\n")
-                    response = self.handle_wire_message(line, peer_identity=peer_identity)
-                    conn.sendall((json.dumps(asdict(response)) + "\n").encode("utf-8"))
+                    try:
+                        while True:
+                            chunk = conn.recv(65536)
+                            if not chunk:
+                                break
+                            data += chunk
+                            while b"\n" in data:
+                                line, _, data = data.partition(b"\n")
+                                if not line:
+                                    continue
+                                response = self.handle_wire_message(
+                                    line,
+                                    peer_identity=peer_identity,
+                                    connection_id=connection_id,
+                                )
+                                conn.sendall(
+                                    (json.dumps(asdict(response)) + "\n").encode("utf-8")
+                                )
+                    finally:
+                        with self._lock:
+                            self._cleanup_connection_scoped_sessions_locked(
+                                peer_identity,
+                                connection_id=connection_id,
+                                reason="socket_disconnect",
+                            )
         finally:
             server.close()
             if os.path.exists(socket_path):
@@ -2043,6 +2384,25 @@ def _validate_peer_owner_match(
         return
     if str(expected.user_id) != str(actual.user_id):
         raise ValueError(f"{owner_name} owner does not match authenticated peer")
+
+
+def _peer_identity_same_connection(
+    expected: PeerIdentity | None,
+    actual: PeerIdentity | None,
+) -> bool:
+    if expected is None or actual is None:
+        return False
+    if expected.authenticated and actual.authenticated:
+        return (
+            str(expected.user_id) == str(actual.user_id)
+            and expected.process_id == actual.process_id
+            and expected.group_id == actual.group_id
+        )
+    return (
+        expected.authenticated == actual.authenticated
+        and expected.source == actual.source
+        and expected.unsupported_reason == actual.unsupported_reason
+    )
 
 
 def _peer_identity_from_socket(conn: socket.socket) -> PeerIdentity:
@@ -2251,3 +2611,27 @@ def _status_bytes_match(
         return int(bytes_completed) == status.bytes_completed
     except (TypeError, ValueError):
         return False
+
+
+def _empty_removed_summary() -> dict[str, int]:
+    return {
+        "jobs": 0,
+        "buffers": 0,
+        "sessions": 0,
+        "reservations": 0,
+        "staging_records": 0,
+        "transfers": 0,
+    }
+
+
+def _merge_removed(
+    target: dict[str, int] | None,
+    source: dict[str, int] | None,
+) -> dict[str, int] | None:
+    if target is None:
+        return target
+    if source is None:
+        return target
+    for key, value in source.items():
+        target[key] = int(target.get(key, 0)) + int(value)
+    return target
