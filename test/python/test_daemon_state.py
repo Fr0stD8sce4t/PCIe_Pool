@@ -1663,6 +1663,17 @@ class DaemonStateTest(unittest.TestCase):
         self.assertEqual(authorization["ranges"], _relay_ranges(planned.payload["plan"], 1))
         self.assertEqual(authorization["relay_gpu"], 1)
         self.assertEqual(authorization["plan"], planned.payload["plan"])
+        self.assertEqual(authorized.payload["decision"]["decision_id"], planned.payload["decision_id"])
+        ticket = authorized.payload["ticket"]
+        self.assertEqual(ticket["decision_id"], planned.payload["decision_id"])
+        self.assertEqual(ticket["topology_snapshot_id"], planned.payload["topology_snapshot_id"])
+        self.assertEqual(ticket["job_id"], "job-1")
+        self.assertEqual(ticket["session_id"], session_id)
+        self.assertEqual(ticket["source_buffer_id"], "cpu-buffer")
+        self.assertEqual(ticket["destination_buffer_id"], "gpu-buffer")
+        self.assertEqual(ticket["plan"], planned.payload["plan"])
+        self.assertEqual(ticket["lease_ids"], (lease_token["lease_id"],))
+        self.assertEqual(ticket["metadata"]["transfer_id"], transfer_id)
 
         wrong_transfer = daemon.authorize_worker_transfer(
             WorkerTransferAuthorizationRequest(

@@ -33,7 +33,7 @@ creates the contracts needed for the rest of the system:
 
 ## Current
 
-Cut 5: Scheduler And Ticket Contract.
+Cut 6: Test Tree Rewrite.
 
 Cut 1 is complete. The contract inventory is recorded in
 `docs/PHASE0_CONTRACT_INVENTORY.md`.
@@ -48,6 +48,11 @@ under `test/python/fixtures/`.
 Cut 4 is complete. The public client API now submits `TransferIntent` objects
 and waits for `TransferReceipt` objects. Root package exports now emphasize the
 daemon-first public API and shared contract objects.
+
+Cut 5 is complete. The daemon scheduler now returns schema
+`SchedulingDecision` objects, daemon worker authorization issues
+`ExecutionTicket` objects, and worker request construction can validate ticket
+bindings against decisions, buffers, byte ranges, leases, and daemon plans.
 
 ## Phase 0 Code Cuts
 
@@ -121,7 +126,7 @@ Expected output:
 
 ### Cut 5: Scheduler And Ticket Contract
 
-Status: current.
+Status: complete.
 
 - Make SchedulingDecision the scheduler output.
 - Make ExecutionTicket the worker input.
@@ -135,6 +140,8 @@ Expected output:
 - scheduler tests assert decisions are explainable and traceable.
 
 ### Cut 6: Test Tree Rewrite
+
+Status: current.
 
 Restructure tests:
 

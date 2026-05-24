@@ -3,7 +3,13 @@ from __future__ import annotations
 import unittest
 
 from turbobus.scheduler import DaemonScheduler
-from turbobus.schema import RelayQuota, Session, TransferMode
+from turbobus.schema import (
+    RelayQuota,
+    SchedulingDecision,
+    SchedulingDecisionState,
+    Session,
+    TransferMode,
+)
 
 
 def profile_entry() -> dict:
@@ -30,13 +36,22 @@ def profile_entry() -> dict:
 
 class DaemonSchedulerTest(unittest.TestCase):
     def make_scheduler(self) -> DaemonScheduler:
-        counter = {"value": 0}
+        lease_counter = {"value": 0}
+        decision_counter = {"value": 0}
 
         def lease_id() -> str:
-            counter["value"] += 1
-            return f"lease-{counter['value']}"
+            lease_counter["value"] += 1
+            return f"lease-{lease_counter['value']}"
 
-        return DaemonScheduler(lease_id_factory=lease_id, lease_seconds=10.0)
+        def decision_id() -> str:
+            decision_counter["value"] += 1
+            return f"decision-{decision_counter['value']}"
+
+        return DaemonScheduler(
+            lease_id_factory=lease_id,
+            decision_id_factory=decision_id,
+            lease_seconds=10.0,
+        )
 
     def make_session(self) -> Session:
         return Session(
@@ -61,17 +76,29 @@ class DaemonSchedulerTest(unittest.TestCase):
             mode=TransferMode.POOL,
             direction="h2d",
             now=100.0,
+            job_id="job-1",
+            intent_id="intent-1",
+            topology_snapshot_id="topology-1",
         )
 
-        self.assertEqual(decision.stats.resolved_mode, TransferMode.POOL)
-        self.assertEqual(decision.stats.direct_bytes, 32)
-        self.assertEqual(decision.stats.relay_bytes, 32)
-        self.assertEqual(len(decision.leases), 1)
-        self.assertEqual(decision.leases[0].lease_id, "lease-1")
-        self.assertEqual(decision.leases[0].relay_device, 1)
-        self.assertEqual(decision.leases[0].chunk_limit, 2)
-        self.assertEqual(decision.leases[0].bytes_limit, 32)
-        self.assertEqual(decision.leases[0].expires_at, 110.0)
+        self.assertIsInstance(decision, SchedulingDecision)
+        self.assertEqual(decision.state, SchedulingDecisionState.PLANNED)
+        self.assertEqual(decision.decision_id, "decision-1")
+        self.assertEqual(decision.intent_id, "intent-1")
+        self.assertEqual(decision.topology_snapshot_id, "topology-1")
+        self.assertEqual(decision.job_id, "job-1")
+        self.assertEqual(decision.metadata["stats"]["resolved_mode"], "pool")
+        self.assertEqual(decision.metadata["stats"]["direct_bytes"], 32)
+        self.assertEqual(decision.metadata["stats"]["relay_bytes"], 32)
+        self.assertEqual(len(decision.metadata["leases"]), 1)
+        lease = decision.metadata["leases"][0]
+        self.assertEqual(lease["lease_id"], "lease-1")
+        self.assertEqual(lease["relay_device"], 1)
+        self.assertEqual(lease["chunk_limit"], 2)
+        self.assertEqual(lease["bytes_limit"], 32)
+        self.assertEqual(lease["expires_at"], 110.0)
+        self.assertEqual(decision.path_summary[0]["kind"], "direct")
+        self.assertEqual(decision.path_summary[1]["kind"], "relay")
 
     def test_quota_denial_returns_direct_fallback(self) -> None:
         scheduler = self.make_scheduler()
@@ -88,10 +115,17 @@ class DaemonSchedulerTest(unittest.TestCase):
             direction="h2d",
         )
 
-        self.assertEqual(decision.stats.resolved_mode, TransferMode.DIRECT)
-        self.assertEqual(decision.leases, ())
-        self.assertIn("quota", decision.stats.fallback_reason)
-        self.assertEqual({item.path.kind for item in decision.plan.assignments}, {"direct"})
+        self.assertEqual(decision.state, SchedulingDecisionState.FALLBACK)
+        self.assertEqual(decision.metadata["stats"]["resolved_mode"], "direct")
+        self.assertEqual(decision.metadata["leases"], [])
+        self.assertIn("quota", decision.fallback_reason)
+        self.assertEqual(
+            {
+                item["path"]["kind"]
+                for item in decision.plan["assignments"]
+            },
+            {"direct"},
+        )
 
     def test_missing_profile_returns_direct_fallback(self) -> None:
         scheduler = self.make_scheduler()
@@ -108,9 +142,10 @@ class DaemonSchedulerTest(unittest.TestCase):
             direction="h2d",
         )
 
-        self.assertEqual(decision.stats.resolved_mode, TransferMode.DIRECT)
-        self.assertEqual(decision.leases, ())
-        self.assertIn("profile miss", decision.stats.fallback_reason)
+        self.assertEqual(decision.state, SchedulingDecisionState.FALLBACK)
+        self.assertEqual(decision.metadata["stats"]["resolved_mode"], "direct")
+        self.assertEqual(decision.metadata["leases"], [])
+        self.assertIn("profile miss", decision.fallback_reason)
 
     def test_invalid_request_values_are_rejected(self) -> None:
         scheduler = self.make_scheduler()

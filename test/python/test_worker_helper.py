@@ -6,6 +6,10 @@ import unittest
 from turbobus.schema import (
     BufferRegistration,
     DaemonResponse,
+    ExecutionTicket,
+    SchedulingDecision,
+    SchedulingDecisionState,
+    TransferStatusState,
     WorkerDataPlaneRequest,
     WorkerTransferAuthorization,
     WorkerTransferAuthorizationRequest,
@@ -209,6 +213,63 @@ def daemon_worker_plan(
                 "chunk_count": len(ranges),
             }
         ],
+    }
+
+
+def scheduling_decision_payload() -> dict:
+    return {
+        "decision_id": "decision-1",
+        "intent_id": "intent-1",
+        "topology_snapshot_id": "topology-1",
+        "job_id": "job-1",
+        "session_id": "session-1",
+        "state": SchedulingDecisionState.PLANNED.value,
+        "plan": daemon_worker_plan(
+            direction="h2d",
+            ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
+        ),
+        "path_summary": ({"kind": "relay", "bytes": 16},),
+        "issued_at": 1.0,
+    }
+
+
+def execution_ticket_payload(**overrides) -> dict:
+    payload = {
+        "ticket_id": "ticket-1",
+        "decision_id": "decision-1",
+        "intent_id": "intent-1",
+        "topology_snapshot_id": "topology-1",
+        "job_id": "job-1",
+        "session_id": "session-1",
+        "source_buffer_id": "cpu-buffer",
+        "destination_buffer_id": "gpu-buffer",
+        "direction": "h2d",
+        "total_bytes": 16,
+        "ranges": ({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
+        "plan": daemon_worker_plan(
+            direction="h2d",
+            ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 16},),
+        ),
+        "issued_at": 1.0,
+        "expires_at": 10.0,
+        "lease_ids": ("lease-1",),
+        "metadata": {"transfer_id": "transfer-1"},
+    }
+    payload.update(overrides)
+    return payload
+
+
+def ticket_authorization_payload(**ticket_overrides) -> dict:
+    payload = authorization_payload()
+    authorization = payload["authorization"]
+    return {
+        "ticket": execution_ticket_payload(**ticket_overrides),
+        "decision": scheduling_decision_payload(),
+        "src_buffer": authorization["src_buffer"],
+        "dst_buffer": authorization["dst_buffer"],
+        "relay_gpu": 1,
+        "lease_id": "lease-1",
+        "transfer_id": "transfer-1",
     }
 
 
@@ -416,6 +477,31 @@ class WorkerHelperTest(unittest.TestCase):
         self.assertEqual(request.data_plane.staging.relay_gpu, 1)
         self.assertEqual(request.data_plane.staging.total_bytes, 16)
         self.assertEqual(request.as_dict()["data_plane"]["staging"]["chunk_count"], 1)
+
+    def test_worker_request_builds_data_plane_request_from_execution_ticket(self) -> None:
+        request = WorkerTransferRequest.from_execution_ticket_payload(
+            ticket_authorization_payload()
+        )
+
+        self.assertIsInstance(request.ticket, ExecutionTicket)
+        self.assertEqual(request.ticket.decision_id, "decision-1")
+        self.assertEqual(request.authorization.lease_id, "lease-1")
+        self.assertEqual(request.authorization.transfer_id, "transfer-1")
+        self.assertEqual(request.authorization.ranges[0]["bytes"], 16)
+        self.assertEqual(request.data_plane.plan, request.ticket.plan)
+        self.assertEqual(request.as_dict()["ticket"]["ticket_id"], "ticket-1")
+
+    def test_worker_request_rejects_ticket_decision_mismatch(self) -> None:
+        payload = ticket_authorization_payload(decision_id="other-decision")
+
+        with self.assertRaisesRegex(ValueError, "decision_id"):
+            WorkerTransferRequest.from_execution_ticket_payload(payload)
+
+    def test_worker_request_rejects_ticket_buffer_mismatch(self) -> None:
+        payload = ticket_authorization_payload(source_buffer_id="other-cpu-buffer")
+
+        with self.assertRaisesRegex(ValueError, "source buffer"):
+            WorkerTransferRequest.from_execution_ticket_payload(payload)
 
     def test_worker_request_rejects_mismatched_data_plane_authority(self) -> None:
         request = WorkerTransferRequest.from_authorization_payload(authorization_payload())

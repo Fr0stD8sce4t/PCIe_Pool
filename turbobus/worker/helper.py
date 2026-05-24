@@ -7,6 +7,8 @@ from typing import Mapping
 from ..schema import (
     BufferRegistration,
     DaemonResponse,
+    ExecutionTicket,
+    SchedulingDecision,
     TransferStatusState,
     WorkerDataPlaneCompletion,
     WorkerDataPlaneRequest,
@@ -42,12 +44,15 @@ class WorkerCleanupError(RuntimeError):
 class WorkerTransferRequest:
     authorization: WorkerTransferAuthorization
     data_plane: WorkerDataPlaneRequest | None = None
+    ticket: ExecutionTicket | None = None
 
     @classmethod
     def from_authorization_payload(
         cls,
         payload: Mapping[str, object],
     ) -> "WorkerTransferRequest":
+        if payload.get("ticket") is not None:
+            return cls.from_execution_ticket_payload(payload)
         authorization_payload = payload.get("authorization", payload)
         if not isinstance(authorization_payload, Mapping):
             raise ValueError("authorization payload must be a mapping")
@@ -67,6 +72,31 @@ class WorkerTransferRequest:
         )
 
     @classmethod
+    def from_execution_ticket_payload(
+        cls,
+        payload: Mapping[str, object],
+    ) -> "WorkerTransferRequest":
+        if not isinstance(payload, Mapping):
+            raise ValueError("execution ticket payload must be a mapping")
+        ticket_payload = payload.get("ticket")
+        if not isinstance(ticket_payload, Mapping):
+            raise ValueError("execution ticket payload must include ticket")
+        decision_payload = payload.get("decision")
+        return cls.from_execution_ticket(
+            ExecutionTicket(**dict(ticket_payload)),
+            src_buffer=_buffer_from_payload(payload["src_buffer"]),
+            dst_buffer=_buffer_from_payload(payload["dst_buffer"]),
+            relay_gpu=payload.get("relay_gpu"),
+            lease_id=payload.get("lease_id"),
+            transfer_id=payload.get("transfer_id"),
+            decision=(
+                None
+                if decision_payload is None
+                else SchedulingDecision(**dict(decision_payload))
+            ),
+        )
+
+    @classmethod
     def from_authorization(
         cls,
         authorization: WorkerTransferAuthorization,
@@ -74,6 +104,43 @@ class WorkerTransferRequest:
         return cls(
             authorization=authorization,
             data_plane=WorkerDataPlaneRequest.from_authorization(authorization),
+        )
+
+    @classmethod
+    def from_execution_ticket(
+        cls,
+        ticket: ExecutionTicket,
+        *,
+        src_buffer: BufferRegistration,
+        dst_buffer: BufferRegistration,
+        relay_gpu: int | None = None,
+        lease_id: str | None = None,
+        transfer_id: str | None = None,
+        decision: SchedulingDecision | None = None,
+    ) -> "WorkerTransferRequest":
+        _validate_ticket_matches_buffers(ticket, src_buffer, dst_buffer)
+        if decision is not None:
+            _validate_ticket_matches_decision(ticket, decision)
+        relay = _relay_gpu_for_ticket(ticket, relay_gpu)
+        ranges = _relay_ranges_from_ticket_plan(ticket, relay_gpu=relay)
+        resolved_lease_id = _lease_id_for_ticket(ticket, lease_id)
+        resolved_transfer_id = _transfer_id_for_ticket(ticket, transfer_id)
+        authorization = WorkerTransferAuthorization(
+            transfer_id=resolved_transfer_id,
+            lease_id=resolved_lease_id,
+            session_id=ticket.session_id,
+            job_id=ticket.job_id,
+            src_buffer=src_buffer,
+            dst_buffer=dst_buffer,
+            direction=ticket.direction,
+            ranges=ranges,
+            relay_gpu=relay,
+            plan=dict(ticket.plan),
+        )
+        return cls(
+            authorization=authorization,
+            data_plane=WorkerDataPlaneRequest.from_authorization(authorization),
+            ticket=ticket,
         )
 
     def __post_init__(self) -> None:
@@ -104,6 +171,10 @@ class WorkerTransferRequest:
             raise ValueError("data-plane ranges do not match authorization")
         if data_plane.plan != self.authorization.plan:
             raise ValueError("data-plane plan does not match authorization")
+        if self.ticket is not None:
+            if not isinstance(self.ticket, ExecutionTicket):
+                raise TypeError("ticket must be an ExecutionTicket")
+            _validate_ticket_matches_worker_request(self.ticket, self.authorization)
         object.__setattr__(self, "data_plane", data_plane)
 
     @property
@@ -114,6 +185,7 @@ class WorkerTransferRequest:
         return {
             "authorization": asdict(self.authorization),
             "data_plane": asdict(self.data_plane),
+            "ticket": None if self.ticket is None else asdict(self.ticket),
         }
 
 
@@ -1048,6 +1120,146 @@ def _require_daemon_worker_plan(request: WorkerTransferRequest) -> None:
         raise ValueError("daemon plan has no authorized relay chunks")
     if tuple(relay_ranges) != request.data_plane.ranges:
         raise ValueError("authorized ranges do not match daemon plan")
+
+
+def _validate_ticket_matches_buffers(
+    ticket: ExecutionTicket,
+    src_buffer: BufferRegistration,
+    dst_buffer: BufferRegistration,
+) -> None:
+    if not isinstance(ticket, ExecutionTicket):
+        raise TypeError("ticket must be an ExecutionTicket")
+    if not isinstance(src_buffer, BufferRegistration):
+        raise TypeError("src_buffer must be a BufferRegistration")
+    if not isinstance(dst_buffer, BufferRegistration):
+        raise TypeError("dst_buffer must be a BufferRegistration")
+    if src_buffer.buffer_id != ticket.source_buffer_id:
+        raise ValueError("ticket source buffer does not match worker buffer")
+    if dst_buffer.buffer_id != ticket.destination_buffer_id:
+        raise ValueError("ticket destination buffer does not match worker buffer")
+    if src_buffer.job_id != ticket.job_id or dst_buffer.job_id != ticket.job_id:
+        raise ValueError("ticket job does not match worker buffers")
+
+
+def _validate_ticket_matches_decision(
+    ticket: ExecutionTicket,
+    decision: SchedulingDecision,
+) -> None:
+    if ticket.decision_id != decision.decision_id:
+        raise ValueError("ticket decision_id does not match scheduling decision")
+    if ticket.intent_id != decision.intent_id:
+        raise ValueError("ticket intent_id does not match scheduling decision")
+    if ticket.topology_snapshot_id != decision.topology_snapshot_id:
+        raise ValueError("ticket topology_snapshot_id does not match scheduling decision")
+    if ticket.job_id != decision.job_id:
+        raise ValueError("ticket job_id does not match scheduling decision")
+    if ticket.session_id != decision.session_id:
+        raise ValueError("ticket session_id does not match scheduling decision")
+    if dict(ticket.plan) != dict(decision.plan):
+        raise ValueError("ticket plan does not match scheduling decision")
+
+
+def _validate_ticket_matches_worker_request(
+    ticket: ExecutionTicket,
+    authorization: WorkerTransferAuthorization,
+) -> None:
+    if ticket.job_id != authorization.job_id:
+        raise ValueError("ticket job does not match worker authorization")
+    if ticket.session_id != authorization.session_id:
+        raise ValueError("ticket session does not match worker authorization")
+    if ticket.source_buffer_id != authorization.src_buffer.buffer_id:
+        raise ValueError("ticket source buffer does not match worker authorization")
+    if ticket.destination_buffer_id != authorization.dst_buffer.buffer_id:
+        raise ValueError("ticket destination buffer does not match worker authorization")
+    if ticket.direction != authorization.direction:
+        raise ValueError("ticket direction does not match worker authorization")
+    if dict(ticket.plan) != authorization.plan:
+        raise ValueError("ticket plan does not match worker authorization")
+    relay = _relay_gpu_for_ticket(ticket, authorization.relay_gpu)
+    if relay != authorization.relay_gpu:
+        raise ValueError("ticket relay does not match worker authorization")
+    if _relay_ranges_from_ticket_plan(ticket, relay_gpu=relay) != authorization.ranges:
+        raise ValueError("ticket ranges do not match worker authorization")
+
+
+def _relay_gpu_for_ticket(
+    ticket: ExecutionTicket,
+    relay_gpu: int | None,
+) -> int:
+    relay_devices = []
+    for assignment in ticket.plan.get("assignments", ()) or ():
+        if not isinstance(assignment, Mapping):
+            raise ValueError("ticket plan assignment must be an object")
+        path = assignment.get("path")
+        if not isinstance(path, Mapping):
+            raise ValueError("ticket plan assignment path must be an object")
+        if str(path.get("kind", "")).lower() == "relay":
+            relay_devices.append(int(path.get("relay_device", -1)))
+    relay_devices = sorted(set(relay_devices))
+    if relay_gpu is not None:
+        relay = int(relay_gpu)
+        if relay not in relay_devices:
+            raise ValueError("ticket relay does not match daemon plan")
+        return relay
+    if len(relay_devices) != 1:
+        raise ValueError("worker ticket requires exactly one relay path")
+    return relay_devices[0]
+
+
+def _lease_id_for_ticket(ticket: ExecutionTicket, lease_id: str | None) -> str:
+    if lease_id is not None:
+        resolved = str(lease_id)
+        if ticket.lease_ids and resolved not in ticket.lease_ids:
+            raise ValueError("worker lease_id does not match ticket")
+        return resolved
+    if len(ticket.lease_ids) != 1:
+        raise ValueError("worker ticket requires exactly one lease id")
+    return ticket.lease_ids[0]
+
+
+def _transfer_id_for_ticket(ticket: ExecutionTicket, transfer_id: str | None) -> str:
+    if transfer_id is not None:
+        return str(transfer_id)
+    transfer_id = ticket.metadata.get("transfer_id")
+    if transfer_id is None:
+        return ticket.ticket_id
+    return str(transfer_id)
+
+
+def _relay_ranges_from_ticket_plan(
+    ticket: ExecutionTicket,
+    *,
+    relay_gpu: int,
+) -> tuple[dict[str, int], ...]:
+    ranges: list[dict[str, int]] = []
+    for assignment in ticket.plan.get("assignments", ()) or ():
+        if not isinstance(assignment, Mapping):
+            raise ValueError("ticket plan assignment must be an object")
+        path = assignment.get("path")
+        if not isinstance(path, Mapping):
+            raise ValueError("ticket plan assignment path must be an object")
+        if str(path.get("kind", "")).lower() != "relay":
+            continue
+        if int(path.get("relay_device", -1)) != int(relay_gpu):
+            continue
+        if str(path.get("direction", "")).lower() != ticket.direction:
+            raise ValueError("ticket plan direction does not match ticket")
+        for chunk in assignment.get("chunks", ()) or ():
+            if not isinstance(chunk, Mapping):
+                raise ValueError("ticket plan chunk must be an object")
+            ranges.append(
+                {
+                    "src_offset": int(chunk["src_offset"]),
+                    "dst_offset": int(chunk["dst_offset"]),
+                    "bytes": int(chunk["bytes"]),
+                }
+            )
+    if not ranges:
+        raise ValueError("ticket plan has no authorized relay chunks")
+    relay_bytes = sum(item["bytes"] for item in ranges)
+    if relay_bytes > ticket.total_bytes:
+        raise ValueError("ticket relay ranges exceed ticket total bytes")
+    return tuple(ranges)
 
 
 def _failed_worker_result_from_exception(

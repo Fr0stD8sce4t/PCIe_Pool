@@ -6,21 +6,13 @@ from typing import Callable, Mapping
 
 from ..planner_engine import PlannerEngine
 from ..planner_types import PlannerLease, PlannerStats, PlannerTransferPlan
-from ..schema import RelayQuota, Session, TransferMode
-
-
-@dataclass(frozen=True)
-class SchedulerDecision:
-    plan: PlannerTransferPlan
-    leases: tuple[PlannerLease, ...]
-    stats: PlannerStats
-
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "plan": self.plan.as_dict(),
-            "leases": [lease.as_dict() for lease in self.leases],
-            "stats": self.stats.as_dict(),
-        }
+from ..schema import (
+    RelayQuota,
+    SchedulingDecision,
+    SchedulingDecisionState,
+    Session,
+    TransferMode,
+)
 
 
 @dataclass(frozen=True)
@@ -48,10 +40,12 @@ class DaemonScheduler:
         self,
         planner: PlannerEngine | None = None,
         lease_id_factory: Callable[[], str] | None = None,
+        decision_id_factory: Callable[[], str] | None = None,
         lease_seconds: float = 30.0,
     ) -> None:
         self._planner = planner or PlannerEngine()
         self._lease_id_factory = lease_id_factory or (lambda: str(uuid.uuid4()))
+        self._decision_id_factory = decision_id_factory or (lambda: str(uuid.uuid4()))
         self._lease_seconds = max(0.0, float(lease_seconds))
 
     def plan_transfer(
@@ -67,7 +61,9 @@ class DaemonScheduler:
         direction: str = "h2d",
         now: float = 0.0,
         job_id: str | None = None,
-    ) -> SchedulerDecision:
+        intent_id: str | None = None,
+        topology_snapshot_id: str | None = None,
+    ) -> SchedulingDecision:
         total_bytes = int(total_bytes)
         chunk_bytes = int(chunk_bytes)
         normalized_ranges = _normalize_ranges(ranges)
@@ -133,7 +129,34 @@ class DaemonScheduler:
             requested_mode=requested_mode,
             fallback_reason=fallback_reason,
         )
-        return SchedulerDecision(plan=plan, leases=leases, stats=stats)
+        return SchedulingDecision(
+            decision_id=self._decision_id_factory(),
+            intent_id=_contract_id(
+                intent_id,
+                prefix="intent",
+                fallback=session.session_id,
+            ),
+            topology_snapshot_id=_contract_id(
+                topology_snapshot_id,
+                prefix="topology",
+                fallback=session.session_id,
+            ),
+            job_id=str(job_id or session.session_id),
+            session_id=session.session_id,
+            state=(
+                SchedulingDecisionState.FALLBACK
+                if fallback_reason is not None
+                else SchedulingDecisionState.PLANNED
+            ),
+            plan=plan.as_dict(),
+            path_summary=_path_summary_for_plan(plan),
+            fallback_reason=fallback_reason,
+            issued_at=float(now),
+            metadata={
+                "leases": [lease.as_dict() for lease in leases],
+                "stats": stats.as_dict(),
+            },
+        )
 
     def _profile_for_planning(
         self,
@@ -342,6 +365,81 @@ def _stats_for_plan(
     )
 
 
+def scheduling_decision_leases(
+    decision: SchedulingDecision,
+) -> tuple[PlannerLease, ...]:
+    if not isinstance(decision, SchedulingDecision):
+        raise TypeError("decision must be a SchedulingDecision")
+    leases = decision.metadata.get("leases", ())
+    if not isinstance(leases, tuple | list):
+        raise ValueError("scheduling decision metadata leases must be a sequence")
+    return tuple(_planner_lease_from_payload(item) for item in leases)
+
+
+def scheduling_decision_stats(decision: SchedulingDecision) -> PlannerStats:
+    if not isinstance(decision, SchedulingDecision):
+        raise TypeError("decision must be a SchedulingDecision")
+    payload = decision.metadata.get("stats", {})
+    if not isinstance(payload, Mapping):
+        raise ValueError("scheduling decision metadata stats must be a mapping")
+    return PlannerStats(
+        bytes=int(payload.get("bytes", 0)),
+        direct_bytes=int(payload.get("direct_bytes", 0)),
+        relay_bytes=int(payload.get("relay_bytes", 0)),
+        direct_chunks=int(payload.get("direct_chunks", 0)),
+        relay_chunks=int(payload.get("relay_chunks", 0)),
+        path_count=int(payload.get("path_count", 0)),
+        relay_path_count=int(payload.get("relay_path_count", 0)),
+        fallback_reason=payload.get("fallback_reason"),
+        requested_mode=payload.get("requested_mode", TransferMode.POOL),
+        resolved_mode=payload.get("resolved_mode", TransferMode.POOL),
+    )
+
+
+def _planner_lease_from_payload(payload: object) -> PlannerLease:
+    if not isinstance(payload, Mapping):
+        raise ValueError("scheduling decision lease must be a mapping")
+    return PlannerLease(
+        lease_id=str(payload["lease_id"]),
+        session_id=str(payload["session_id"]),
+        relay_device=int(payload["relay_device"]),
+        chunk_limit=int(payload["chunk_limit"]),
+        bytes_limit=int(payload.get("bytes_limit", 0)),
+        direction=str(payload.get("direction", "unknown")),
+        granted_at=float(payload.get("granted_at", 0.0)),
+        expires_at=float(payload.get("expires_at", 0.0)),
+        active=bool(payload.get("active", True)),
+        job_id=payload.get("job_id"),
+        reason=payload.get("reason"),
+    )
+
+
+def _path_summary_for_plan(
+    plan: PlannerTransferPlan,
+) -> tuple[dict[str, object], ...]:
+    summary: list[dict[str, object]] = []
+    for assignment in plan.assignments:
+        path = assignment.path
+        bytes_count = sum(chunk.bytes for chunk in assignment.chunks)
+        summary.append(
+            {
+                "kind": path.kind,
+                "direction": path.direction,
+                "target_device": path.target_device,
+                "relay_device": path.relay_device,
+                "bytes": bytes_count,
+                "chunk_count": len(assignment.chunks),
+            }
+        )
+    return tuple(summary)
+
+
+def _contract_id(value: str | None, *, prefix: str, fallback: str) -> str:
+    if value is not None and str(value).strip():
+        return str(value)
+    return f"{prefix}-{fallback}"
+
+
 def _resolved_mode_for_plan(plan: PlannerTransferPlan) -> TransferMode:
     has_direct = any(assignment.path.kind == "direct" for assignment in plan.assignments)
     has_relay = any(assignment.path.kind == "relay" for assignment in plan.assignments)
@@ -414,4 +512,9 @@ def _normalize_ranges(
     return tuple(normalized)
 
 
-__all__ = ["DaemonScheduler", "SchedulerDecision"]
+__all__ = [
+    "DaemonScheduler",
+    "SchedulingDecision",
+    "scheduling_decision_leases",
+    "scheduling_decision_stats",
+]

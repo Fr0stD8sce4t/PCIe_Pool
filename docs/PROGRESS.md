@@ -45,6 +45,12 @@ The active target architecture is:
   result. The root `turbobus` package now exports the daemon-first API and
   shared contract objects instead of top-level planner/runtime transfer
   controls.
+- Phase 0 Cut 5 is complete. `DaemonScheduler.plan_transfer` now returns the
+  shared `SchedulingDecision` contract. The daemon stores decisions, exposes
+  decision ids and topology snapshot ids in plan responses, and issues
+  `ExecutionTicket` objects during worker authorization. Worker request
+  construction can now use tickets as input and rejects mismatched decision,
+  buffer, lease, range, and daemon-plan bindings before data-plane execution.
 
 ## Active Phase
 
@@ -62,7 +68,7 @@ Phase 0 covers:
 
 ## Next Work Items
 
-Current item: Cut 5, Scheduler and ticket contract.
+Current item: Cut 6, Test tree rewrite.
 
 1. Shared schema layer.
    - Status: complete.
@@ -84,12 +90,13 @@ Current item: Cut 5, Scheduler and ticket contract.
    - Update package exports.
 
 4. Scheduler and ticket contract.
-   - Status: current.
+   - Status: complete.
    - Make SchedulingDecision the scheduler output.
    - Make ExecutionTicket the worker input.
    - Add rejection tests for ticket mismatches.
 
 5. Test tree rewrite.
+   - Status: current.
    - Organize tests into unit, integration, e2e, and fixtures.
    - Mark GPU-required tests clearly.
 

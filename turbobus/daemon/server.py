@@ -25,8 +25,14 @@ from .protocol import (
     WorkerTransferAuthorization,
     WorkerTransferAuthorizationRequest,
 )
+from ..schema import ExecutionTicket
 from ..topology import TopologyProvider
-from ..scheduler import DaemonScheduler, SchedulerDecision
+from ..scheduler import (
+    DaemonScheduler,
+    SchedulingDecision,
+    scheduling_decision_leases,
+    scheduling_decision_stats,
+)
 
 
 _TERMINAL_TRANSFER_STATES = {
@@ -61,6 +67,7 @@ class TurboBusDaemon:
         self._reservations: dict[str, TransferReservation] = {}
         self._reservation_transfers: dict[str, str] = {}
         self._transfer_plans: dict[str, dict[str, object]] = {}
+        self._scheduling_decisions: dict[str, SchedulingDecision] = {}
         self._lease_tokens: dict[str, LeaseToken] = {}
         self._transfer_statuses: dict[str, TransferStatus] = {}
         self._cleanup_events: list[CleanupRequest] = []
@@ -511,9 +518,25 @@ class TurboBusDaemon:
                 relay_gpu=lease.relay_gpu,
                 plan=plan,
             )
+            ticket = self._execution_ticket_for_worker_locked(
+                authorization,
+                lease=lease,
+                transfer_id=request.transfer_id,
+                now=now,
+            )
+            decision = self._scheduling_decisions.get(request.transfer_id)
             return DaemonResponse(
                 ok=True,
-                payload={"authorization": asdict(authorization)},
+                payload={
+                    "authorization": asdict(authorization),
+                    "ticket": asdict(ticket),
+                    "decision": None if decision is None else asdict(decision),
+                    "src_buffer": asdict(src_buffer),
+                    "dst_buffer": asdict(dst_buffer),
+                    "relay_gpu": lease.relay_gpu,
+                    "lease_id": request.lease_id,
+                    "transfer_id": request.transfer_id,
+                },
             )
 
     def plan_transfer(
@@ -609,9 +632,20 @@ class TurboBusDaemon:
                 session_id=session.session_id,
             )
             self._transfer_statuses[transfer_id] = status
-            self._transfer_plans[transfer_id] = decision.plan.as_dict()
+            self._transfer_plans[transfer_id] = dict(decision.plan)
+            self._scheduling_decisions[transfer_id] = decision
             self._touch_session_locked(session.session_id, now)
-            payload = decision.as_dict()
+            payload = {
+                "decision": asdict(decision),
+                "decision_id": decision.decision_id,
+                "topology_snapshot_id": decision.topology_snapshot_id,
+                "plan": dict(decision.plan),
+                "path_summary": list(decision.path_summary),
+                "stats": scheduling_decision_stats(decision).as_dict(),
+                "leases": [
+                    lease.as_dict() for lease in scheduling_decision_leases(decision)
+                ],
+            }
             payload["transfer_id"] = transfer_id
             payload["transfer_status"] = asdict(status)
             payload["planning"] = {
@@ -713,12 +747,12 @@ class TurboBusDaemon:
     def _commit_scheduler_leases_locked(
         self,
         session: Session,
-        decision: SchedulerDecision,
+        decision: SchedulingDecision,
         transfer_id: str | None = None,
         buffer_ids: tuple[str, ...] = (),
     ) -> list[TransferReservation]:
         reservations: list[TransferReservation] = []
-        for lease in decision.leases:
+        for lease in scheduling_decision_leases(decision):
             reservation = TransferReservation(
                 reservation_id=lease.lease_id,
                 session_id=lease.session_id,
@@ -746,6 +780,43 @@ class TurboBusDaemon:
                 self._reservation_transfers[reservation.reservation_id] = transfer_id
             reservations.append(reservation)
         return reservations
+
+    def _execution_ticket_for_worker_locked(
+        self,
+        authorization: WorkerTransferAuthorization,
+        *,
+        lease: LeaseToken,
+        transfer_id: str,
+        now: float,
+    ) -> ExecutionTicket:
+        decision = self._scheduling_decisions.get(str(transfer_id))
+        if decision is None:
+            raise ValueError("scheduling decision is unavailable")
+        expires_at = float(lease.expires_at or (float(now) + 30.0))
+        if expires_at <= float(now):
+            raise ValueError("lease expired")
+        ticket_ranges = _ticket_ranges_for_plan(
+            decision.plan,
+            direction=authorization.direction,
+        )
+        return ExecutionTicket(
+            ticket_id=f"ticket-{transfer_id}",
+            decision_id=decision.decision_id,
+            intent_id=decision.intent_id,
+            topology_snapshot_id=decision.topology_snapshot_id,
+            job_id=authorization.job_id,
+            session_id=authorization.session_id,
+            source_buffer_id=authorization.src_buffer.buffer_id,
+            destination_buffer_id=authorization.dst_buffer.buffer_id,
+            direction=authorization.direction,
+            total_bytes=sum(item["bytes"] for item in ticket_ranges),
+            ranges=ticket_ranges,
+            plan=dict(decision.plan),
+            issued_at=float(now),
+            expires_at=expires_at,
+            lease_ids=(authorization.lease_id,),
+            metadata={"transfer_id": transfer_id},
+        )
 
     def _issue_lease_token_locked(
         self,
@@ -1528,6 +1599,38 @@ def _relay_ranges_from_plan(
             )
     if not ranges:
         raise ValueError("daemon plan has no authorized relay chunks")
+    return tuple(ranges)
+
+
+def _ticket_ranges_for_plan(
+    plan: dict[str, object],
+    *,
+    direction: str,
+) -> tuple[dict[str, int], ...]:
+    if not isinstance(plan, dict):
+        raise ValueError("transfer plan is unavailable")
+    ranges: list[dict[str, int]] = []
+    requested_direction = str(direction).lower()
+    for assignment in plan.get("assignments", ()) or ():
+        if not isinstance(assignment, dict):
+            raise ValueError("transfer plan assignment must be an object")
+        path = assignment.get("path")
+        if not isinstance(path, dict):
+            raise ValueError("transfer plan assignment path must be an object")
+        if str(path.get("direction", "")).lower() != requested_direction:
+            continue
+        for chunk in assignment.get("chunks", ()) or ():
+            if not isinstance(chunk, dict):
+                raise ValueError("transfer plan chunk must be an object")
+            ranges.append(
+                {
+                    "src_offset": int(chunk["src_offset"]),
+                    "dst_offset": int(chunk["dst_offset"]),
+                    "bytes": int(chunk["bytes"]),
+                }
+            )
+    if not ranges:
+        raise ValueError("daemon plan has no authorized chunks")
     return tuple(ranges)
 
 
