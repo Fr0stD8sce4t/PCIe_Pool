@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import unittest.mock as mock
 import tempfile
 import threading
 import time
@@ -17,6 +18,7 @@ from turbobus.daemon.protocol import (
 )
 from turbobus.daemon.server import TurboBusDaemon
 from turbobus.schema import (
+    PeerIdentity,
     TransferIntent,
     TransferStatusState,
     WorkloadKind,
@@ -160,6 +162,99 @@ class DaemonSocketTest(unittest.TestCase):
 
             self.assertFalse(registered.ok)
             self.assertIn("unknown session", registered.error)
+            self.assertEqual(daemon.describe().payload["jobs"], {})
+
+    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
+    def test_socket_register_job_uses_daemon_peer_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            socket_path = os.path.join(tmpdir, "turbobusd.sock")
+            daemon = TurboBusDaemon(relay_gpus=[1], max_sessions_per_relay=1)
+            peer = PeerIdentity(
+                authenticated=True,
+                source="test_socket",
+                user_id="1000",
+                process_id=42,
+            )
+            with mock.patch(
+                "turbobus.daemon.server._peer_identity_from_socket",
+                return_value=peer,
+            ):
+                thread = threading.Thread(
+                    target=daemon.serve_forever,
+                    args=(socket_path,),
+                    daemon=True,
+                )
+                thread.start()
+
+                for _ in range(100):
+                    if os.path.exists(socket_path):
+                        break
+                    time.sleep(0.01)
+                self.assertTrue(os.path.exists(socket_path))
+
+                client = TurboBusDaemonClient(socket_path)
+                session = client.register_session(target_gpu=0, relay_gpus=[1])
+                self.assertTrue(session.ok)
+                session_id = session.payload["session"]["session_id"]
+                registered = client.register_job(
+                    job_id="job-1",
+                    session_id=session_id,
+                )
+
+            self.assertTrue(registered.ok)
+            self.assertEqual(registered.payload["job"]["user_id"], "1000")
+            self.assertEqual(registered.payload["job"]["process_id"], 42)
+            self.assertEqual(
+                daemon.describe().payload["job_peer_identities"]["job-1"]["source"],
+                "test_socket",
+            )
+
+    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")
+    def test_socket_ignores_json_peer_identity_spoofing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            socket_path = os.path.join(tmpdir, "turbobusd.sock")
+            daemon = TurboBusDaemon(relay_gpus=[1], max_sessions_per_relay=1)
+            peer = PeerIdentity(
+                authenticated=True,
+                source="test_socket",
+                user_id="1000",
+                process_id=42,
+            )
+            with mock.patch(
+                "turbobus.daemon.server._peer_identity_from_socket",
+                return_value=peer,
+            ):
+                thread = threading.Thread(
+                    target=daemon.serve_forever,
+                    args=(socket_path,),
+                    daemon=True,
+                )
+                thread.start()
+
+                for _ in range(100):
+                    if os.path.exists(socket_path):
+                        break
+                    time.sleep(0.01)
+                self.assertTrue(os.path.exists(socket_path))
+
+                response = send_request(
+                    socket_path,
+                    {
+                        "request_type": "REGISTER_JOB",
+                        "peer_identity": {
+                            "authenticated": True,
+                            "source": "client_json",
+                            "user_id": "2000",
+                        },
+                        "payload": {
+                            "job_id": "job-1",
+                            "user_id": "2000",
+                        },
+                    },
+                )
+
+            self.assertFalse(response["ok"])
+            self.assertIn("authenticated peer", response["error"])
             self.assertEqual(daemon.describe().payload["jobs"], {})
 
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix domain sockets are unavailable")

@@ -79,6 +79,51 @@ class SchedulingDecisionState(str, Enum):
 
 
 @dataclass(frozen=True)
+class PeerIdentity:
+    authenticated: bool
+    source: str
+    user_id: str | None = None
+    process_id: int | None = None
+    group_id: int | None = None
+    container_id: str | None = None
+    unsupported_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        source = _require_non_empty_str(self.source, "source")
+        authenticated = bool(self.authenticated)
+        if authenticated and self.user_id is None:
+            raise ValueError("authenticated peer identity requires user_id")
+        if self.process_id is not None and int(self.process_id) < 0:
+            raise ValueError("process_id must be non-negative")
+        if self.group_id is not None and int(self.group_id) < 0:
+            raise ValueError("group_id must be non-negative")
+        if not authenticated and self.unsupported_reason is not None:
+            unsupported_reason = _require_non_empty_str(
+                self.unsupported_reason,
+                "unsupported_reason",
+            )
+            object.__setattr__(self, "unsupported_reason", unsupported_reason)
+        object.__setattr__(self, "authenticated", authenticated)
+        object.__setattr__(self, "source", source)
+        if self.user_id is not None:
+            object.__setattr__(
+                self,
+                "user_id",
+                _require_non_empty_str(self.user_id, "user_id"),
+            )
+        if self.process_id is not None:
+            object.__setattr__(self, "process_id", int(self.process_id))
+        if self.group_id is not None:
+            object.__setattr__(self, "group_id", int(self.group_id))
+        if self.container_id is not None:
+            object.__setattr__(
+                self,
+                "container_id",
+                _require_non_empty_str(self.container_id, "container_id"),
+            )
+
+
+@dataclass(frozen=True)
 class JobIdentity:
     job_id: str
     user_id: str | None = None
@@ -1314,6 +1359,18 @@ class DaemonRequest:
     request_type: RequestType
     session_id: str | None = None
     payload: dict[str, Any] = field(default_factory=dict)
+    peer_identity: PeerIdentity | None = None
+
+    def __post_init__(self) -> None:
+        if self.peer_identity is not None and not isinstance(
+            self.peer_identity,
+            PeerIdentity,
+        ):
+            object.__setattr__(
+                self,
+                "peer_identity",
+                PeerIdentity(**self.peer_identity),
+            )
 
 
 @dataclass
@@ -1334,6 +1391,7 @@ __all__ = [
     "ExecutionTicket",
     "JobIdentity",
     "LeaseToken",
+    "PeerIdentity",
     "RelayQuota",
     "RequestType",
     "SchedulingDecision",

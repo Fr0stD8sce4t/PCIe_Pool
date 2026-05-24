@@ -12,6 +12,7 @@ from turbobus.schema import (
     DaemonResponse,
     JobIdentity,
     LeaseToken,
+    PeerIdentity,
     RelayQuota,
     RequestType,
     Session,
@@ -57,10 +58,18 @@ class SchemaTest(unittest.TestCase):
         self.assertEqual(payload["eligible_relay_devices"], [1, 2])
 
     def test_daemon_protocol_round_trip(self) -> None:
+        peer = PeerIdentity(
+            authenticated=True,
+            source="test",
+            user_id="1000",
+            process_id=42,
+            group_id=100,
+        )
         request = DaemonRequest(
             request_type=RequestType.RESERVE_TRANSFER,
             session_id="session-1",
             payload={"relay_gpu": 1, "chunks": 2},
+            peer_identity=peer,
         )
         session = Session(
             session_id="session-1",
@@ -88,6 +97,8 @@ class SchemaTest(unittest.TestCase):
         response_payload = json.loads(json.dumps(asdict(response)))
 
         self.assertEqual(request_payload["request_type"], "RESERVE_TRANSFER")
+        self.assertTrue(request_payload["peer_identity"]["authenticated"])
+        self.assertEqual(request_payload["peer_identity"]["user_id"], "1000")
         self.assertEqual(response_payload["payload"]["session"]["session_id"], "session-1")
         self.assertEqual(
             response_payload["payload"]["reservation"]["reservation_id"],
@@ -298,6 +309,14 @@ class SchemaTest(unittest.TestCase):
         self.assertEqual(payload["data_plane_completion"]["state"], "complete")
 
     def test_daemon_baseline_message_validation_rejects_invalid_values(self) -> None:
+        with self.assertRaises(ValueError):
+            PeerIdentity(authenticated=True, source="test")
+        with self.assertRaises(ValueError):
+            PeerIdentity(
+                authenticated=False,
+                source="test",
+                unsupported_reason="",
+            )
         with self.assertRaises(ValueError):
             JobIdentity(job_id="", process_id=1)
         with self.assertRaises(ValueError):

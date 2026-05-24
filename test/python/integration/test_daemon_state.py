@@ -10,6 +10,7 @@ from turbobus.daemon.protocol import (
 )
 from turbobus.daemon.server import TurboBusDaemon
 from turbobus.schema import (
+    PeerIdentity,
     TransferIntent,
     TransferReceipt,
     TransferStatusState,
@@ -191,6 +192,132 @@ class DaemonStateTest(unittest.TestCase):
         self.assertFalse(registered.ok)
         self.assertIn("unknown session", registered.error)
         self.assertEqual(daemon.describe().payload["jobs"], {})
+
+    def test_register_job_binds_authenticated_peer_identity(self) -> None:
+        daemon = _daemon(relay_gpus=[1])
+        peer = PeerIdentity(
+            authenticated=True,
+            source="test",
+            user_id="1000",
+            process_id=42,
+            group_id=100,
+        )
+        session = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.REGISTER_SESSION,
+                payload={"target_gpu": 0, "relay_gpus": [1]},
+                peer_identity=peer,
+            )
+        )
+        session_id = session.payload["session"]["session_id"]
+
+        registered = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.REGISTER_JOB,
+                payload={
+                    "job_id": "job-1",
+                    "session_id": session_id,
+                },
+                peer_identity=peer,
+            )
+        )
+
+        self.assertTrue(registered.ok)
+        self.assertEqual(registered.payload["job"]["user_id"], "1000")
+        self.assertEqual(registered.payload["job"]["process_id"], 42)
+        snapshot = daemon.describe().payload
+        self.assertEqual(
+            snapshot["session_peer_identities"][session_id]["user_id"],
+            "1000",
+        )
+        self.assertEqual(
+            snapshot["job_peer_identities"]["job-1"]["source"],
+            "test",
+        )
+
+    def test_register_job_rejects_authenticated_peer_spoofing(self) -> None:
+        daemon = _daemon(relay_gpus=[1])
+        peer = PeerIdentity(
+            authenticated=True,
+            source="test",
+            user_id="1000",
+            process_id=42,
+        )
+
+        registered = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.REGISTER_JOB,
+                payload={
+                    "job_id": "job-1",
+                    "user_id": "2000",
+                    "process_id": 42,
+                },
+                peer_identity=peer,
+            )
+        )
+
+        self.assertFalse(registered.ok)
+        self.assertIn("user_id does not match", registered.error)
+
+    def test_register_job_rejects_cross_peer_session_owner(self) -> None:
+        daemon = _daemon(relay_gpus=[1])
+        owner = PeerIdentity(
+            authenticated=True,
+            source="test",
+            user_id="1000",
+            process_id=42,
+        )
+        other = PeerIdentity(
+            authenticated=True,
+            source="test",
+            user_id="2000",
+            process_id=84,
+        )
+        session = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.REGISTER_SESSION,
+                payload={"target_gpu": 0, "relay_gpus": [1]},
+                peer_identity=owner,
+            )
+        )
+        session_id = session.payload["session"]["session_id"]
+
+        registered = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.REGISTER_JOB,
+                payload={
+                    "job_id": "job-1",
+                    "session_id": session_id,
+                },
+                peer_identity=other,
+            )
+        )
+
+        self.assertFalse(registered.ok)
+        self.assertIn("session owner", registered.error)
+
+    def test_unsupported_peer_identity_allows_explicit_request_owner(self) -> None:
+        daemon = _daemon(relay_gpus=[1])
+        peer = PeerIdentity(
+            authenticated=False,
+            source="unix_socket",
+            unsupported_reason="SO_PEERCRED is unavailable on this platform",
+        )
+
+        registered = daemon.handle_request(
+            DaemonRequest(
+                request_type=RequestType.REGISTER_JOB,
+                payload={
+                    "job_id": "job-1",
+                    "user_id": "declared-user",
+                },
+                peer_identity=peer,
+            )
+        )
+
+        self.assertTrue(registered.ok)
+        self.assertEqual(registered.payload["job"]["user_id"], "declared-user")
+        self.assertFalse(registered.payload["peer_identity"]["authenticated"])
 
     def test_cleanup_session_reports_removed_jobs_and_buffers(self) -> None:
         daemon = _daemon(relay_gpus=[1])

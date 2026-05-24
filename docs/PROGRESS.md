@@ -134,6 +134,13 @@ The active target architecture is:
   and subsequent `GET_INVENTORY` and `DISCOVER_RELAYS` responses use the new
   snapshot. Integration tests cover refresh changing relay discovery from a
   filtered candidate to an eligible relay with path capabilities.
+- Phase 2 Cut 1 is complete. `PeerIdentity` now records authenticated or
+  explicitly unsupported peer credential state. Socket handling attaches
+  daemon-captured peer identity to requests, ignores client-supplied JSON peer
+  identity, and uses Unix `SO_PEERCRED` where available. Session and job
+  registration now record peer identity, bind authenticated user/process
+  fields to the daemon-observed peer, and reject spoofed user ids or
+  cross-peer session ownership.
 
 ## Active Phase
 
@@ -158,7 +165,7 @@ Phase 2 covers:
 
 ## Next Work Items
 
-Current item: Phase 2 Cut 1, peer identity and socket credential foundation.
+Current item: Phase 2 Cut 2, buffer ownership checks.
 
 1. Shared schema layer.
    - Status: complete.
@@ -246,9 +253,11 @@ Current item: Phase 2 Cut 1, peer identity and socket credential foundation.
 
 10. Privileged daemon control plane.
    - Status: current.
-   - Cut 1 current: add peer identity and socket credential foundation.
-   - Later Phase 2 work: enforce job/session/buffer ownership, clean stale
-     resources after disconnects and worker failures, and emit audit records.
+   - Cut 1 complete: add peer identity and socket credential foundation.
+   - Cut 2 current: enforce buffer ownership for registration and transfer
+     paths.
+   - Later Phase 2 work: clean stale resources after disconnects and worker
+     failures, and emit audit records.
 
 ## Phase 0 Acceptance Criteria
 
@@ -266,10 +275,10 @@ Phase 0 is complete:
 
 ## Latest Validation
 
-Phase 1 Cut 3 validation:
+Phase 2 Cut 1 validation:
 
-- `python -m unittest test.python.unit.test_topology_provider test.python.unit.test_schema test.python.integration.test_daemon_state test.python.integration.test_daemon_socket`
-- `python -m compileall -q turbobus\topology turbobus\daemon turbobus\schema.py test\python\fixtures\topology.py test\python\unit\test_topology_provider.py test\python\unit\test_schema.py test\python\integration\test_daemon_state.py test\python\integration\test_daemon_socket.py`
+- `python -m unittest test.python.unit.test_schema test.python.integration.test_daemon_state test.python.integration.test_daemon_socket`
+- `python -m compileall -q turbobus\schema.py turbobus\daemon test\python\unit\test_schema.py test\python\integration\test_daemon_state.py test\python\integration\test_daemon_socket.py`
 - `git diff --check`
 
 Remaining risk:
@@ -277,8 +286,8 @@ Remaining risk:
 - Phase 1 implementation is complete, but production topology behavior still
   needs to be exercised on a real multi-GPU CUDA server with `nvidia-smi topo
   -m` available.
-- Phase 2 has not yet added socket peer credential enforcement, so ownership
-  checks still depend on request-provided identity until the next cut.
+- Phase 2 has peer identity and job/session ownership foundation, but buffer
+  registration and transfer paths still need full owner enforcement in Cut 2.
 
 ## Upcoming Phases
 

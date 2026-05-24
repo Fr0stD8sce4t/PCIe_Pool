@@ -136,7 +136,7 @@ eligibility, filtered reasons, and per-relay path capabilities.
 
 Current phase: Phase 2, privileged daemon control plane.
 
-Current item: Phase 2 Cut 1, peer identity and socket credential foundation.
+Current item: Phase 2 Cut 2, buffer ownership checks.
 
 ## Phase 0 Code Cuts
 
@@ -477,11 +477,11 @@ Phase 1 is complete.
 
 ## Phase 2 Current Work
 
-Current item: Phase 2 Cut 1, peer identity and socket credential foundation.
+Current item: Phase 2 Cut 2, buffer ownership checks.
 
 Cut 1: peer identity and socket credential foundation.
 
-Status: current.
+Status: complete.
 
 - Add a daemon-side peer identity record for socket-connected clients.
 - Capture platform socket credentials where available, keeping unsupported
@@ -499,6 +499,26 @@ Expected output:
 - job/session registration has a clear ownership boundary for Phase 2 buffer
   checks;
 - no application or adapter gains physical path selection.
+
+Cut 2: buffer ownership checks.
+
+Status: current.
+
+- Bind registered buffers to the job owner identity recorded in Cut 1.
+- Reject buffer registration when the authenticated peer does not own the job.
+- Reject transfer planning, worker authorization, and lease validation when
+  requested buffers belong to a different job or session owner.
+- Keep direct, relay, and pooled scheduling as daemon outcomes only.
+- Add focused tests for same-owner buffer registration, cross-owner rejection,
+  and transfer submission with mismatched buffer ownership.
+
+Expected output:
+
+- jobs cannot register or use another peer's buffers;
+- buffer ownership errors are explicit and machine-readable through daemon
+  responses;
+- ExecutionTicket and TransferIntent paths continue to use daemon-side
+  ownership checks instead of adapter-side path policy.
 
 ## After Phase 0
 

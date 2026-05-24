@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import struct
 import threading
 import time
 import uuid
@@ -16,6 +17,7 @@ from .protocol import (
     DaemonResponse,
     JobIdentity,
     LeaseToken,
+    PeerIdentity,
     RelayQuota,
     RequestType,
     Session,
@@ -62,6 +64,8 @@ class TurboBusDaemon:
         relays = tuple(self._normalize_relays(relay_gpus))
         self._lock = threading.Lock()
         self._jobs: dict[str, JobIdentity] = {}
+        self._job_peer_identities: dict[str, PeerIdentity] = {}
+        self._session_peer_identities: dict[str, PeerIdentity] = {}
         self._buffers: dict[str, BufferRegistration] = {}
         self._sessions: dict[str, Session] = {}
         self._reservations: dict[str, TransferReservation] = {}
@@ -165,6 +169,7 @@ class TurboBusDaemon:
         target_gpu: int,
         requested_relays: Iterable[int],
         max_inflight_chunks: int = 8,
+        peer_identity: PeerIdentity | None = None,
     ) -> DaemonResponse:
         relays = self._normalize_relays(requested_relays)
         max_inflight = int(max_inflight_chunks)
@@ -195,9 +200,14 @@ class TurboBusDaemon:
                 last_seen=now,
             )
             self._sessions[session_id] = session
+            if peer_identity is not None:
+                self._session_peer_identities[session_id] = peer_identity
             for gpu in relays:
                 self._relay_quotas[gpu].sessions.add(session_id)
-            return DaemonResponse(ok=True, payload={"session": asdict(session)})
+            payload = {"session": asdict(session)}
+            if peer_identity is not None:
+                payload["peer_identity"] = asdict(peer_identity)
+            return DaemonResponse(ok=True, payload=payload)
 
     def register_job(
         self,
@@ -206,7 +216,17 @@ class TurboBusDaemon:
         session_id: str | None = None,
         container_id: str | None = None,
         process_id: int | None = None,
+        peer_identity: PeerIdentity | None = None,
     ) -> DaemonResponse:
+        try:
+            user_id, process_id, container_id = _bind_job_identity_to_peer(
+                user_id=user_id,
+                process_id=process_id,
+                container_id=container_id,
+                peer_identity=peer_identity,
+            )
+        except ValueError as exc:
+            return DaemonResponse(ok=False, error=str(exc))
         job = JobIdentity(
             job_id=job_id,
             user_id=user_id,
@@ -217,8 +237,26 @@ class TurboBusDaemon:
         with self._lock:
             if job.session_id is not None and job.session_id not in self._sessions:
                 return DaemonResponse(ok=False, error="unknown session")
+            session_peer = (
+                None
+                if job.session_id is None
+                else self._session_peer_identities.get(job.session_id)
+            )
+            try:
+                _validate_peer_owner_match(
+                    expected=session_peer,
+                    actual=peer_identity,
+                    owner_name="session",
+                )
+            except ValueError as exc:
+                return DaemonResponse(ok=False, error=str(exc))
             self._jobs[job.job_id] = job
-            return DaemonResponse(ok=True, payload={"job": asdict(job)})
+            if peer_identity is not None:
+                self._job_peer_identities[job.job_id] = peer_identity
+            payload = {"job": asdict(job)}
+            if peer_identity is not None:
+                payload["peer_identity"] = asdict(peer_identity)
+            return DaemonResponse(ok=True, payload=payload)
 
     def register_buffer(
         self,
@@ -273,6 +311,7 @@ class TurboBusDaemon:
                 if cleanup.target_id not in self._jobs:
                     return DaemonResponse(ok=False, error="unknown job")
                 self._jobs.pop(cleanup.target_id, None)
+                self._job_peer_identities.pop(cleanup.target_id, None)
                 removed["jobs"] = 1
                 for buffer_id, buffer in list(self._buffers.items()):
                     if buffer.job_id == cleanup.target_id:
@@ -1183,10 +1222,12 @@ class TurboBusDaemon:
         for job_id in job_ids:
             if self._jobs.pop(job_id, None) is not None:
                 removed["jobs"] += 1
+            self._job_peer_identities.pop(job_id, None)
         for buffer_id, buffer in list(self._buffers.items()):
             if buffer.job_id in job_ids:
                 self._buffers.pop(buffer_id, None)
                 removed["buffers"] += 1
+        self._session_peer_identities.pop(session_id, None)
         return removed
 
     def _touch_session_locked(self, session_id: str, now: float | None = None) -> None:
@@ -1249,8 +1290,16 @@ class TurboBusDaemon:
                 ok=True,
                 payload={
                     "jobs": {key: asdict(value) for key, value in self._jobs.items()},
+                    "job_peer_identities": {
+                        key: asdict(value)
+                        for key, value in self._job_peer_identities.items()
+                    },
                     "buffers": {key: asdict(value) for key, value in self._buffers.items()},
                     "sessions": {key: asdict(value) for key, value in self._sessions.items()},
+                    "session_peer_identities": {
+                        key: asdict(value)
+                        for key, value in self._session_peer_identities.items()
+                    },
                     "reservations": {
                         key: asdict(value) for key, value in self._reservations.items()
                     },
@@ -1292,6 +1341,7 @@ class TurboBusDaemon:
                 session_id=payload.get("session_id"),
                 container_id=payload.get("container_id"),
                 process_id=payload.get("process_id"),
+                peer_identity=request.peer_identity,
             )
         if request.request_type == RequestType.REGISTER_BUFFER:
             payload = request.payload
@@ -1331,6 +1381,7 @@ class TurboBusDaemon:
                 target_gpu=int(payload["target_gpu"]),
                 requested_relays=payload.get("relay_gpus", []),
                 max_inflight_chunks=int(payload.get("max_inflight_chunks", 8)),
+                peer_identity=request.peer_identity,
             )
         if request.request_type == RequestType.CLOSE_SESSION:
             if request.session_id is None:
@@ -1707,7 +1758,11 @@ class TurboBusDaemon:
             )
         return records
 
-    def handle_wire_message(self, data: bytes | str) -> DaemonResponse:
+    def handle_wire_message(
+        self,
+        data: bytes | str,
+        peer_identity: PeerIdentity | None = None,
+    ) -> DaemonResponse:
         try:
             text = data.decode("utf-8") if isinstance(data, bytes) else str(data)
             request_data = json.loads(text)
@@ -1720,6 +1775,7 @@ class TurboBusDaemon:
                 request_type=RequestType(request_data["request_type"]),
                 session_id=request_data.get("session_id"),
                 payload=payload,
+                peer_identity=peer_identity,
             )
         except Exception as exc:
             return DaemonResponse(ok=False, error=f"invalid request: {exc}")
@@ -1779,6 +1835,7 @@ class TurboBusDaemon:
             while True:
                 conn, _ = server.accept()
                 with conn:
+                    peer_identity = _peer_identity_from_socket(conn)
                     data = b""
                     while True:
                         chunk = conn.recv(65536)
@@ -1792,7 +1849,7 @@ class TurboBusDaemon:
                         continue
 
                     line, _, _ = data.partition(b"\n")
-                    response = self.handle_wire_message(line)
+                    response = self.handle_wire_message(line, peer_identity=peer_identity)
                     conn.sendall((json.dumps(asdict(response)) + "\n").encode("utf-8"))
         finally:
             server.close()
@@ -1815,6 +1872,79 @@ def _topology_unavailable_response() -> DaemonResponse:
     return DaemonResponse(
         ok=False,
         error="topology provider is required; synthetic topology is test fixture only",
+    )
+
+
+def _bind_job_identity_to_peer(
+    *,
+    user_id: str | None,
+    process_id: int | None,
+    container_id: str | None,
+    peer_identity: PeerIdentity | None,
+) -> tuple[str | None, int | None, str | None]:
+    if peer_identity is None or not peer_identity.authenticated:
+        return user_id, process_id, container_id
+    if user_id is not None and str(user_id) != str(peer_identity.user_id):
+        raise ValueError("job user_id does not match authenticated peer")
+    if (
+        process_id is not None
+        and peer_identity.process_id is not None
+        and int(process_id) != int(peer_identity.process_id)
+    ):
+        raise ValueError("job process_id does not match authenticated peer")
+    if (
+        container_id is not None
+        and peer_identity.container_id is not None
+        and str(container_id) != str(peer_identity.container_id)
+    ):
+        raise ValueError("job container_id does not match authenticated peer")
+    return (
+        str(peer_identity.user_id),
+        peer_identity.process_id if process_id is None else int(process_id),
+        peer_identity.container_id if container_id is None else str(container_id),
+    )
+
+
+def _validate_peer_owner_match(
+    *,
+    expected: PeerIdentity | None,
+    actual: PeerIdentity | None,
+    owner_name: str,
+) -> None:
+    if expected is None or actual is None:
+        return
+    if not expected.authenticated or not actual.authenticated:
+        return
+    if str(expected.user_id) != str(actual.user_id):
+        raise ValueError(f"{owner_name} owner does not match authenticated peer")
+
+
+def _peer_identity_from_socket(conn: socket.socket) -> PeerIdentity:
+    if hasattr(socket, "SO_PEERCRED"):
+        try:
+            credentials = conn.getsockopt(
+                socket.SOL_SOCKET,
+                socket.SO_PEERCRED,
+                struct.calcsize("3i"),
+            )
+            pid, uid, gid = struct.unpack("3i", credentials)
+            return PeerIdentity(
+                authenticated=True,
+                source="unix_socket_peercred",
+                user_id=str(uid),
+                process_id=pid,
+                group_id=gid,
+            )
+        except OSError as exc:
+            return PeerIdentity(
+                authenticated=False,
+                source="unix_socket_peercred",
+                unsupported_reason=str(exc),
+            )
+    return PeerIdentity(
+        authenticated=False,
+        source="unix_socket",
+        unsupported_reason="SO_PEERCRED is unavailable on this platform",
     )
 
 
