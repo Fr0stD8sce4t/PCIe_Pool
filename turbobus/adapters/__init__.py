@@ -36,7 +36,6 @@ from .vllm_kv_connector import (
     clear_saved_prefixes,
     get_connector_events,
     get_saved_prefix,
-    register_saved_prefix,
 )
 
 __all__ = [
@@ -73,6 +72,5 @@ __all__ = [
     "make_vllm_layer_block_refs_from_ids",
     "make_vllm_layer_groups_from_kv_caches",
     "make_vllm_layer_range_refs_from_ids",
-    "register_saved_prefix",
     "vllm_block_name",
 ]

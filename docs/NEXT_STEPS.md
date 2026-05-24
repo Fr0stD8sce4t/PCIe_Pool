@@ -45,8 +45,8 @@ applications or adapters physical path control.
 
 Phase 4 is complete. Exact daemon-issued plans are now the only production
 data-plane input; the old importable Python Runtime path and native extension
-local-planning bindings are gone. Current item: Phase 5 Cut 1, vLLM KV
-save/restore contract audit and real workload boundary.
+local-planning bindings are gone. Current item: Phase 5 Cut 2, real vLLM
+server fixture and single-job save/restore run.
 
 ### Phase 3 Cut 1
 
@@ -233,31 +233,62 @@ python -m turbobus.verification --direction d2h --mode pool --target-gpu 0 --rel
 
 ## Phase 5 Current Work
 
-Current item: Phase 5 Cut 1, vLLM KV save/restore contract audit and real
-workload boundary.
+Current item: Phase 5 Cut 2, real vLLM server fixture and single-job
+save/restore run.
 
 Cut 1: vLLM KV workload boundary and adapter inventory.
 
-Status: current.
+Status: complete.
 
-- Inspect the current vLLM KV connector, vLLM slot adapter, shared adapter
-  context, examples, and e2e tests before changing behavior.
-- Identify the exact vLLM-owned KV block metadata that must become
-  `TransferIntent` source and destination buffer ids for save and restore.
-- Remove or rewrite any remaining fake-only path that makes the connector look
-  complete without a real vLLM save/restore lifecycle.
-- Keep the adapter contract strict: vLLM code submits intent and consumes
-  receipts only; it must not choose direct, relay, or pooled paths.
-- Produce the smallest runnable single-job vLLM KV save/restore slice through
-  the public client API, or split the work again if real vLLM setup needs a
-  separate verified fixture step.
+Completed output:
 
-Expected output:
+- inspected the vLLM KV connector, vLLM slot adapter, shared
+  `AdapterTransferContext`, examples, and vLLM e2e tests before changing
+  behavior;
+- removed the public `register_saved_prefix` test shortcut so saved prefixes
+  are produced by the connector save lifecycle instead of a fake external
+  registration API;
+- removed the `wait_for_save` whole-request fallback that could save a prefix
+  without vLLM calling `save_kv_layer`;
+- made save intents carry vLLM-owned request id, prefix key, block ids,
+  matched tokens, layer name, layer index, and lifecycle metadata from the
+  `save_kv_layer` boundary;
+- made restore intents carry request id, prefix key, source request id, block
+  ids, matched tokens, and lifecycle metadata from the `start_load_kv`
+  boundary;
+- kept adapter code on `TransferIntent` and `TransferReceipt` only, with no
+  direct, relay, or pooled path selection;
+- added lifecycle tests that drive save through `update_state_after_alloc`,
+  `build_connector_meta`, `save_kv_layer`, and `wait_for_save`, then restore
+  through `get_num_new_matched_tokens`, `update_state_after_alloc`,
+  `build_connector_meta`, and `start_load_kv`.
 
 - the Phase 5 implementation target is tied to real vLLM KV save/restore
   lifecycle points, not the old connector experiment route;
 - tests protect intent construction, receipt consumption, and trace ids for
   vLLM KV save/restore;
+- no Phase 5 code reintroduces application-side physical path selection.
+
+Cut 2: real vLLM server fixture and single-job save/restore run.
+
+Status: current.
+
+- Add a CUDA-server validation fixture or command that runs
+  `examples/vllm_turbobus_kv_connector.py` against an installed vLLM build and
+  a running TurboBus daemon.
+- Ensure the example fails clearly if vLLM does not call
+  `register_kv_caches`, `save_kv_layer`, `wait_for_save`, and
+  `start_load_kv`.
+- Confirm the run emits save and restore receipt ids, decision ids, topology
+  snapshot ids, ticket ids, bytes, path split, fallback reason, and timing.
+- Keep all physical path choices in daemon scheduling; example arguments may
+  name registered buffer ids and policy-neutral workload settings only.
+
+Expected output:
+
+- one real single-job vLLM KV save/restore run can be executed on a CUDA
+  server through the daemon-first connector path;
+- the run output is traceable from vLLM request metadata to daemon receipts;
 - no Phase 5 code reintroduces application-side physical path selection.
 
 ## Phase 0 Code Cuts

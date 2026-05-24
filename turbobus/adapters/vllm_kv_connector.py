@@ -31,6 +31,15 @@ except ImportError:  # pragma: no cover - lets unit tests import without vLLM
             self._role = role
             self._connector_metadata = None
 
+        def bind_connector_metadata(self, metadata):
+            self._connector_metadata = metadata
+
+        def clear_connector_metadata(self):
+            self._connector_metadata = None
+
+        def has_connector_metadata(self):
+            return self._connector_metadata is not None
+
     class KVConnectorRole:
         SCHEDULER = "scheduler"
         WORKER = "worker"
@@ -302,81 +311,6 @@ _PREFIX_STORE = TurboBusPrefixStore()
 _CONNECTOR_EVENTS: list[dict[str, Any]] = []
 
 
-def register_saved_prefix(
-    key: str,
-    cpu_backings: list[Any],
-    *,
-    block_count: int,
-    matched_tokens: int,
-    session_id: str = "default",
-    source_request_id: str = "",
-    bytes: int = 0,
-    elapsed_ms: float = 0.0,
-    client_init_ms: float = 0.0,
-    prepare_ms: float = 0.0,
-    cpu_alloc_ms: float = 0.0,
-    reused_backing: bool = False,
-    group_ms: float = 0.0,
-    adapter_ms: float = 0.0,
-    refs_ms: float = 0.0,
-    transfer_ms: float = 0.0,
-    register_ms: float = 0.0,
-    total_ms: float = 0.0,
-    direct_chunks: int = 0,
-    relay_chunks: int = 0,
-    direct_bytes: int = 0,
-    relay_bytes: int = 0,
-    receipt_ids: str = "",
-    decision_ids: str = "",
-    topology_snapshot_ids: str = "",
-    ticket_ids: str = "",
-    fallback_reason: str = "",
-    save_layer_count: int = 0,
-    save_layer_ranges: int = 0,
-) -> None:
-    prefix = TurboBusSavedPrefix(
-        key=str(key),
-        cpu_backings=list(cpu_backings),
-        block_count=int(block_count),
-        matched_tokens=int(matched_tokens),
-        session_id=str(session_id),
-        source_request_id=str(source_request_id),
-        bytes=int(bytes),
-        elapsed_ms=float(elapsed_ms),
-        client_init_ms=float(client_init_ms),
-        prepare_ms=float(prepare_ms),
-        cpu_alloc_ms=float(cpu_alloc_ms),
-        reused_backing=bool(reused_backing),
-        group_ms=float(group_ms),
-        adapter_ms=float(adapter_ms),
-        refs_ms=float(refs_ms),
-        transfer_ms=float(transfer_ms),
-        register_ms=float(register_ms),
-        total_ms=float(total_ms),
-        direct_chunks=int(direct_chunks),
-        relay_chunks=int(relay_chunks),
-        direct_bytes=int(direct_bytes),
-        relay_bytes=int(relay_bytes),
-        receipt_ids=str(receipt_ids),
-        decision_ids=str(decision_ids),
-        topology_snapshot_ids=str(topology_snapshot_ids),
-        ticket_ids=str(ticket_ids),
-        fallback_reason=str(fallback_reason),
-        save_layer_count=int(save_layer_count),
-        save_layer_ranges=int(save_layer_ranges),
-    )
-    _store_saved_prefix(prefix)
-    _emit_event(
-        "register_saved_prefix",
-        prefix_key=str(key),
-        session_id=str(session_id),
-        block_count=int(block_count),
-        matched_tokens=int(matched_tokens),
-        source_request_id=str(source_request_id),
-        layers=len(cpu_backings),
-    )
-
-
 def clear_saved_prefixes(session_id: str | None = None) -> None:
     _PREFIX_STORE.clear(session_id)
 
@@ -413,6 +347,10 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
     }
     """
 
+    @classmethod
+    def requires_piecewise_for_cudagraph(cls, extra_config: dict[str, Any]) -> bool:
+        return True
+
     def __init__(
         self,
         vllm_config,
@@ -436,7 +374,6 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         self.job_id = self.config.job_id
         self.max_saved_prefixes = self.config.max_saved_prefixes
         self.client = TurboBusClient(socket_path=self.config.daemon_socket_path)
-        self._adapters_by_prefix: dict[str, Any] = {}
         self._layer_save_contexts: dict[str, _LayerSaveContext] = {}
         self._backing_pool = TurboBusCPUBackingPool()
         self._prefix_store = TurboBusPrefixStore(max_prefixes=self.max_saved_prefixes)
@@ -664,8 +601,10 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         for request in metadata.save_requests:
             context = self._layer_save_contexts.pop(request.request_id, None)
             if context is None or not context.saved_layers:
-                self._save_request(request)
-                continue
+                raise RuntimeError(
+                    "vLLM did not call save_kv_layer before wait_for_save "
+                    f"for request {request.request_id}"
+                )
             if len(context.saved_layers) != len(context.kv_caches):
                 raise RuntimeError(
                     f"saved {len(context.saved_layers)} of {len(context.kv_caches)} "
@@ -829,10 +768,11 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                 block_count=meta.block_count,
             )
 
-    def _adapter_for_saved_prefix(self, saved: TurboBusSavedPrefix):
-        adapter = self._adapters_by_prefix.get(saved.key)
-        if adapter is not None:
-            return adapter
+    def _adapter_for_saved_prefix(
+        self,
+        saved: TurboBusSavedPrefix,
+        request: TurboBusRequestMetadata,
+    ):
         if not self.state.kv_caches:
             raise RuntimeError("vLLM did not register KV caches for TurboBus")
         from .vllm import VllmKVSlotAdapter
@@ -851,12 +791,17 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                 intent_prefix=f"vllm-kv-restore-{saved.key}",
                 metadata={
                     "prefix_key": saved.key,
+                    "request_id": request.request_id,
                     "vllm_operation": "restore",
+                    "vllm_lifecycle": "start_load_kv",
+                    "matched_tokens": request.matched_tokens,
+                    "block_count": request.block_count,
+                    "block_ids": list(request.block_ids),
+                    "source_request_id": saved.source_request_id,
                 },
             ),
             groups,
         )
-        self._adapters_by_prefix[saved.key] = adapter
         return adapter
 
     def _restore_request(self, request: TurboBusRequestMetadata) -> None:
@@ -865,7 +810,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         if saved is None:
             raise RuntimeError(f"saved prefix {request.prefix_key!r} is not registered")
         prepare_start = time.perf_counter()
-        adapter = self._adapter_for_saved_prefix(saved)
+        adapter = self._adapter_for_saved_prefix(saved, request)
         kv_caches = list(self.state.kv_caches.values())
         refs = make_vllm_layer_range_refs_from_ids(
             request.request_id,
@@ -886,6 +831,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                 "request_id": request.request_id,
                 "prefix_key": request.prefix_key,
                 "session_id": self.session_id,
+                "source_request_id": saved.source_request_id,
                 "block_count": len(request.block_ids),
                 "matched_tokens": request.matched_tokens,
                 "elapsed_ms": transfer_ms,
@@ -903,6 +849,7 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             request_id=request.request_id,
             prefix_key=request.prefix_key,
             session_id=self.session_id,
+            source_request_id=saved.source_request_id,
             block_count=len(request.block_ids),
             matched_tokens=request.matched_tokens,
             elapsed_ms=f"{transfer_ms:.3f}",
@@ -969,7 +916,12 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
                     "prefix_key": request.prefix_key,
                     "request_id": request.request_id,
                     "vllm_operation": "save",
+                    "vllm_lifecycle": "save_kv_layer",
                     "layer_index": layer_index,
+                    "layer_name": str(layer_name),
+                    "matched_tokens": request.matched_tokens,
+                    "block_count": request.block_count,
+                    "block_ids": list(request.block_ids),
                 },
             ),
             [group],
@@ -1150,152 +1102,6 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
             **receipt_trace,
         )
 
-    def _save_request(self, request: TurboBusRequestMetadata) -> None:
-        total_start = time.perf_counter()
-        client_init_ms = 0.0
-        if not self.state.kv_caches:
-            raise RuntimeError("vLLM did not register KV caches for TurboBus")
-        from .vllm import VllmKVSlotAdapter
-        from .vllm import make_vllm_layer_groups_from_kv_caches
-
-        prepare_start = time.perf_counter()
-        kv_caches = list(self.state.kv_caches.values())
-        alloc_start = time.perf_counter()
-        cpu_backings, reused_backing = self._backing_pool.acquire(
-            request.block_count,
-            kv_caches,
-        )
-        cpu_alloc_ms = (time.perf_counter() - alloc_start) * 1000.0
-        group_start = time.perf_counter()
-        groups = make_vllm_layer_groups_from_kv_caches(cpu_backings, kv_caches)
-        group_ms = (time.perf_counter() - group_start) * 1000.0
-        adapter_start = time.perf_counter()
-        adapter = VllmKVSlotAdapter(
-            self.client,
-            self._adapter_context(
-                intent_prefix=f"vllm-kv-save-{request.prefix_key}",
-                metadata={
-                    "prefix_key": request.prefix_key,
-                    "request_id": request.request_id,
-                    "vllm_operation": "save",
-                },
-            ),
-            groups,
-        )
-        adapter_ms = (time.perf_counter() - adapter_start) * 1000.0
-        refs_start = time.perf_counter()
-        refs = make_vllm_layer_range_refs_from_ids(
-            request.request_id,
-            request.block_ids,
-            kv_caches,
-            cpu_slot_start=request.cpu_slot_start,
-        )
-        refs_ms = (time.perf_counter() - refs_start) * 1000.0
-        prepare_ms = (time.perf_counter() - prepare_start) * 1000.0
-        transfer_start = time.perf_counter()
-        handles = adapter.save_prefix(refs)
-        transfer_ms = (time.perf_counter() - transfer_start) * 1000.0
-        stats = _adapter_transfer_stats(adapter, refs, handles).as_dict()
-        receipt_trace = _receipt_trace_from_handles(handles)
-        register_start = time.perf_counter()
-        prefix = TurboBusSavedPrefix(
-            key=request.prefix_key,
-            cpu_backings=cpu_backings,
-            block_count=request.block_count,
-            matched_tokens=request.matched_tokens,
-            session_id=self.session_id,
-            source_request_id=request.request_id,
-            elapsed_ms=transfer_ms,
-            client_init_ms=client_init_ms,
-            prepare_ms=prepare_ms,
-            cpu_alloc_ms=cpu_alloc_ms,
-            reused_backing=reused_backing,
-            group_ms=group_ms,
-            adapter_ms=adapter_ms,
-            refs_ms=refs_ms,
-            transfer_ms=transfer_ms,
-            bytes=stats["bytes"],
-            direct_chunks=stats["direct_chunks"],
-            relay_chunks=stats["relay_chunks"],
-            direct_bytes=int(receipt_trace["direct_bytes"]),
-            relay_bytes=int(receipt_trace["relay_bytes"]),
-            receipt_ids=str(receipt_trace["receipt_ids"]),
-            decision_ids=str(receipt_trace["decision_ids"]),
-            topology_snapshot_ids=str(receipt_trace["topology_snapshot_ids"]),
-            ticket_ids=str(receipt_trace["ticket_ids"]),
-            fallback_reason=str(receipt_trace["fallback_reason"]),
-        )
-        evicted = self._store_prefix(prefix)
-        _store_saved_prefix(prefix)
-        for removed in evicted:
-            if removed.key != prefix.key:
-                _remove_saved_prefix(removed.key, removed.session_id)
-        _emit_event(
-            "register_saved_prefix",
-            prefix_key=request.prefix_key,
-            session_id=self.session_id,
-            block_count=request.block_count,
-            matched_tokens=request.matched_tokens,
-            source_request_id=request.request_id,
-            layers=len(cpu_backings),
-        )
-        self._adapters_by_prefix[request.prefix_key] = adapter
-        self.state.saved_request_ids.add(request.request_id)
-        register_ms = (time.perf_counter() - register_start) * 1000.0
-        total_ms = (time.perf_counter() - total_start) * 1000.0
-        saved = get_saved_prefix(request.prefix_key, self.session_id)
-        if saved is not None:
-            saved.register_ms = register_ms
-            saved.total_ms = total_ms
-        self.state.events.append(
-            {
-                "event": "save",
-                "request_id": request.request_id,
-                "prefix_key": request.prefix_key,
-                "session_id": self.session_id,
-                "block_count": len(request.block_ids),
-                "matched_tokens": request.matched_tokens,
-                "elapsed_ms": transfer_ms,
-                "client_init_ms": client_init_ms,
-                "prepare_ms": prepare_ms,
-                "cpu_alloc_ms": cpu_alloc_ms,
-                "reused_backing": reused_backing,
-                "group_ms": group_ms,
-                "adapter_ms": adapter_ms,
-                "refs_ms": refs_ms,
-                "transfer_ms": transfer_ms,
-                "register_ms": register_ms,
-                "total_ms": total_ms,
-                "layers": len(kv_caches),
-                "ranges": len(refs),
-                **stats,
-                **receipt_trace,
-            }
-        )
-        _emit_event(
-            "save",
-            request_id=request.request_id,
-            prefix_key=request.prefix_key,
-            session_id=self.session_id,
-            block_count=len(request.block_ids),
-            matched_tokens=request.matched_tokens,
-            elapsed_ms=f"{transfer_ms:.3f}",
-            client_init_ms=f"{client_init_ms:.3f}",
-            prepare_ms=f"{prepare_ms:.3f}",
-            cpu_alloc_ms=f"{cpu_alloc_ms:.3f}",
-            reused_backing=reused_backing,
-            group_ms=f"{group_ms:.3f}",
-            adapter_ms=f"{adapter_ms:.3f}",
-            refs_ms=f"{refs_ms:.3f}",
-            transfer_ms=f"{transfer_ms:.3f}",
-            register_ms=f"{register_ms:.3f}",
-            total_ms=f"{total_ms:.3f}",
-            layers=len(kv_caches),
-            ranges=len(refs),
-            **stats,
-            **receipt_trace,
-        )
-
     def _allocate_cpu_backings(self, block_count: int, kv_caches: list[Any]) -> list[Any]:
         return TurboBusCPUBackingPool._allocate(block_count, kv_caches)
 
@@ -1304,7 +1110,6 @@ class TurboBusConnector(KVConnectorBase_V1, SupportsHMA):
         kv_caches = list(self.state.kv_caches.values())
         for removed in evicted:
             self._backing_pool.release_prefix(removed, kv_caches)
-            self._adapters_by_prefix.pop(removed.key, None)
             self.state.events.append(
                 {
                     "event": "evict_prefix",
@@ -1640,5 +1445,4 @@ __all__ = [
     "clear_saved_prefixes",
     "get_connector_events",
     "get_saved_prefix",
-    "register_saved_prefix",
 ]

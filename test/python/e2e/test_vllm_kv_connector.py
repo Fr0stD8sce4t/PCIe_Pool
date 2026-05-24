@@ -6,6 +6,7 @@ import unittest
 from unittest import mock
 
 from turbobus.schema import TransferReceipt, TransferStatusState, WorkloadKind
+from turbobus.adapters import vllm_kv_connector
 from turbobus.vllm_kv_connector import (
     TurboBusCPUBackingPool,
     TurboBusConnector,
@@ -18,7 +19,6 @@ from turbobus.vllm_kv_connector import (
     clear_saved_prefixes,
     get_connector_events,
     get_saved_prefix,
-    register_saved_prefix,
 )
 
 
@@ -149,8 +149,11 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertIsNone(store.get("key"))
 
     def test_clear_saved_prefixes_can_clear_one_session(self) -> None:
-        register_saved_prefix("key", [object()], block_count=1, matched_tokens=16, session_id="a")
-        register_saved_prefix("key", [object()], block_count=2, matched_tokens=32, session_id="b")
+        first = TurboBusSavedPrefix("key", [object()], block_count=1, matched_tokens=16, session_id="a")
+        second = TurboBusSavedPrefix("key", [object()], block_count=2, matched_tokens=32, session_id="b")
+        self.assertEqual(TurboBusPrefixStore().put(first), [])
+        self.assertEqual(vllm_kv_connector._store_saved_prefix(first), [])
+        self.assertEqual(vllm_kv_connector._store_saved_prefix(second), [])
 
         clear_saved_prefixes("a")
 
@@ -158,11 +161,11 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertEqual(get_saved_prefix("key", "b").block_count, 2)
 
     def test_connector_events_are_readable_and_clearable(self) -> None:
-        register_saved_prefix("key", [object()], block_count=1, matched_tokens=16)
+        self.make_connector()
 
         events = get_connector_events()
-        self.assertEqual(events[-1]["event"], "register_saved_prefix")
-        self.assertEqual(events[-1]["prefix_key"], "key")
+        self.assertEqual(events[-1]["event"], "init")
+        self.assertEqual(events[-1]["job_id"], "job-a")
 
         clear_connector_events()
         self.assertEqual(get_connector_events(), [])
@@ -231,9 +234,14 @@ class TurboBusConnectorTest(unittest.TestCase):
             },
         )
 
+    def test_connector_requires_piecewise_cudagraph_for_layer_lifecycle(self) -> None:
+        self.assertTrue(TurboBusConnector.requires_piecewise_for_cudagraph({}))
+
     def test_reports_explicit_external_match(self) -> None:
-        register_saved_prefix("default", [object()], block_count=8, matched_tokens=96, session_id="session-a")
         connector = self.make_connector({"turbobus.restore_enabled": True})
+        vllm_kv_connector._store_saved_prefix(
+            TurboBusSavedPrefix("default", [object()], block_count=8, matched_tokens=96, session_id="session-a")
+        )
         request = FakeRequest(
             {
                 "turbobus.do_restore": True,
@@ -246,8 +254,10 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertEqual(connector.state.events[-1]["available_tokens"], 64)
 
     def test_does_not_report_external_match_until_restore_enabled(self) -> None:
-        register_saved_prefix("default", [object()], block_count=8, matched_tokens=96, session_id="session-a")
         connector = self.make_connector()
+        vllm_kv_connector._store_saved_prefix(
+            TurboBusSavedPrefix("default", [object()], block_count=8, matched_tokens=96, session_id="session-a")
+        )
         request = FakeRequest(
             {
                 "turbobus.do_restore": True,
@@ -259,8 +269,10 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertEqual(connector.state.events[-1]["event"], "match_skipped")
 
     def test_records_allocated_blocks_for_connector_metadata(self) -> None:
-        register_saved_prefix("default", [object()], block_count=4, matched_tokens=128, session_id="session-a")
         connector = self.make_connector({"turbobus.restore_block_limit": 4})
+        vllm_kv_connector._store_saved_prefix(
+            TurboBusSavedPrefix("default", [object()], block_count=4, matched_tokens=128, session_id="session-a")
+        )
         request = FakeRequest({"turbobus.do_restore": True, "turbobus.matched_tokens": 128})
         blocks = FakeBlocks(([1, 2, 3, 4, 5, 6],))
 
@@ -314,11 +326,13 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertEqual(params["turbobus.matched_tokens"], 48)
 
     def test_start_load_kv_is_safe_until_restore_enabled(self) -> None:
-        register_saved_prefix("default", [object()], block_count=4, matched_tokens=64, session_id="session-a")
         connector = self.make_connector({"turbobus.restore_block_limit": 4})
+        vllm_kv_connector._store_saved_prefix(
+            TurboBusSavedPrefix("default", [object()], block_count=4, matched_tokens=64, session_id="session-a")
+        )
         request = FakeRequest({"turbobus.do_restore": True, "turbobus.matched_tokens": 64})
         connector.update_state_after_alloc(request, FakeBlocks(([1, 2, 3, 4],)), 64)
-        connector._connector_metadata = connector.build_connector_meta(object())
+        connector.bind_connector_metadata(connector.build_connector_meta(object()))
 
         connector.start_load_kv(forward_context=object())
 
@@ -326,7 +340,7 @@ class TurboBusConnectorTest(unittest.TestCase):
         self.assertFalse(connector.state.events[-1]["restore_enabled"])
         self.assertEqual(connector.get_finished(set()), (None, {"req0"}))
 
-    def test_wait_for_save_submits_intent_and_reports_receipt_trace(self) -> None:
+    def test_wait_for_save_rejects_missing_layer_save(self) -> None:
         client = FakeClient(
             path_stats=[
                 ({"kind": "direct", "bytes": 16, "chunk_count": 1},),
@@ -339,93 +353,116 @@ class TurboBusConnectorTest(unittest.TestCase):
         request = TurboBusRequestMetadata("req0", "saved", (1, 2), 32, 2)
         metadata = TurboBusConnectorMetadata()
         metadata.add_save_request(request)
-        connector._connector_metadata = metadata
+        connector.bind_connector_metadata(metadata)
 
         with mock.patch.object(
             connector._backing_pool,
             "acquire",
             return_value=([object(), object()], False),
         ):
-            connector.wait_for_save()
+            with self.assertRaisesRegex(RuntimeError, "save_kv_layer"):
+                connector.wait_for_save()
 
-        self.assertEqual(len(client.submitted), 2)
-        first_intent = client.submitted[0]
-        self.assertEqual(first_intent.job_id, "job-a")
-        self.assertEqual(first_intent.session_id, "session-a")
-        self.assertEqual(first_intent.source_buffer_id, "gpu-buffer")
-        self.assertEqual(first_intent.destination_buffer_id, "cpu-buffer")
-        self.assertEqual(first_intent.direction, "d2h")
-        self.assertEqual(first_intent.workload_kind, WorkloadKind.KV_CACHE)
-        self.assertEqual(first_intent.metadata["connector"], "vllm_kv")
-        self.assertEqual(first_intent.metadata["operation"], "evict")
-        self.assertEqual(first_intent.metadata["vllm_operation"], "save")
-        self.assertEqual(first_intent.metadata["prefix_key"], "saved")
+        self.assertEqual(client.submitted, [])
+
+    def test_kv_connector_lifecycle_saves_and_restores_through_metadata(self) -> None:
+        client = FakeClient(
+            path_stats=[
+                ({"kind": "direct", "bytes": 8, "chunk_count": 1},),
+                ({"kind": "relay", "bytes": 8, "chunk_count": 1},),
+                (
+                    {"kind": "direct", "bytes": 4, "chunk_count": 1},
+                    {"kind": "relay", "bytes": 4, "chunk_count": 1},
+                ),
+                ({"kind": "direct", "bytes": 8, "chunk_count": 1},),
+            ],
+            fallback_reasons=["", "direct_saturated", "relay_quota_exhausted", ""],
+        )
+        connector = self.make_connector({"turbobus.restore_enabled": True}, client=client)
+        layer0 = FakeTensor()
+        layer1 = FakeTensor()
+        connector.register_kv_caches({"layer0": layer0, "layer1": layer1})
+        save_request = FakeRequest(
+            {
+                "turbobus.do_save": True,
+                "turbobus.prefix_key": "saved",
+                "turbobus.save_blocks": 1,
+                "turbobus.matched_tokens": 16,
+            }
+        )
+        connector.update_state_after_alloc(save_request, FakeBlocks(([1],)), 0)
+        connector.bind_connector_metadata(connector.build_connector_meta(SimpleNamespace()))
+
+        with mock.patch.object(
+            connector._backing_pool,
+            "acquire",
+            return_value=([object(), object()], False),
+        ):
+            connector.save_kv_layer("layer0", layer0, attn_metadata=object())
+            connector.save_kv_layer("layer1", layer1, attn_metadata=object())
+            connector.wait_for_save()
 
         saved = get_saved_prefix("saved", "session-a")
         self.assertIsNotNone(saved)
         self.assertEqual(saved.source_request_id, "req0")
-        self.assertEqual(saved.bytes, 32)
-        self.assertEqual(saved.direct_chunks, 1)
-        self.assertEqual(saved.relay_chunks, 2)
-        self.assertEqual(saved.direct_bytes, 16)
-        self.assertEqual(saved.relay_bytes, 16)
         self.assertEqual(saved.receipt_ids, "receipt-1,receipt-2")
         self.assertEqual(saved.decision_ids, "decision-1,decision-2")
         self.assertEqual(saved.topology_snapshot_ids, "topology-1,topology-2")
         self.assertEqual(saved.ticket_ids, "ticket-1,ticket-2")
         self.assertEqual(saved.fallback_reason, "direct_saturated")
-
-        event = connector.state.events[-1]
-        self.assertEqual(event["event"], "save")
-        self.assertEqual(event["receipt_ids"], "receipt-1,receipt-2")
-        self.assertEqual(event["decision_ids"], "decision-1,decision-2")
-        self.assertEqual(event["direct_bytes"], 16)
-        self.assertEqual(event["relay_bytes"], 16)
-        self.assertEqual(event["fallback_reason"], "direct_saturated")
+        self.assertEqual(saved.save_layer_count, 2)
         self.assertEqual(connector.get_finished({"req0"}), ({"req0"}, None))
 
-    def test_restore_submits_intent_and_reports_receipt_trace(self) -> None:
-        client = FakeClient(
-            path_stats=[
-                (
-                    {"kind": "direct", "bytes": 4, "chunk_count": 1},
-                    {"kind": "relay", "bytes": 4, "chunk_count": 1},
-                ),
-            ],
-            fallback_reasons=["relay_quota_exhausted"],
+        restore_request = FakeRequest(
+            {
+                "turbobus.do_restore": True,
+                "turbobus.prefix_key": "saved",
+                "turbobus.matched_tokens": 16,
+            }
         )
-        connector = self.make_connector({"turbobus.restore_enabled": True}, client=client)
-        connector.state.kv_caches = {"0": FakeTensor()}
-        register_saved_prefix(
-            "default",
-            [object()],
-            block_count=1,
-            matched_tokens=16,
-            session_id="session-a",
-        )
-        request = TurboBusRequestMetadata("req0", "default", (1,), 16, 1)
+        self.assertEqual(connector.get_num_new_matched_tokens(restore_request, 0), (16, True))
+        connector.update_state_after_alloc(restore_request, FakeBlocks(([4],)), 16)
+        connector.bind_connector_metadata(connector.build_connector_meta(SimpleNamespace()))
+        connector.start_load_kv(forward_context=object())
 
-        connector._restore_request(request)
+        self.assertEqual(len(client.submitted), 4)
+        save_intent = client.submitted[0]
+        self.assertEqual(save_intent.job_id, "job-a")
+        self.assertEqual(save_intent.session_id, "session-a")
+        self.assertEqual(save_intent.source_buffer_id, "gpu-buffer")
+        self.assertEqual(save_intent.destination_buffer_id, "cpu-buffer")
+        self.assertEqual(save_intent.direction, "d2h")
+        self.assertEqual(save_intent.workload_kind, WorkloadKind.KV_CACHE)
+        self.assertEqual(save_intent.metadata["connector"], "vllm_kv")
+        self.assertEqual(save_intent.metadata["operation"], "evict")
+        self.assertEqual(save_intent.metadata["vllm_operation"], "save")
+        self.assertEqual(save_intent.metadata["vllm_lifecycle"], "save_kv_layer")
+        self.assertEqual(save_intent.metadata["prefix_key"], "saved")
+        self.assertEqual(save_intent.metadata["block_ids"], [1])
 
-        self.assertEqual(len(client.submitted), 1)
-        intent = client.submitted[0]
-        self.assertEqual(intent.source_buffer_id, "cpu-buffer")
-        self.assertEqual(intent.destination_buffer_id, "gpu-buffer")
-        self.assertEqual(intent.direction, "h2d")
-        self.assertEqual(intent.metadata["operation"], "prefetch")
-        self.assertEqual(intent.metadata["vllm_operation"], "restore")
-        self.assertEqual(intent.metadata["prefix_key"], "default")
+        restore_intents = client.submitted[2:]
+        self.assertTrue(all(intent.source_buffer_id == "cpu-buffer" for intent in restore_intents))
+        self.assertTrue(all(intent.destination_buffer_id == "gpu-buffer" for intent in restore_intents))
+        self.assertTrue(all(intent.direction == "h2d" for intent in restore_intents))
+        self.assertTrue(all(intent.metadata["operation"] == "prefetch" for intent in restore_intents))
+        self.assertTrue(all(intent.metadata["vllm_operation"] == "restore" for intent in restore_intents))
+        self.assertTrue(all(intent.metadata["vllm_lifecycle"] == "start_load_kv" for intent in restore_intents))
+        self.assertTrue(all(intent.metadata["prefix_key"] == "saved" for intent in restore_intents))
+        self.assertTrue(all(intent.metadata["source_request_id"] == "req0" for intent in restore_intents))
+        self.assertTrue(all(intent.metadata["block_ids"] == [4] for intent in restore_intents))
+
         event = connector.state.events[-1]
         self.assertEqual(event["event"], "restore")
-        self.assertEqual(event["bytes"], 8)
-        self.assertEqual(event["direct_chunks"], 1)
+        self.assertEqual(event["source_request_id"], "req0")
+        self.assertEqual(event["bytes"], 16)
+        self.assertEqual(event["direct_chunks"], 2)
         self.assertEqual(event["relay_chunks"], 1)
-        self.assertEqual(event["direct_bytes"], 4)
+        self.assertEqual(event["direct_bytes"], 12)
         self.assertEqual(event["relay_bytes"], 4)
-        self.assertEqual(event["receipt_ids"], "receipt-1")
-        self.assertEqual(event["decision_ids"], "decision-1")
-        self.assertEqual(event["topology_snapshot_ids"], "topology-1")
-        self.assertEqual(event["ticket_ids"], "ticket-1")
+        self.assertEqual(event["receipt_ids"], "receipt-3,receipt-4")
+        self.assertEqual(event["decision_ids"], "decision-3,decision-4")
+        self.assertEqual(event["topology_snapshot_ids"], "topology-3,topology-4")
+        self.assertEqual(event["ticket_ids"], "ticket-3,ticket-4")
         self.assertEqual(event["fallback_reason"], "relay_quota_exhausted")
 
     def test_save_kv_layer_aggregates_layer_receipts_before_registering_prefix(self) -> None:
@@ -442,7 +479,7 @@ class TurboBusConnectorTest(unittest.TestCase):
         request = TurboBusRequestMetadata("req0", "saved", (1,), 16, 1)
         metadata = TurboBusConnectorMetadata()
         metadata.add_save_request(request)
-        connector._connector_metadata = metadata
+        connector.bind_connector_metadata(metadata)
 
         with mock.patch.object(
             connector._backing_pool,
@@ -476,7 +513,7 @@ class TurboBusConnectorTest(unittest.TestCase):
         request = TurboBusRequestMetadata("req0", "saved", (1,), 16, 1)
         metadata = TurboBusConnectorMetadata()
         metadata.add_save_request(request)
-        connector._connector_metadata = metadata
+        connector.bind_connector_metadata(metadata)
 
         with mock.patch.object(
             connector._backing_pool,

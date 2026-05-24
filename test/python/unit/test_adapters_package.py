@@ -78,6 +78,7 @@ class AdaptersPackageTest(unittest.TestCase):
             root_vllm_kv_connector.TurboBusConnectorConfig,
         )
         self.assertIs(TurboBusSavedPrefix, root_vllm_kv_connector.TurboBusSavedPrefix)
+        self.assertFalse(hasattr(root_vllm_kv_connector, "register_saved_prefix"))
         self.assertIs(AdapterTransferContext, StoreAdapterTransferContext)
         removed_entry = "Vllm" + "TurboBus" + "Connector"
         self.assertFalse(hasattr(turbobus.adapters, removed_entry))

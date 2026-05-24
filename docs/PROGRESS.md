@@ -265,8 +265,8 @@ boundaries instead of old direct/relay/pool route selection.
 
 ## Next Work Items
 
-Current item: Phase 5 Cut 1, vLLM KV save/restore contract audit and real
-workload boundary.
+Current item: Phase 5 Cut 2, real vLLM server fixture and single-job
+save/restore run.
 
 1. Shared schema layer.
    - Status: complete.
@@ -389,8 +389,12 @@ workload boundary.
 
 13. vLLM KV end-to-end workload.
    - Status: current.
-   - Cut 1 current: audit the real vLLM KV save/restore boundary and implement
-     the first complete daemon-first workload slice without path controls.
+   - Cut 1 complete: tighten the vLLM KV connector around the real
+     `KVConnectorBase_V1` save/restore lifecycle, remove the public fake saved
+     prefix injection path, remove the non-layer `wait_for_save` fallback, and
+     protect daemon-first intent and receipt trace fields for save and restore.
+   - Cut 2 current: add a real CUDA-server vLLM fixture or command for a
+     single-job save/restore run through the TurboBus daemon.
 
 ## Phase 0 Acceptance Criteria
 
@@ -429,14 +433,16 @@ Remaining risk:
   `python -m turbobus.verification` commands.
 - Native C++/CUDA build checks were not run in the local Windows environment
   because `cmake` and `nvcc` are not installed there.
-- Phase 5 now needs real vLLM KV cache save/restore integration beyond the
-  current daemon-first connector and adapter contract tests.
+- Phase 5 Cut 1 tightened the connector boundary, but the real vLLM run still
+  needs to be exercised on a CUDA server with vLLM installed and a TurboBus
+  daemon running.
 
 Latest validation:
 
-- `python -m unittest test.python.unit.test_public_client_api test.python.unit.test_runtime_engine test.python.unit.test_backend_cuda test.python.unit.test_worker_cuda_executor test.python.e2e.test_verification test.python.integration.test_client_worker_transfer test.python.integration.test_worker_helper test.python.integration.test_daemon_state`
-- `python -m py_compile turbobus\\runtime_engine.py turbobus\\backends\\cuda.py turbobus\\client_transfer.py turbobus\\worker\\cuda_executor.py turbobus\\verification.py test\\python\\unit\\test_public_client_api.py test\\python\\unit\\test_runtime_engine.py test\\python\\unit\\test_backend_cuda.py test\\python\\unit\\test_worker_cuda_executor.py test\\python\\e2e\\test_verification.py test\\python\\integration\\test_client_worker_transfer.py test\\python\\integration\\test_worker_helper.py test\\python\\integration\\test_daemon_state.py`
-- `git diff --check`
+- `python -m unittest test.python.e2e.test_vllm_kv_connector test.python.unit.test_adapters_package`
+- `python -m unittest test.python.e2e.test_vllm_integration test.python.e2e.test_vllm_kv_connector_example test.python.e2e.test_vllm_kv_connector_sweep test.python.e2e.test_inference_adapters test.python.unit.test_offload_store`
+- `python -m py_compile turbobus\\adapters\\vllm_kv_connector.py turbobus\\adapters\\__init__.py test\\python\\e2e\\test_vllm_kv_connector.py test\\python\\unit\\test_adapters_package.py`
+- `python -m py_compile turbobus\\adapters\\vllm.py turbobus\\adapters\\vllm_integration.py turbobus\\offload_store.py test\\python\\e2e\\test_vllm_integration.py test\\python\\e2e\\test_vllm_kv_connector_example.py test\\python\\e2e\\test_vllm_kv_connector_sweep.py test\\python\\e2e\\test_inference_adapters.py test\\python\\unit\\test_offload_store.py`
 
 ## Upcoming Phases
 
