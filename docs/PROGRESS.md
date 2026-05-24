@@ -163,6 +163,14 @@ The active target architecture is:
   snapshot id, lease id, session id, job id, relay GPU, direction, bytes,
   duration, buffers, staging record id, cleanup target, reason, and failure
   reason without letting clients or adapters author audit truth.
+- Phase 3 Cut 1 is complete. The daemon now keeps a global transfer queue and
+  scheduler-readable runtime resource snapshot in profile state. Transfer
+  submission records queued work by intent, job, session, workload kind, and
+  priority; runtime snapshots now surface queued, running, active, relay
+  staging, reservation, lease, H2D, D2H, and relay-path usage; scheduler plan
+  metadata now receives a runtime-state summary so later fairness and
+  admission control can reason over queued and active work without returning
+  to adapter-side path selection.
 
 ## Active Phase
 
@@ -329,8 +337,15 @@ Remaining risk:
 - Phase 2 now rejects cross-peer buffer registration and transfer use,
   cleans stale resources after timeout, disconnect, worker failure, and
   mismatch, and exposes daemon-owned audit records for relay use and failures.
-  Phase 3 still needs global queued-work state, dynamic scheduling, fairness,
-  and relay admission control before real cross-job PCIe pooling is available.
+  Phase 3 Cut 1 is now complete, but dynamic scheduling, fairness, and relay
+  admission control still need implementation before real cross-job PCIe
+  pooling is available.
+
+Latest validation:
+
+- `python -m unittest test.python.integration.test_daemon_state test.python.integration.test_daemon_socket`
+- `python -m compileall -q turbobus\\daemon turbobus\\scheduler test\\python\\integration\\test_daemon_state.py test\\python\\integration\\test_daemon_socket.py`
+- `git diff --check`
 
 ## Upcoming Phases
 

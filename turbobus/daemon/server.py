@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 from dataclasses import asdict
-from typing import Iterable
+from typing import Iterable, Mapping
 
 from .protocol import (
     BufferRegistration,
@@ -72,6 +72,9 @@ class TurboBusDaemon:
         self._reservation_transfers: dict[str, str] = {}
         self._transfer_intents: dict[str, TransferIntent] = {}
         self._intent_transfers: dict[str, str] = {}
+        self._transfer_queue: list[str] = []
+        self._transfer_queue_records: dict[str, dict[str, object]] = {}
+        self._runtime_state_version = 0
         self._transfer_plans: dict[str, dict[str, object]] = {}
         self._scheduling_decisions: dict[str, SchedulingDecision] = {}
         self._execution_tickets: dict[str, ExecutionTicket] = {}
@@ -548,6 +551,7 @@ class TurboBusDaemon:
                         final_state=TransferStatusState.FAILED,
                         cleanup_reason="transfer_status_mismatch",
                     )
+                    self._refresh_transfer_queue_record_locked(status.transfer_id)
                     return DaemonResponse(
                         ok=False,
                         error=mismatch,
@@ -555,6 +559,7 @@ class TurboBusDaemon:
                     )
                 return DaemonResponse(ok=False, error=str(exc))
             self._transfer_statuses[updated.transfer_id] = updated
+            self._refresh_transfer_queue_record_locked(updated.transfer_id)
             removed = _empty_removed_summary()
             if updated.state is TransferStatusState.COMPLETE:
                 self._append_transfer_audit_records_locked(
@@ -680,6 +685,7 @@ class TurboBusDaemon:
             self._intent_transfers[intent.intent_id] = transfer_id
             self._execution_tickets[ticket.ticket_id] = ticket
             self._transfer_tickets[transfer_id] = ticket.ticket_id
+            self._refresh_transfer_queue_record_locked(transfer_id, now=now)
             receipt = self._receipt_for_intent_locked(intent.intent_id)
             return DaemonResponse(
                 ok=True,
@@ -990,6 +996,7 @@ class TurboBusDaemon:
                 session=planning_session,
                 profile_entry=profile_entry,
                 relay_quotas=self._relay_quotas,
+                runtime_state=self._runtime_resource_state_locked(now=now),
                 total_bytes=total_bytes,
                 chunk_bytes=chunk_bytes,
                 ranges=normalized_ranges,
@@ -1018,6 +1025,18 @@ class TurboBusDaemon:
             self._transfer_statuses[transfer_id] = status
             self._transfer_plans[transfer_id] = dict(decision.plan)
             self._scheduling_decisions[transfer_id] = decision
+            self._record_planned_transfer_locked(
+                transfer_id=transfer_id,
+                status=status,
+                intent_id=intent_id,
+                buffer_ids=buffer_ids_tuple,
+                total_bytes=total_bytes,
+                chunk_bytes=chunk_bytes,
+                ranges=normalized_ranges,
+                direction=direction,
+                decision=decision,
+                now=now,
+            )
             self._touch_session_locked(session.session_id, now)
             payload = {
                 "decision": asdict(decision),
@@ -1234,6 +1253,309 @@ class TurboBusDaemon:
                 self._reservation_transfers[reservation.reservation_id] = transfer_id
             reservations.append(reservation)
         return reservations
+
+    def _record_planned_transfer_locked(
+        self,
+        *,
+        transfer_id: str,
+        status: TransferStatus,
+        intent_id: str | None,
+        buffer_ids: tuple[str, ...],
+        total_bytes: int,
+        chunk_bytes: int,
+        ranges: tuple[dict[str, int], ...] | None,
+        direction: str,
+        decision: SchedulingDecision,
+        now: float,
+    ) -> None:
+        self._transfer_queue.append(str(transfer_id))
+        self._transfer_queue_records[str(transfer_id)] = {
+            "transfer_id": str(transfer_id),
+            "intent_id": None if intent_id is None else str(intent_id),
+            "decision_id": decision.decision_id,
+            "topology_snapshot_id": decision.topology_snapshot_id,
+            "job_id": status.job_id,
+            "session_id": status.session_id,
+            "state": status.state.value,
+            "direction": str(direction).lower(),
+            "bytes_total": int(total_bytes),
+            "bytes_completed": status.bytes_completed,
+            "chunk_bytes": int(chunk_bytes),
+            "ranges": tuple(dict(item) for item in ranges) if ranges is not None else (),
+            "source_buffer_id": buffer_ids[0] if len(buffer_ids) >= 1 else None,
+            "destination_buffer_id": buffer_ids[1] if len(buffer_ids) >= 2 else None,
+            "buffer_ids": buffer_ids,
+            "workload_kind": None,
+            "priority": 0,
+            "queued_at": float(now),
+            "planned_at": decision.issued_at,
+            "started_at": None,
+            "completed_at": None,
+            "fallback_reason": decision.fallback_reason,
+        }
+        self._refresh_transfer_queue_record_locked(str(transfer_id), now=now)
+        self._runtime_state_version += 1
+
+    def _refresh_transfer_queue_record_locked(
+        self,
+        transfer_id: str,
+        *,
+        now: float | None = None,
+    ) -> dict[str, object] | None:
+        record = self._transfer_queue_records.get(str(transfer_id))
+        status = self._transfer_statuses.get(str(transfer_id))
+        if record is None or status is None:
+            return record
+        previous_signature = (
+            str(record.get("state", "")),
+            int(record.get("bytes_completed", 0) or 0),
+            record.get("error"),
+            record.get("intent_id"),
+            record.get("source_buffer_id"),
+            record.get("destination_buffer_id"),
+            record.get("workload_kind"),
+            int(record.get("priority", 0) or 0),
+            record.get("started_at"),
+            record.get("completed_at"),
+        )
+        state = status.state.value
+        record["state"] = state
+        record["bytes_completed"] = status.bytes_completed
+        if status.error is not None:
+            record["error"] = status.error
+        if status.state is TransferStatusState.RUNNING and record.get("started_at") is None:
+            record["started_at"] = float(time.time() if now is None else now)
+        if status.state in _TERMINAL_TRANSFER_STATES and record.get("completed_at") is None:
+            record["completed_at"] = float(time.time() if now is None else now)
+        intent = None
+        intent_id = record.get("intent_id")
+        if intent_id is not None:
+            intent = self._transfer_intents.get(str(intent_id))
+        if intent is not None:
+            record["intent_id"] = intent.intent_id
+            record["source_buffer_id"] = intent.source_buffer_id
+            record["destination_buffer_id"] = intent.destination_buffer_id
+            record["buffer_ids"] = (intent.source_buffer_id, intent.destination_buffer_id)
+            record["workload_kind"] = intent.workload_kind.value
+            record["priority"] = intent.priority
+        updated_signature = (
+            str(record.get("state", "")),
+            int(record.get("bytes_completed", 0) or 0),
+            record.get("error"),
+            record.get("intent_id"),
+            record.get("source_buffer_id"),
+            record.get("destination_buffer_id"),
+            record.get("workload_kind"),
+            int(record.get("priority", 0) or 0),
+            record.get("started_at"),
+            record.get("completed_at"),
+        )
+        if previous_signature != updated_signature:
+            self._runtime_state_version += 1
+        return record
+
+    def _runtime_resource_state_locked(
+        self,
+        *,
+        now: float | None = None,
+    ) -> dict[str, object]:
+        captured_at = float(time.time() if now is None else now)
+        for transfer_id in tuple(self._transfer_queue):
+            self._refresh_transfer_queue_record_locked(transfer_id, now=captured_at)
+        transfer_records = [
+            dict(self._transfer_queue_records[transfer_id])
+            for transfer_id in self._transfer_queue
+            if transfer_id in self._transfer_queue_records
+        ]
+        queued_transfers = [
+            dict(record)
+            for record in transfer_records
+            if str(record.get("state")) == TransferStatusState.SUBMITTED.value
+        ]
+        running_transfers = [
+            dict(record)
+            for record in transfer_records
+            if str(record.get("state")) == TransferStatusState.RUNNING.value
+        ]
+        active_transfers = [
+            dict(record)
+            for record in transfer_records
+            if str(record.get("state"))
+            in {
+                TransferStatusState.SUBMITTED.value,
+                TransferStatusState.RUNNING.value,
+            }
+        ]
+        active_by_direction: dict[str, dict[str, int]] = {}
+        queued_by_direction: dict[str, dict[str, int]] = {}
+        for record in active_transfers:
+            direction = str(record.get("direction", "unknown"))
+            bucket = active_by_direction.setdefault(
+                direction,
+                {"transfer_count": 0, "bytes_total": 0, "bytes_remaining": 0},
+            )
+            bucket["transfer_count"] += 1
+            bucket["bytes_total"] += int(record.get("bytes_total", 0) or 0)
+            bucket["bytes_remaining"] += max(
+                0,
+                int(record.get("bytes_total", 0) or 0)
+                - int(record.get("bytes_completed", 0) or 0),
+            )
+        for record in queued_transfers:
+            direction = str(record.get("direction", "unknown"))
+            bucket = queued_by_direction.setdefault(
+                direction,
+                {"transfer_count": 0, "bytes_total": 0},
+            )
+            bucket["transfer_count"] += 1
+            bucket["bytes_total"] += int(record.get("bytes_total", 0) or 0)
+        path_records, path_summary = self._active_path_records_locked(active_transfers)
+        active_reservations = [
+            self._runtime_reservation_record_locked(reservation_id, reservation)
+            for reservation_id, reservation in sorted(self._reservations.items())
+        ]
+        active_leases = [
+            self._runtime_lease_record_locked(lease_id, lease)
+            for lease_id, lease in sorted(self._lease_tokens.items())
+            if lease_id in self._reservations
+        ]
+        staging_records = [dict(value) for _, value in sorted(self._staging_records.items())]
+        relay_path_summary = {
+            "path_count": 0,
+            "chunk_count": 0,
+            "bytes_total": 0,
+        }
+        for key, value in path_summary.items():
+            if not key.endswith(":relay"):
+                continue
+            relay_path_summary["path_count"] += int(value.get("path_count", 0) or 0)
+            relay_path_summary["chunk_count"] += int(value.get("chunk_count", 0) or 0)
+            relay_path_summary["bytes_total"] += int(value.get("bytes_total", 0) or 0)
+        active_resource_usage = {
+            "h2d": dict(active_by_direction.get("h2d", {})),
+            "d2h": dict(active_by_direction.get("d2h", {})),
+            "p2p": dict(relay_path_summary),
+            "relay_staging": {
+                "count": len(staging_records),
+                "active_reservation_count": len(active_reservations),
+                "active_lease_count": len(active_leases),
+            },
+        }
+        return {
+            "version": self._runtime_state_version,
+            "captured_at": captured_at,
+            "transfer_order": tuple(self._transfer_queue),
+            "transfers": transfer_records,
+            "queued_transfers": queued_transfers,
+            "running_transfers": running_transfers,
+            "active_transfers": active_transfers,
+            "active_paths": path_records,
+            "active_resource_usage": active_resource_usage,
+            "active_reservations": active_reservations,
+            "active_leases": active_leases,
+            "relay_staging": staging_records,
+            "summary": {
+                "queued_transfer_count": len(queued_transfers),
+                "running_transfer_count": len(running_transfers),
+                "active_transfer_count": len(active_transfers),
+                "terminal_transfer_count": sum(
+                    1
+                    for record in transfer_records
+                    if str(record.get("state"))
+                    in {
+                        TransferStatusState.COMPLETE.value,
+                        TransferStatusState.FAILED.value,
+                        TransferStatusState.CANCELED.value,
+                    }
+                ),
+                "active_reservation_count": len(active_reservations),
+                "active_lease_count": len(active_leases),
+                "relay_staging_count": len(staging_records),
+                "relay_path_count": relay_path_summary["path_count"],
+                "relay_path_bytes_total": relay_path_summary["bytes_total"],
+                "queued_bytes_by_direction": queued_by_direction,
+                "active_bytes_by_direction": active_by_direction,
+                "active_paths": path_summary,
+                "active_resource_usage": active_resource_usage,
+            },
+        }
+
+    def _runtime_reservation_record_locked(
+        self,
+        reservation_id: str,
+        reservation: TransferReservation,
+    ) -> dict[str, object]:
+        record = asdict(reservation)
+        record["transfer_id"] = self._reservation_transfers.get(str(reservation_id))
+        lease = self._lease_tokens.get(str(reservation_id))
+        record["job_id"] = None if lease is None else lease.job_id
+        record["buffer_ids"] = () if lease is None else lease.buffer_ids
+        return record
+
+    def _runtime_lease_record_locked(
+        self,
+        lease_id: str,
+        lease: LeaseToken,
+    ) -> dict[str, object]:
+        return {
+            "lease_id": lease.lease_id,
+            "session_id": lease.session_id,
+            "relay_gpu": lease.relay_gpu,
+            "job_id": lease.job_id,
+            "buffer_ids": lease.buffer_ids,
+            "issued_at": lease.issued_at,
+            "expires_at": lease.expires_at,
+            "transfer_id": self._reservation_transfers.get(str(lease_id)),
+        }
+
+    def _active_path_records_locked(
+        self,
+        active_transfers: list[dict[str, object]],
+    ) -> tuple[list[dict[str, object]], dict[str, dict[str, int]]]:
+        transfer_ids = {str(record["transfer_id"]) for record in active_transfers}
+        records: list[dict[str, object]] = []
+        summary: dict[str, dict[str, int]] = {}
+        for transfer_id in sorted(transfer_ids):
+            decision = self._scheduling_decisions.get(transfer_id)
+            if decision is None:
+                continue
+            for assignment in decision.plan.get("assignments", ()) or ():
+                if not isinstance(assignment, Mapping):
+                    continue
+                path = assignment.get("path")
+                if not isinstance(path, Mapping):
+                    continue
+                chunks = assignment.get("chunks", ()) or ()
+                chunk_count = len(chunks) if isinstance(chunks, list | tuple) else 0
+                bytes_total = int(assignment.get("bytes", 0) or 0)
+                if not bytes_total and isinstance(chunks, list | tuple):
+                    bytes_total = sum(
+                        int(chunk.get("bytes", 0) or 0)
+                        for chunk in chunks
+                        if isinstance(chunk, Mapping)
+                    )
+                kind = str(path.get("kind", "unknown"))
+                direction = str(path.get("direction", "unknown"))
+                key = f"{direction}:{kind}"
+                bucket = summary.setdefault(
+                    key,
+                    {"path_count": 0, "chunk_count": 0, "bytes_total": 0},
+                )
+                bucket["path_count"] += 1
+                bucket["chunk_count"] += chunk_count
+                bucket["bytes_total"] += bytes_total
+                records.append(
+                    {
+                        "transfer_id": transfer_id,
+                        "kind": kind,
+                        "direction": direction,
+                        "target_device": path.get("target_device"),
+                        "relay_device": path.get("relay_device"),
+                        "bytes_total": bytes_total,
+                        "chunk_count": chunk_count,
+                    }
+                )
+        return records, summary
 
     def _execution_ticket_for_worker_locked(
         self,
@@ -1807,6 +2129,7 @@ class TurboBusDaemon:
             session_id=status.session_id,
             error=status.error,
         )
+        self._refresh_transfer_queue_record_locked(transfer_id)
 
     def _mark_transfer_terminal_locked(
         self,
@@ -1834,6 +2157,7 @@ class TurboBusDaemon:
             error=status.error if error is None else error,
         )
         self._transfer_statuses[terminal.transfer_id] = terminal
+        self._refresh_transfer_queue_record_locked(terminal.transfer_id)
         return terminal
 
     def _close_session_locked(
@@ -2022,6 +2346,14 @@ class TurboBusDaemon:
                     "transfer_statuses": {
                         key: asdict(value) for key, value in self._transfer_statuses.items()
                     },
+                    "transfer_queue": [
+                        dict(self._transfer_queue_records[transfer_id])
+                        for transfer_id in self._transfer_queue
+                        if transfer_id in self._transfer_queue_records
+                    ],
+                    "runtime_resource_state": self._runtime_resource_state_locked(
+                        now=now,
+                    ),
                     "cleanup_events": [asdict(item) for item in self._cleanup_events],
                     "system_cleanup_events": [
                         asdict(item) for item in self._system_cleanup_events

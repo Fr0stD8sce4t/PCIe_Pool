@@ -3547,6 +3547,180 @@ class DaemonStateTest(unittest.TestCase):
                 policy_hints={"relay_gpus": [1]},
             )
 
+    def test_runtime_state_tracks_cross_job_intent_queue_for_scheduler(self) -> None:
+        daemon = _daemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=2,
+            max_inflight_chunks_per_relay=8,
+        )
+        first = daemon.register_session(
+            target_gpu=0,
+            requested_relays=[1],
+            max_inflight_chunks=8,
+        )
+        second = daemon.register_session(
+            target_gpu=0,
+            requested_relays=[1],
+            max_inflight_chunks=8,
+        )
+        first_session_id = first.payload["session"]["session_id"]
+        second_session_id = second.payload["session"]["session_id"]
+        self.assertTrue(daemon.register_job(job_id="job-1", session_id=first_session_id).ok)
+        self.assertTrue(daemon.register_job(job_id="job-2", session_id=second_session_id).ok)
+        for job_id in ("job-1", "job-2"):
+            self.assertTrue(
+                daemon.register_buffer(
+                    buffer_id=f"{job_id}-cpu",
+                    job_id=job_id,
+                    kind="cpu_pinned",
+                    size_bytes=64,
+                    pinned=True,
+                ).ok
+            )
+            self.assertTrue(
+                daemon.register_buffer(
+                    buffer_id=f"{job_id}-gpu",
+                    job_id=job_id,
+                    kind="gpu",
+                    size_bytes=64,
+                    device_index=0,
+                ).ok
+            )
+        self.assertTrue(
+            daemon.put_profile(target_gpu=0, relay_gpus=[1], profile=_relay_profile()).ok
+        )
+
+        first_submit = daemon.submit_transfer_intent(
+            TransferIntent(
+                intent_id="intent-job-1",
+                job_id="job-1",
+                session_id=first_session_id,
+                source_buffer_id="job-1-cpu",
+                destination_buffer_id="job-1-gpu",
+                direction="h2d",
+                total_bytes=64,
+                ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 64},),
+                workload_kind=WorkloadKind.MODEL_WEIGHTS,
+                priority=5,
+            )
+        )
+        second_submit = daemon.submit_transfer_intent(
+            TransferIntent(
+                intent_id="intent-job-2",
+                job_id="job-2",
+                session_id=second_session_id,
+                source_buffer_id="job-2-cpu",
+                destination_buffer_id="job-2-gpu",
+                direction="h2d",
+                total_bytes=64,
+                ranges=({"src_offset": 0, "dst_offset": 0, "bytes": 64},),
+                workload_kind=WorkloadKind.KV_CACHE,
+                priority=1,
+            )
+        )
+
+        self.assertTrue(first_submit.ok)
+        self.assertTrue(second_submit.ok)
+        profile = daemon.describe().payload
+        queue = profile["transfer_queue"]
+        runtime = profile["runtime_resource_state"]
+        self.assertEqual([item["intent_id"] for item in queue], ["intent-job-1", "intent-job-2"])
+        self.assertEqual(
+            [item["job_id"] for item in runtime["queued_transfers"]],
+            ["job-1", "job-2"],
+        )
+        self.assertEqual(runtime["summary"]["queued_transfer_count"], 2)
+        self.assertEqual(runtime["summary"]["active_transfer_count"], 2)
+        self.assertEqual(
+            runtime["summary"]["queued_bytes_by_direction"]["h2d"]["bytes_total"],
+            128,
+        )
+        self.assertEqual(queue[0]["workload_kind"], "model_weights")
+        self.assertEqual(queue[0]["priority"], 5)
+        self.assertEqual(queue[1]["workload_kind"], "kv_cache")
+        self.assertEqual(queue[1]["priority"], 1)
+        first_decision = first_submit.payload["decision"]
+        second_decision = second_submit.payload["decision"]
+        self.assertEqual(
+            first_decision["metadata"]["runtime_state"]["queued_transfer_count"],
+            0,
+        )
+        self.assertEqual(
+            second_decision["metadata"]["runtime_state"]["queued_transfer_count"],
+            1,
+        )
+        self.assertEqual(
+            second_decision["metadata"]["runtime_state"]["active_transfer_count"],
+            1,
+        )
+        self.assertNotIn("relay_gpus", first_submit.payload["receipt"])
+        self.assertNotIn("mode", first_submit.payload["receipt"])
+
+    def test_runtime_state_tracks_relay_staging_and_terminal_updates(self) -> None:
+        daemon = _daemon(
+            relay_gpus=[1],
+            max_sessions_per_relay=1,
+            max_inflight_chunks_per_relay=8,
+        )
+        session_id, planned, lease_token, authorized = _authorized_relay_transfer(daemon)
+        transfer_id = planned.payload["transfer_id"]
+        self.assertEqual(session_id, planned.payload["transfer_status"]["session_id"])
+        staging_record = authorized.payload["staging_record"]
+
+        running = daemon.transfer_status(
+            transfer_id,
+            state="running",
+            bytes_completed=16,
+        )
+        self.assertTrue(running.ok)
+        profile = daemon.describe().payload
+        runtime = profile["runtime_resource_state"]
+        self.assertEqual(runtime["summary"]["running_transfer_count"], 1)
+        self.assertEqual(runtime["summary"]["active_transfer_count"], 1)
+        self.assertEqual(runtime["summary"]["active_reservation_count"], 1)
+        self.assertEqual(runtime["summary"]["active_lease_count"], 1)
+        self.assertEqual(runtime["summary"]["relay_staging_count"], 1)
+        self.assertEqual(runtime["running_transfers"][0]["transfer_id"], transfer_id)
+        self.assertEqual(
+            runtime["active_reservations"][0]["reservation_id"],
+            lease_token["lease_id"],
+        )
+        self.assertEqual(
+            runtime["active_leases"][0]["transfer_id"],
+            transfer_id,
+        )
+        self.assertEqual(
+            runtime["relay_staging"][0]["staging_record_id"],
+            staging_record["staging_record_id"],
+        )
+        self.assertEqual(
+            runtime["summary"]["active_bytes_by_direction"]["h2d"]["bytes_remaining"],
+            48,
+        )
+        self.assertIn("h2d:relay", runtime["summary"]["active_paths"])
+        relay_bytes = runtime["summary"]["active_paths"]["h2d:relay"]["bytes_total"]
+        self.assertEqual(runtime["active_resource_usage"]["p2p"]["bytes_total"], relay_bytes)
+        self.assertEqual(runtime["summary"]["relay_path_count"], 1)
+        self.assertEqual(runtime["summary"]["relay_path_bytes_total"], relay_bytes)
+
+        completed = daemon.transfer_status(
+            transfer_id,
+            state="complete",
+            bytes_completed=64,
+        )
+        self.assertTrue(completed.ok)
+        released = daemon.release_transfer(lease_token["lease_id"])
+        self.assertTrue(released.ok)
+        runtime = daemon.describe().payload["runtime_resource_state"]
+        self.assertEqual(runtime["summary"]["queued_transfer_count"], 0)
+        self.assertEqual(runtime["summary"]["running_transfer_count"], 0)
+        self.assertEqual(runtime["summary"]["active_transfer_count"], 0)
+        self.assertEqual(runtime["summary"]["active_reservation_count"], 0)
+        self.assertEqual(runtime["summary"]["active_lease_count"], 0)
+        self.assertEqual(runtime["summary"]["relay_staging_count"], 0)
+        self.assertEqual(runtime["transfers"][0]["state"], "complete")
+        self.assertEqual(runtime["transfers"][0]["bytes_completed"], 64)
+
 
 class MutableTopologyProvider:
     def __init__(self, inventories) -> None:

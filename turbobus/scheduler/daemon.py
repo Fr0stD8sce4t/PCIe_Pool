@@ -59,6 +59,7 @@ class DaemonScheduler:
         ranges: tuple[Mapping[str, int], ...] | None = None,
         mode: TransferMode | str = TransferMode.POOL,
         direction: str = "h2d",
+        runtime_state: Mapping[str, object] | None = None,
         now: float = 0.0,
         job_id: str | None = None,
         intent_id: str | None = None,
@@ -155,6 +156,7 @@ class DaemonScheduler:
             metadata={
                 "leases": [lease.as_dict() for lease in leases],
                 "stats": stats.as_dict(),
+                "runtime_state": _runtime_state_metadata(runtime_state),
             },
         )
 
@@ -432,6 +434,39 @@ def _path_summary_for_plan(
             }
         )
     return tuple(summary)
+
+
+def _runtime_state_metadata(
+    runtime_state: Mapping[str, object] | None,
+) -> dict[str, object]:
+    if not isinstance(runtime_state, Mapping):
+        return {
+            "version": 0,
+            "queued_transfer_count": 0,
+            "running_transfer_count": 0,
+            "active_transfer_count": 0,
+        }
+    summary = runtime_state.get("summary", {})
+    if not isinstance(summary, Mapping):
+        summary = {}
+    return {
+        "version": int(runtime_state.get("version", 0) or 0),
+        "queued_transfer_count": int(summary.get("queued_transfer_count", 0) or 0),
+        "running_transfer_count": int(summary.get("running_transfer_count", 0) or 0),
+        "active_transfer_count": int(summary.get("active_transfer_count", 0) or 0),
+        "active_reservation_count": int(summary.get("active_reservation_count", 0) or 0),
+        "active_lease_count": int(summary.get("active_lease_count", 0) or 0),
+        "relay_staging_count": int(summary.get("relay_staging_count", 0) or 0),
+        "relay_path_count": int(summary.get("relay_path_count", 0) or 0),
+        "relay_path_bytes_total": int(summary.get("relay_path_bytes_total", 0) or 0),
+        "active_bytes_by_direction": dict(
+            summary.get("active_bytes_by_direction", {}) or {}
+        ),
+        "queued_bytes_by_direction": dict(
+            summary.get("queued_bytes_by_direction", {}) or {}
+        ),
+        "active_resource_usage": dict(summary.get("active_resource_usage", {}) or {}),
+    }
 
 
 def _contract_id(value: str | None, *, prefix: str, fallback: str) -> str:

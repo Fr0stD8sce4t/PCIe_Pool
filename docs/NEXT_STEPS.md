@@ -37,107 +37,56 @@ Phase 3 cross-job dynamic scheduling:
 
 ## Current
 
-Phase 2: Privileged Daemon Control Plane.
+Phase 3: Cross-Job Dynamic Scheduling.
 
-Cut 1 is complete. The contract inventory is recorded in
-`docs/PHASE0_CONTRACT_INVENTORY.md`.
+Phase 3 is now the active implementation target. Cut 1 is complete. The
+daemon-owned transfer queue and scheduler-readable runtime resource state now
+let later fairness, admission control, and delayed lease decisions reason
+about queued and active work across jobs.
 
-Cut 2 is complete. The shared daemon-first schema objects now live in
-`turbobus/schema.py`, with contract tests under `test/python/unit/`.
+Current item: Phase 3 Cut 2, cross-job scheduling policy and fairness inputs.
 
-Cut 3 is complete. The package now exposes explicit `api`, `control`,
-`topology`, `scheduler`, and `data_plane` boundaries; synthetic topology lives
-under `test/python/fixtures/`.
+### Phase 3 Cut 1
 
-Cut 4 is complete. The public client API now submits `TransferIntent` objects
-and waits for `TransferReceipt` objects. Root package exports now emphasize the
-daemon-first public API and shared contract objects.
+Status: complete.
 
-Cut 5 is complete. The daemon scheduler now returns schema
-`SchedulingDecision` objects, daemon worker authorization issues
-`ExecutionTicket` objects, and worker request construction can validate ticket
-bindings against decisions, buffers, byte ranges, leases, and daemon plans.
+- Add a daemon-owned transfer queue for submitted `TransferIntent` work.
+- Track queued, running, active, relay staging, lease, reservation, and path
+  state in one scheduler-readable runtime snapshot.
+- Expose queue and runtime-state summaries through daemon profile data and
+  pass runtime state metadata into scheduler planning.
+- Keep applications and adapters on `TransferIntent` and `TransferReceipt`
+  only; they do not choose direct, relay, or pooled paths.
+- Preserve scheduler ownership of production transfer plans and worker
+  `ExecutionTicket` enforcement.
+- Add focused tests for queued requests, active-resource accounting, relay
+  staging, and scheduler visibility without introducing app-side path controls.
 
-Cut 6 is complete. Tests now live under `test/python/unit/`,
-`test/python/integration/`, `test/python/e2e/`, and
-`test/python/fixtures/`. Moved tests import internal modules explicitly instead
-of widening the root public API, and synthetic topology remains an explicit
-fixture.
+Expected output:
 
-Cut 7 Substage 7.1 is complete. The daemon can accept public
-`TransferIntent` submission and return `TransferReceipt` records for benchmark
-code.
+- daemon scheduling can reason over queued and active work across jobs;
+- Phase 3 can add fairness and admission control on top of explicit runtime
+  resource state;
+- no Phase 2 control-plane isolation or cleanup guarantee regresses.
 
-Cut 7 Substage 7.2 is complete. The model-loading benchmark now submits
-model-weight `TransferIntent` objects through the public client API, treats
-benchmark policy as metadata instead of physical path selection, and reports
-daemon receipt ids, path split, bytes, timing, and fallback reason.
+### Phase 3 Cut 2
 
-Cut 7 Substage 7.3 is complete. The training-offload benchmark now submits H2D
-prefetch and D2H offload `TransferIntent` objects through the public client
-API, treats benchmark policy as metadata instead of physical path selection,
-and reports separate receipt ids, decision ids, topology snapshot ids,
-execution ticket ids, bytes, timing, path split, and fallback reason.
+Status: current.
 
-Cut 7 Substage 7.4 is complete. Paper validation now builds daemon-first
-commands for the rewritten model-loading and training-offload benchmarks using
-session ids and registered buffer ids instead of target GPU, relay GPU, or
-physical transfer mode arguments. Paper metrics now come from daemon receipt
-trace ids and path split fields. `examples/torch_tensor_fetch.py` now
-demonstrates public `TransferIntent` submission and receipt reporting.
+- Feed scheduler decisions from daemon runtime state, measured load, request
+  size, workload kind, and job weight.
+- Add weighted fair sharing inputs that can observe queue depth and active
+  resource usage across jobs.
+- Keep relay admission control, delayed lease grants, plan expiration, and
+  rescheduling as daemon-owned outcomes instead of app-side controls.
+- Add focused tests that prove scheduling decisions remain explainable and do
+  not reintroduce application-side physical path selection.
 
-Cut 8 is complete. Adapter-facing APIs now submit intent and consume receipts
-without owning physical path selection.
+Expected output:
 
-Cut 8 Substage 8.1 is complete. The shared adapter transfer path now uses
-`AdapterTransferContext` to describe job, session, buffer, workload, and
-receipt-wait settings. `OffloadStore` submits `TransferIntent` objects through
-the client API, waits for `TransferReceipt` objects, and derives stats and
-state transitions from receipts. The model-loading, training-offload,
-inference KV, vLLM slot, and vLLM integration adapters now use this shared
-intent/receipt path instead of calling Runtime-owned transfer methods.
-
-Cut 8 Substage 8.2 is complete. The vLLM KV connector now accepts daemon
-socket, job, session, and registered CPU/GPU buffer identity instead of
-target GPU, relay GPU, physical mode, or min-pool settings. Save and restore
-flow through `AdapterTransferContext`, `TurboBusClient`, and
-`VllmKVSlotAdapter`, and connector/example/sweep output reports daemon
-receipt ids, decision ids, topology snapshot ids, ticket ids, bytes, path
-split, and fallback reason.
-
-Cut 8 Substage 8.3 is complete. The old non-KV vLLM connector experiment,
-its root wrapper, its adapter re-export, its route-shaped example, and its
-test have been removed. Adapter-facing exports now protect the daemon-first
-KV connector, vLLM mapping, vLLM integration, intent fields, receipt handling,
-and package boundaries.
-
-Cut 9 is complete. The remaining legacy workload entry points
-`examples/vllm_turbobus_restore.py`, `benchmarks/bandwidth_pool.py`,
-`benchmarks/kv_offload.py`, and `benchmarks/tune_transfer.py` have been
-removed. `benchmarks/summarize_result.py` now dispatches only daemon-first
-JSON result shapes for model loading, training offload, and paper validation.
-
-Phase 1 Cut 1 is complete. The daemon now has a production topology provider
-boundary, a CUDA/NVML provider backed by `nvidia-smi`, versioned topology
-snapshot ids, and production startup validation that rejects synthetic fixture
-topology or insufficient relay discovery.
-
-Phase 1 Cut 2 is complete. Topology records now normalize GPU NUMA,
-visibility, backend/vendor, PCIe link generation, width, negotiated speed,
-estimated bandwidth, bandwidth source, switch hierarchy, and fabric raw link
-type/capability/link count. `GET_INVENTORY` and relay discovery now expose the
-normalized fields, and relay discovery includes a `path_capabilities` summary
-for each candidate relay.
-
-Phase 1 Cut 3 is complete. The daemon now exposes an explicit topology
-invalidation request through the control plane and client API. Refreshing
-topology forces the provider to produce a new snapshot, and subsequent
-inventory and relay-discovery responses carry the new snapshot id/version,
-eligibility, filtered reasons, and per-relay path capabilities.
-
-Current phase: Phase 3, cross-job dynamic scheduling.
-
-Current item: Phase 3 Cut 1, global daemon transfer queue and runtime resource state.
+- queue depth and active load influence scheduler decisions;
+- fairness policy can be layered on top of the daemon-owned runtime snapshot;
+- direct fallback remains a scheduler outcome, not an adapter choice.
 
 ## Phase 0 Code Cuts
 
