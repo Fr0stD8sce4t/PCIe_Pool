@@ -394,6 +394,11 @@ def collect_model_metrics(result: dict) -> list[dict[str, object]]:
         {
             "workload": "model-loading",
             "policy": str(config.get("policy", "")),
+            "job_id": str(config.get("job_id", "")),
+            "session_id": str(config.get("session_id", "")),
+            "source_buffer_id": str(config.get("source_buffer_id", "")),
+            "destination_buffer_id": str(config.get("destination_buffer_id", "")),
+            "workload_kind": str(config.get("workload_kind", "")),
             "iterations": as_int(summary.get("iterations")),
             "ttft_proxy_ms": as_float(summary.get("median_load_ms")),
             "throughput_gib_s": as_float(summary.get("median_gib_per_second")),
@@ -430,6 +435,11 @@ def collect_training_metrics(result: dict) -> list[dict[str, object]]:
         {
             "workload": "training-offload",
             "policy": str(config.get("policy", "")),
+            "job_id": str(config.get("job_id", "")),
+            "session_id": str(config.get("session_id", "")),
+            "cpu_buffer_id": str(config.get("cpu_buffer_id", "")),
+            "gpu_buffer_id": str(config.get("gpu_buffer_id", "")),
+            "workload_kind": str(config.get("workload_kind", "")),
             "iterations": as_int(summary.get("iterations")),
             "iteration_ms": as_float(summary.get("median_iteration_ms")),
             "transfer_ms": as_float(summary.get("median_transfer_ms")),
@@ -583,6 +593,33 @@ def workload_validation_errors(data_path: Path, metrics: list[dict]) -> list[str
     if missing_trace:
         errors.append("missing_daemon_trace")
     return errors
+
+
+def phase6_workload_validation_errors(workload: str, data_path: Path, metrics: list[dict]) -> list[str]:
+    errors = workload_validation_errors(data_path, metrics)
+    if not metrics:
+        return errors
+    expected_kind = {
+        "model-loading": "model_weights",
+        "training-offload": None,
+    }.get(workload)
+    for metric in metrics:
+        for field in ("job_id", "session_id", "workload_kind"):
+            if not metric.get(field):
+                errors.append(f"missing_{field}")
+        if workload == "model-loading":
+            for field in ("source_buffer_id", "destination_buffer_id"):
+                if not metric.get(field):
+                    errors.append(f"missing_{field}")
+        if workload == "training-offload":
+            for field in ("cpu_buffer_id", "gpu_buffer_id"):
+                if not metric.get(field):
+                    errors.append(f"missing_{field}")
+            if metric.get("workload_kind") not in ("training_state", "optimizer_state"):
+                errors.append("invalid_training_workload_kind")
+        if expected_kind is not None and metric.get("workload_kind") != expected_kind:
+            errors.append(f"invalid_{workload.replace('-', '_')}_workload_kind")
+    return sorted(set(errors), key=errors.index)
 
 
 def vllm_kv_required_summary_errors(summary: dict, text: str) -> list[str]:
@@ -742,8 +779,11 @@ def metric_line(metric: dict) -> str:
         "job_index",
         "job_id",
         "session_id",
+        "workload_kind",
         "cpu_buffer_id",
         "gpu_buffer_id",
+        "source_buffer_id",
+        "destination_buffer_id",
         "iterations",
         "ttft_proxy_ms",
         "iteration_ms",
@@ -902,7 +942,7 @@ def run_validation(args) -> dict:
                 else:
                     validation_errors.extend(vllm_kv_validation_errors(paths, metrics))
             else:
-                validation_errors.extend(workload_validation_errors(data_path, metrics))
+                validation_errors.extend(phase6_workload_validation_errors(workload, data_path, metrics))
         status = workload_status(args.dry_run, completed.returncode, validation_errors)
         result["workloads"].append(
             {

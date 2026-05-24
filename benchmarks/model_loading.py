@@ -188,6 +188,7 @@ def config_dict(args) -> dict[str, object]:
         "job_id": args.job_id,
         "source_buffer_id": args.source_buffer_id,
         "destination_buffer_id": args.destination_buffer_id,
+        "workload_kind": WorkloadKind.MODEL_WEIGHTS.value,
         "bucket_count": int(args.bucket_count),
         "bucket_bytes": int(args.bucket_bytes),
         "storage_layout": args.storage_layout,

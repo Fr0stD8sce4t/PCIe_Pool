@@ -126,7 +126,14 @@ class PaperValidationTest(unittest.TestCase):
 
     def test_collect_model_and_training_metrics_from_daemon_receipts(self) -> None:
         model = {
-            "config": {"policy": "daemon-default"},
+            "config": {
+                "policy": "daemon-default",
+                "job_id": "model-job",
+                "session_id": "model-session",
+                "source_buffer_id": "cpu-buffer",
+                "destination_buffer_id": "gpu-buffer",
+                "workload_kind": "model_weights",
+            },
             "summary": {
                 "iterations": 2,
                 "median_load_ms": 12.5,
@@ -144,7 +151,14 @@ class PaperValidationTest(unittest.TestCase):
             },
         }
         training = {
-            "config": {"policy": "daemon-default"},
+            "config": {
+                "policy": "daemon-default",
+                "job_id": "training-job",
+                "session_id": "training-session",
+                "cpu_buffer_id": "cpu-buffer",
+                "gpu_buffer_id": "gpu-buffer",
+                "workload_kind": "optimizer_state",
+            },
             "summary": {
                 "iterations": 2,
                 "median_iteration_ms": 20.0,
@@ -182,10 +196,20 @@ class PaperValidationTest(unittest.TestCase):
         training_metric = paper_validation.collect_training_metrics(training)[0]
 
         self.assertEqual(model_metric["ttft_proxy_ms"], 12.5)
+        self.assertEqual(model_metric["job_id"], "model-job")
+        self.assertEqual(model_metric["session_id"], "model-session")
+        self.assertEqual(model_metric["source_buffer_id"], "cpu-buffer")
+        self.assertEqual(model_metric["destination_buffer_id"], "gpu-buffer")
+        self.assertEqual(model_metric["workload_kind"], "model_weights")
         self.assertEqual(model_metric["transfer_bytes"], 96)
         self.assertEqual(model_metric["decision_ids"], "decision-1")
         self.assertEqual(model_metric["ticket_ids"], "ticket-1")
         self.assertEqual(training_metric["iteration_ms"], 20.0)
+        self.assertEqual(training_metric["job_id"], "training-job")
+        self.assertEqual(training_metric["session_id"], "training-session")
+        self.assertEqual(training_metric["cpu_buffer_id"], "cpu-buffer")
+        self.assertEqual(training_metric["gpu_buffer_id"], "gpu-buffer")
+        self.assertEqual(training_metric["workload_kind"], "optimizer_state")
         self.assertEqual(training_metric["transfer_bytes"], 120)
         self.assertEqual(training_metric["direct_bytes"], 80)
         self.assertEqual(training_metric["relay_chunks"], 2)
@@ -258,7 +282,14 @@ class PaperValidationTest(unittest.TestCase):
             paths["json"].write_text(
                 json.dumps(
                     {
-                        "config": {"policy": "daemon-default"},
+                        "config": {
+                            "policy": "daemon-default",
+                            "job_id": "model-job",
+                            "session_id": "model-session",
+                            "source_buffer_id": "cpu-buffer",
+                            "destination_buffer_id": "gpu-buffer",
+                            "workload_kind": "model_weights",
+                        },
                         "summary": {
                             "iterations": 1,
                             "median_load_ms": 1,
@@ -278,6 +309,50 @@ class PaperValidationTest(unittest.TestCase):
 
         self.assertEqual(data["summary"]["bytes"], 64)
         self.assertEqual(metrics[0]["decision_ids"], "decision-1")
+        self.assertEqual(metrics[0]["workload_kind"], "model_weights")
+
+    def test_phase6_workload_validation_requires_identity_and_workload_kind(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_path = Path(tmpdir) / "result.json"
+            data_path.write_text("{}", encoding="utf-8")
+            model_errors = paper_validation.phase6_workload_validation_errors(
+                "model-loading",
+                data_path,
+                [
+                    {
+                        "workload": "model-loading",
+                        "decision_ids": "decision-1",
+                        "topology_snapshot_ids": "topology-1",
+                        "ticket_ids": "ticket-1",
+                        "job_id": "job-1",
+                        "session_id": "session-1",
+                        "source_buffer_id": "",
+                        "destination_buffer_id": "gpu-buffer",
+                        "workload_kind": "generic",
+                    }
+                ],
+            )
+            training_errors = paper_validation.phase6_workload_validation_errors(
+                "training-offload",
+                data_path,
+                [
+                    {
+                        "workload": "training-offload",
+                        "decision_ids": "decision-1",
+                        "topology_snapshot_ids": "topology-1",
+                        "ticket_ids": "ticket-1",
+                        "job_id": "job-1",
+                        "session_id": "session-1",
+                        "cpu_buffer_id": "cpu-buffer",
+                        "gpu_buffer_id": "gpu-buffer",
+                        "workload_kind": "model_weights",
+                    }
+                ],
+            )
+
+        self.assertIn("missing_source_buffer_id", model_errors)
+        self.assertIn("invalid_model_loading_workload_kind", model_errors)
+        self.assertIn("invalid_training_workload_kind", training_errors)
 
     def test_collect_vllm_kv_metrics_reads_connector_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -297,6 +372,11 @@ class PaperValidationTest(unittest.TestCase):
                 {
                     "workload": "model-loading",
                     "policy": "daemon-default",
+                    "job_id": "job-1",
+                    "session_id": "session-1",
+                    "source_buffer_id": "cpu-buffer",
+                    "destination_buffer_id": "gpu-buffer",
+                    "workload_kind": "model_weights",
                     "ttft_proxy_ms": 12.5,
                     "throughput_gib_s": 8.0,
                     "transfer_bytes": 96,
@@ -313,6 +393,9 @@ class PaperValidationTest(unittest.TestCase):
         self.assertIn("session_id=session-1", summary)
         self.assertIn("policy=daemon-default", summary)
         self.assertIn("paper_metric workload=model-loading", summary)
+        self.assertIn("workload_kind=model_weights", summary)
+        self.assertIn("source_buffer_id=cpu-buffer", summary)
+        self.assertIn("destination_buffer_id=gpu-buffer", summary)
         self.assertIn("decision_ids=decision-1", summary)
         self.assertIn("topology_snapshot_ids=topology-1", summary)
         self.assertIn("ticket_ids=ticket-1", summary)

@@ -53,8 +53,7 @@ Phase 5 is complete. vLLM KV save and restore now use the daemon-first
 single-job and concurrent multi-job trace output without application-side
 physical path selection.
 
-Current item: Phase 6 Cut 1, model-loading and training-offload adapter
-inventory and workload boundary audit.
+Current item: Phase 6 Cut 2, workload-kind policy and optimizer-state coverage.
 
 ### Phase 3 Cut 1
 
@@ -333,10 +332,11 @@ python benchmarks/paper_validation.py --workloads vllm-kv --session-id vllm-kv-p
 
 ## Phase 6 Current Work
 
-Current item: Phase 6 Cut 1, model-loading and training-offload adapter
-inventory and workload boundary audit.
+Current item: Phase 6 Cut 2, workload-kind policy and optimizer-state coverage.
 
-Status: current.
+### Phase 6 Cut 1
+
+Status: complete.
 
 - Inspect model-loading and training-offload adapters, benchmark code, public
   client calls, scheduler workload-kind policy inputs, and existing tests.
@@ -348,13 +348,46 @@ Status: current.
 - Split Phase 6 into complete, verifiable cuts before changing behavior if the
   audit finds multiple independent gaps.
 
+Completed output:
+
+- added `docs/PHASE6_WORKLOAD_BOUNDARY_INVENTORY.md` with the current
+  model-loading and training-offload code paths, daemon-first boundaries,
+  scheduler workload-kind inputs, completed Cut 1 work, and remaining Phase 6
+  cuts;
+- confirmed model-loading and training-offload benchmarks submit
+  `TransferIntent` through the public client API and consume
+  `TransferReceipt`;
+- confirmed `ModelWeightLoader` and `TrainingOffloadManager` use
+  `AdapterTransferContext` and shared `OffloadStore`, which rejects physical
+  path hints;
+- added explicit `workload_kind=model_weights` to model-loading benchmark
+  config output;
+- made paper validation include job/session/buffer identity and workload kind
+  for model-loading and training-offload `paper_metric` lines;
+- made paper validation reject missing Phase 6 identity or workload-kind fields
+  for model-loading and training-offload;
+- no Phase 6 Cut 1 code introduces direct, relay, or pooled path selection
+  outside daemon scheduling.
+
+### Phase 6 Cut 2
+
+Status: current.
+
+- Add focused scheduler and paper-validation tests showing `model_weights`,
+  `training_state`, and `optimizer_state` reach scheduling policy metadata.
+- Ensure optimizer-state benchmark runs are validated as first-class Phase 6
+  outputs, not as a training-state alias.
+- Keep workload kind as scheduler input only; do not add path selection to
+  adapters or benchmarks.
+
 Expected output:
 
-- a Phase 6 inventory or first implementation cut that is tied to real model
-  loading and training offload code paths;
-- adapters and benchmarks remain on `TransferIntent` and `TransferReceipt`;
-- no Phase 6 code introduces direct, relay, or pooled path selection outside
-  daemon scheduling.
+- optimizer-state offload can be run and reported through the same public
+  client API path as training-state offload;
+- paper validation carries distinct model-loading, training-state, and
+  optimizer-state workload-kind evidence;
+- scheduler policy metadata exposes workload kind without letting applications
+  choose physical paths.
 
 ## Phase 0 Code Cuts
 

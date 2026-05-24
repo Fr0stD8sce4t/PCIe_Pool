@@ -70,6 +70,7 @@ class ModelLoadingBenchmarkTest(unittest.TestCase):
 
         self.assertNotIn("modes", result)
         self.assertEqual(result["config"]["policy"], "paper-baseline")
+        self.assertEqual(result["config"]["workload_kind"], "model_weights")
         self.assertEqual(result["summary"]["iterations"], 2)
         self.assertEqual(result["summary"]["bytes"], 128)
         self.assertEqual(result["summary"]["bytes_completed"], 128)

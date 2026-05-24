@@ -279,8 +279,8 @@ without adding target GPU, relay GPU, mode, or direct/relay/pool controls.
 
 ## Next Work Items
 
-Current item: Phase 6 Cut 1, model-loading and training-offload adapter
-inventory and workload boundary audit.
+Current item: Phase 6 Cut 2, workload-kind policy and optimizer-state
+coverage.
 
 1. Shared schema layer.
    - Status: complete.
@@ -420,13 +420,18 @@ inventory and workload boundary audit.
 
 14. Model loading and training offload.
    - Status: current.
-   - Current item: Phase 6 Cut 1, model-loading and training-offload adapter
-     inventory and workload boundary audit.
-   - Inspect model-loading and training-offload adapters, benchmark code,
-     public client calls, scheduler workload-kind policy inputs, and existing
-     tests before changing behavior.
-   - Keep adapters and benchmarks on `TransferIntent` and `TransferReceipt`
-     only, with no application-side direct, relay, or pooled path selection.
+   - Cut 1 complete: added `docs/PHASE6_WORKLOAD_BOUNDARY_INVENTORY.md`,
+     confirmed model-loading and training-offload benchmarks and adapters use
+     public `TransferIntent` and `TransferReceipt` paths, added explicit
+     `workload_kind=model_weights` to model-loading benchmark config, and made
+     paper validation report and validate Phase 6 workload identity,
+     registered buffer identity, and workload kind without adding physical path
+     controls.
+   - Current item: Phase 6 Cut 2, workload-kind policy and optimizer-state
+     coverage.
+   - Next, add focused scheduler and paper-validation tests showing
+     `model_weights`, `training_state`, and `optimizer_state` reach scheduling
+     policy metadata and report as distinct Phase 6 workload kinds.
 
 ## Phase 0 Acceptance Criteria
 
@@ -443,6 +448,12 @@ Phase 0 is complete:
 - GPU tests are clearly marked and runnable on CUDA hardware.
 
 ## Latest Validation
+
+Phase 6 Cut 1 validation:
+
+- `python -m unittest test.python.e2e.test_paper_validation test.python.e2e.test_model_loading_benchmark test.python.e2e.test_training_offload_benchmark test.python.e2e.test_model_loading test.python.e2e.test_training_offload test.python.unit.test_offload_store test.python.unit.test_daemon_scheduler`
+- `python -m py_compile benchmarks\model_loading.py benchmarks\training_offload.py benchmarks\paper_validation.py benchmarks\daemon_support.py turbobus\adapters\model_loading.py turbobus\adapters\training_offload.py turbobus\offload_store.py test\python\e2e\test_paper_validation.py test\python\e2e\test_model_loading_benchmark.py test\python\e2e\test_training_offload_benchmark.py test\python\e2e\test_model_loading.py test\python\e2e\test_training_offload.py test\python\unit\test_offload_store.py test\python\unit\test_daemon_scheduler.py`
+- `git diff --check`
 
 Phase 5 Cut 3 validation:
 
@@ -475,7 +486,10 @@ Remaining risk:
 - Phase 5 is complete in code and local non-GPU validation, but the single-job
   and multi-job vLLM KV paper-validation commands still need to be exercised on
   a CUDA server with vLLM installed and a TurboBus daemon running.
-- Phase 6 has not started beyond being selected as the next active phase.
+- Phase 6 Cut 1 is complete. Optimizer-state offload still needs first-class
+  scheduler and paper-validation coverage in Cut 2, and Phase 6 server
+  validation still needs to be exercised on a CUDA server with a running
+  TurboBus daemon.
 
 ## Upcoming Phases
 
