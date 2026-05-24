@@ -12,7 +12,7 @@ new architecture rather than preserve application-side route selection.
 
 ## Immediate Functional Target
 
-Begin Phase 4: Daemon-Plan Data Plane.
+Begin Phase 5: vLLM KV End-To-End Workload.
 
 Phase 0 is complete. The public examples and benchmarks now use daemon-first
 client APIs, and the old Runtime-shaped benchmark/example entry points have
@@ -24,28 +24,29 @@ snapshots, supports explicit topology invalidation, reports relay eligibility
 with path capabilities, and fails production startup clearly when discovery
 cannot satisfy policy.
 
-Phase 2 daemon-owned resource authority is complete. Phase 3 cross-job
-dynamic scheduling is complete. The next target is Phase 4 daemon-plan data
-plane:
+Phase 2 daemon-owned resource authority, Phase 3 cross-job dynamic scheduling,
+and Phase 4 daemon-plan data plane are complete. The next target is Phase 5
+vLLM KV end-to-end workload:
 
-1. Make exact daemon-issued plans the only production data-plane input.
-2. Keep `fetch_plan_to_gpu` and `offload_plan_to_cpu` as backend primitives.
-3. Extend worker-managed execution to multiple relay paths in one plan.
-4. Track staging buffers through daemon or worker lifecycle.
-5. Share ticket and receipt semantics across H2D, D2H, and range transfers.
-6. Add correctness tests for direct, relay, pooled, and failure paths.
+1. Convert vLLM KV save and restore into `TransferIntent`.
+2. Restore prefix KV blocks through daemon scheduling.
+3. Record daemon decision, topology snapshot, receipt, bytes, path split, and
+   timing.
+4. Test single-job and multi-job vLLM scenarios.
 
 ## Current
 
-Phase 4: Daemon-Plan Data Plane.
+Phase 5: vLLM KV End-To-End Workload.
 
 Phase 3 is complete. The daemon now keeps cross-job queue state, runtime
 resource state, weighted scheduling inputs, relay admission state, delayed
 lease grants, plan expiration, and rescheduling state without giving
 applications or adapters physical path control.
 
-Current item: Phase 4 Cut 4, legacy Runtime data-plane cleanup and GPU
-correctness gate.
+Phase 4 is complete. Exact daemon-issued plans are now the only production
+data-plane input; the old importable Python Runtime path and native extension
+local-planning bindings are gone. Current item: Phase 5 Cut 1, vLLM KV
+save/restore contract audit and real workload boundary.
 
 ### Phase 3 Cut 1
 
@@ -107,10 +108,9 @@ Expected output:
   allocation;
 - expired or stale plans cannot be executed by workers.
 
-## Phase 4 Current Work
+## Phase 4 Completed Work
 
-Current item: Phase 4 Cut 4, legacy Runtime data-plane cleanup and GPU
-correctness gate.
+Phase 4 is complete.
 
 Cut 1: data-plane plan boundary and worker input cleanup.
 
@@ -182,7 +182,7 @@ Completed output:
 
 Cut 4: legacy Runtime data-plane cleanup and GPU correctness gate.
 
-Status: current.
+Status: complete.
 
 - Remove, demote, or reroute the importable `turbobus.runtime` Runtime-local
   execution path so production data movement cannot bypass daemon-issued
@@ -198,13 +198,67 @@ Status: current.
 - Do not advance to Phase 5 until the Phase 4 exit criteria can be checked
   without relying on the legacy Runtime path.
 
-Expected output:
+Completed output:
 
 - application code still cannot decide transfer paths;
 - production worker/data-plane execution is ticket-only;
 - legacy Runtime route selection is no longer a Phase 4 blocker;
-- Phase 4 can be closed after focused non-GPU checks and GPU-server
-  correctness validation notes.
+- the Python `turbobus.runtime` module and old `transfer_selector` application
+  route-selection helper have been removed;
+- the native Python extension no longer exposes local-planning methods
+  `set_transfer_mode`, `fetch_to_gpu`, `offload_to_cpu`,
+  `fetch_ranges_to_gpu`, or `offload_ranges_to_cpu`;
+- backend exact-plan primitives `fetch_plan_to_gpu` and
+  `offload_plan_to_cpu` remain available for daemon-ticketed worker and
+  direct fallback execution;
+- runtime tests now protect `runtime_engine` exact-plan conversion helpers and
+  the public package boundary instead of old Runtime route selection.
+
+GPU-server correctness gate:
+
+Run these on a CUDA server with at least two visible GPUs and the native
+extension built. They cover daemon-issued direct, relay, pooled, H2D, D2H, and
+range-offset transfers through the worker-managed verification command:
+
+```text
+python -m turbobus.verification --direction h2d --mode direct --target-gpu 0 --relay-gpu 1 --bytes 33554432 --chunk-bytes 8388608
+python -m turbobus.verification --direction h2d --mode relay --target-gpu 0 --relay-gpu 1 --bytes 33554432 --chunk-bytes 8388608
+python -m turbobus.verification --direction h2d --mode pool --target-gpu 0 --relay-gpu 1 --bytes 33554432 --chunk-bytes 8388608
+python -m turbobus.verification --direction d2h --mode direct --target-gpu 0 --relay-gpu 1 --bytes 33554432 --chunk-bytes 8388608
+python -m turbobus.verification --direction d2h --mode relay --target-gpu 0 --relay-gpu 1 --bytes 33554432 --chunk-bytes 8388608
+python -m turbobus.verification --direction d2h --mode pool --target-gpu 0 --relay-gpu 1 --bytes 33554432 --chunk-bytes 8388608
+python -m turbobus.verification --direction h2d --mode relay --target-gpu 0 --relay-gpu 1 --bytes 16777216 --chunk-bytes 4194304 --src-offset 4096 --dst-offset 8192 --source-buffer-bytes 16781312 --destination-buffer-bytes 16785408
+python -m turbobus.verification --direction d2h --mode pool --target-gpu 0 --relay-gpu 1 --bytes 16777216 --chunk-bytes 4194304 --src-offset 8192 --dst-offset 4096 --source-buffer-bytes 16785408 --destination-buffer-bytes 16781312
+```
+
+## Phase 5 Current Work
+
+Current item: Phase 5 Cut 1, vLLM KV save/restore contract audit and real
+workload boundary.
+
+Cut 1: vLLM KV workload boundary and adapter inventory.
+
+Status: current.
+
+- Inspect the current vLLM KV connector, vLLM slot adapter, shared adapter
+  context, examples, and e2e tests before changing behavior.
+- Identify the exact vLLM-owned KV block metadata that must become
+  `TransferIntent` source and destination buffer ids for save and restore.
+- Remove or rewrite any remaining fake-only path that makes the connector look
+  complete without a real vLLM save/restore lifecycle.
+- Keep the adapter contract strict: vLLM code submits intent and consumes
+  receipts only; it must not choose direct, relay, or pooled paths.
+- Produce the smallest runnable single-job vLLM KV save/restore slice through
+  the public client API, or split the work again if real vLLM setup needs a
+  separate verified fixture step.
+
+Expected output:
+
+- the Phase 5 implementation target is tied to real vLLM KV save/restore
+  lifecycle points, not the old connector experiment route;
+- tests protect intent construction, receipt consumption, and trace ids for
+  vLLM KV save/restore;
+- no Phase 5 code reintroduces application-side physical path selection.
 
 ## Phase 0 Code Cuts
 
@@ -706,7 +760,7 @@ Proceed in this order:
 1. Automatic topology discovery.
 2. Privileged daemon control plane. Complete.
 3. Cross-job dynamic scheduling. Complete.
-4. Daemon-plan data plane. Current.
-5. vLLM KV end-to-end workload.
+4. Daemon-plan data plane. Complete.
+5. vLLM KV end-to-end workload. Current.
 6. Model loading and training offload.
 7. Paper evaluation and hardening.

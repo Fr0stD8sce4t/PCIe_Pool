@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import importlib
 import unittest
 
 import turbobus
@@ -91,6 +92,10 @@ class PublicClientApiTest(unittest.TestCase):
         self.assertIn("TransferReceipt", turbobus.__all__)
         self.assertNotIn("Runtime", turbobus.__all__)
         self.assertNotIn("plan_transfer", turbobus.__all__)
+
+    def test_legacy_runtime_module_is_not_available_as_public_entrypoint(self) -> None:
+        with self.assertRaises(ModuleNotFoundError):
+            importlib.import_module("turbobus.runtime")
 
 
 class FakeDaemon:

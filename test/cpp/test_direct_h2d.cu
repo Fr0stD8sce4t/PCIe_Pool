@@ -1,4 +1,5 @@
 #include <cassert>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -7,7 +8,8 @@
 
 #include <cuda_runtime.h>
 
-#include "turbobus/runtime.h"
+#include "turbobus/executor.h"
+#include "turbobus/types.h"
 
 namespace {
 
@@ -66,11 +68,45 @@ int main() {
   options.chunk_bytes = EnvSize("TURBOBUS_CHUNK_BYTES", 4ull * 1024ull * 1024ull);
   options.staging_slots = 2;
 
-  turbobus::TurboBusRuntime runtime(options);
-  runtime.Init(target, {});
-  runtime.Profile(32ull * 1024ull * 1024ull);
-  auto handle = runtime.FetchToGpu(host, dst, bytes);
-  runtime.Wait(handle);
+  turbobus::TransferPlan plan;
+  plan.total_bytes = bytes;
+  plan.chunk_bytes = options.chunk_bytes;
+
+  turbobus::PathAssignment assignment;
+  assignment.path.kind = turbobus::PathKind::DirectH2D;
+  assignment.path.direction = turbobus::TransferDirection::H2D;
+  assignment.path.target_device = target;
+  assignment.path.relay_device = turbobus::kHostDevice;
+  assignment.path.h2d_bw_gbps = 1.0;
+  assignment.path.d2h_bw_gbps = 1.0;
+  assignment.path.p2p_bw_gbps = 0.0;
+  assignment.path.effective_bw_gbps = 1.0;
+  assignment.path.enabled = true;
+  for (std::size_t offset = 0; offset < bytes; offset += options.chunk_bytes) {
+    turbobus::Chunk chunk;
+    chunk.src_offset = offset;
+    chunk.dst_offset = offset;
+    chunk.bytes = std::min(options.chunk_bytes, bytes - offset);
+    assignment.chunks.push_back(chunk);
+  }
+  plan.assignments.push_back(assignment);
+
+  turbobus::BufferView src_view;
+  src_view.ptr = host;
+  src_view.bytes = bytes;
+  src_view.kind = turbobus::MemoryKind::HostPinned;
+  src_view.device = turbobus::kHostDevice;
+
+  turbobus::BufferView dst_view;
+  dst_view.ptr = dst;
+  dst_view.bytes = bytes;
+  dst_view.kind = turbobus::MemoryKind::Device;
+  dst_view.device = target;
+
+  turbobus::CudaRelayExecutor executor;
+  executor.Init(target, {}, options);
+  auto handle = executor.Submit(src_view, dst_view, plan);
+  executor.Wait(handle);
 
   CheckCuda(cudaMemcpy(back.data(), dst, bytes, cudaMemcpyDeviceToHost),
             "cudaMemcpy D2H failed");

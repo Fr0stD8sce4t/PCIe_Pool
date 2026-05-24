@@ -20,21 +20,12 @@ class TurboBusRuntime {
   ProfileResult Profile(std::size_t bytes = 256ull * 1024ull * 1024ull,
                         bool force = false);
   void SetCachedProfile(const ProfileResult& profile);
-  void SetTransferMode(TransferMode mode);
-  TransferHandle FetchToGpu(void* host_ptr, void* target_gpu_ptr, std::size_t bytes);
-  TransferHandle OffloadToCpu(void* target_gpu_ptr, void* host_ptr, std::size_t bytes);
   TransferHandle FetchPlanToGpu(void* host_ptr, std::size_t host_bytes,
                                 void* target_gpu_ptr, std::size_t target_bytes,
                                 const TransferPlan& plan);
   TransferHandle OffloadPlanToCpu(void* target_gpu_ptr, std::size_t target_bytes,
                                   void* host_ptr, std::size_t host_bytes,
                                   const TransferPlan& plan);
-  TransferHandle FetchRangesToGpu(void* host_ptr, std::size_t host_bytes,
-                                  void* target_gpu_ptr, std::size_t target_bytes,
-                                  const std::vector<TransferRange>& ranges);
-  TransferHandle OffloadRangesToCpu(void* target_gpu_ptr, std::size_t target_bytes,
-                                    void* host_ptr, std::size_t host_bytes,
-                                    const std::vector<TransferRange>& ranges);
   DummyComputeStats RunDummyCompute(void* device_ptr, std::size_t elements,
                                     int iterations);
   void Wait(const TransferHandle& handle);
@@ -44,17 +35,6 @@ class TurboBusRuntime {
   const ProfileResult& PlannerProfile() const;
 
  private:
-  void EnsureProfile();
-  TransferHandle SubmitTransfer(void* source_ptr, void* destination_ptr,
-                                std::size_t bytes,
-                                TransferDirection direction);
-  TransferHandle SubmitRanges(void* source_ptr, std::size_t source_bytes,
-                              void* destination_ptr,
-                              std::size_t destination_bytes,
-                              const std::vector<TransferRange>& ranges,
-                              TransferDirection direction);
-  void UpdateDynamicWeights(const TransferStats& stats);
-
   RuntimeOptions options_;
   int target_device_ = 0;
   std::vector<int> requested_relays_;

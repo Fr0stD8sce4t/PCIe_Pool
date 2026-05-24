@@ -289,28 +289,12 @@ PYBIND11_MODULE(_turbobus, m) {
            py::arg("force") = false)
       .def("set_cached_profile", &turbobus::TurboBusRuntime::SetCachedProfile,
            py::arg("profile"))
-      .def("set_transfer_mode", &turbobus::TurboBusRuntime::SetTransferMode,
-           py::arg("mode"))
       .def("cached_profile", &turbobus::TurboBusRuntime::CachedProfile,
            py::return_value_policy::reference_internal)
       .def("planner_profile", &turbobus::TurboBusRuntime::PlannerProfile,
            py::return_value_policy::reference_internal)
       .def("last_plan", &turbobus::TurboBusRuntime::LastPlan,
            py::return_value_policy::reference_internal)
-      .def("fetch_to_gpu",
-           [](turbobus::TurboBusRuntime& runtime, std::uintptr_t host_ptr,
-              std::uintptr_t target_ptr, std::size_t bytes) {
-             return runtime.FetchToGpu(reinterpret_cast<void*>(host_ptr),
-                                       reinterpret_cast<void*>(target_ptr), bytes);
-           },
-           py::arg("host_ptr"), py::arg("target_ptr"), py::arg("bytes"))
-      .def("offload_to_cpu",
-           [](turbobus::TurboBusRuntime& runtime, std::uintptr_t target_ptr,
-              std::uintptr_t host_ptr, std::size_t bytes) {
-             return runtime.OffloadToCpu(reinterpret_cast<void*>(target_ptr),
-                                         reinterpret_cast<void*>(host_ptr), bytes);
-           },
-           py::arg("target_ptr"), py::arg("host_ptr"), py::arg("bytes"))
       .def("fetch_plan_to_gpu",
            [](turbobus::TurboBusRuntime& runtime, std::uintptr_t host_ptr,
               std::size_t host_bytes, std::uintptr_t target_ptr,
@@ -331,28 +315,6 @@ PYBIND11_MODULE(_turbobus, m) {
            },
            py::arg("target_ptr"), py::arg("target_bytes"), py::arg("host_ptr"),
            py::arg("host_bytes"), py::arg("plan"))
-      .def("fetch_ranges_to_gpu",
-           [](turbobus::TurboBusRuntime& runtime, std::uintptr_t host_ptr,
-              std::size_t host_bytes, std::uintptr_t target_ptr,
-              std::size_t target_bytes,
-              const std::vector<turbobus::TransferRange>& ranges) {
-             return runtime.FetchRangesToGpu(
-                 reinterpret_cast<void*>(host_ptr), host_bytes,
-                 reinterpret_cast<void*>(target_ptr), target_bytes, ranges);
-           },
-           py::arg("host_ptr"), py::arg("host_bytes"), py::arg("target_ptr"),
-           py::arg("target_bytes"), py::arg("ranges"))
-      .def("offload_ranges_to_cpu",
-           [](turbobus::TurboBusRuntime& runtime, std::uintptr_t target_ptr,
-              std::size_t target_bytes, std::uintptr_t host_ptr,
-              std::size_t host_bytes,
-              const std::vector<turbobus::TransferRange>& ranges) {
-             return runtime.OffloadRangesToCpu(
-                 reinterpret_cast<void*>(target_ptr), target_bytes,
-                 reinterpret_cast<void*>(host_ptr), host_bytes, ranges);
-           },
-           py::arg("target_ptr"), py::arg("target_bytes"), py::arg("host_ptr"),
-           py::arg("host_bytes"), py::arg("ranges"))
       .def("run_dummy_compute",
            [](turbobus::TurboBusRuntime& runtime, std::uintptr_t device_ptr,
               std::size_t elements, int iterations) {

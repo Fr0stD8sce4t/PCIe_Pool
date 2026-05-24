@@ -5,10 +5,10 @@
 The active project plan has been reset to paper-parity execution.
 
 Phase 0 realignment, Phase 1 automatic topology discovery, Phase 2
-privileged daemon control plane, and Phase 3 cross-job dynamic scheduling are
-complete. The next work is Phase 4, daemon-plan data plane, which makes exact
-daemon-issued execution tickets the only production input to workers and
-backend data movement.
+privileged daemon control plane, Phase 3 cross-job dynamic scheduling, and
+Phase 4 daemon-plan data plane are complete. The next work is Phase 5, vLLM
+KV end-to-end workload, which makes real KV cache save and restore use the
+daemon-first `TransferIntent` and `TransferReceipt` path.
 
 The active target architecture is:
 
@@ -188,7 +188,7 @@ The active target architecture is:
 
 ## Active Phase
 
-Phase 4: Daemon-Plan Data Plane.
+Phase 5: vLLM KV End-To-End Workload.
 
 Phase 1 is complete:
 
@@ -254,10 +254,19 @@ responses only when all lease responses are ok, and daemon state tests confirm
 multi-relay staging records, reservations, relay quotas, and runtime state are
 removed after completion.
 
+Phase 4 Cut 4 is complete. The importable `turbobus.runtime` wrapper and
+`transfer_selector` application-side route selector have been removed. The
+native Python extension no longer exposes local-planning methods
+`set_transfer_mode`, `fetch_to_gpu`, `offload_to_cpu`,
+`fetch_ranges_to_gpu`, or `offload_ranges_to_cpu`; only exact-plan backend
+primitives remain available for daemon-ticketed execution. Runtime tests now
+protect `runtime_engine` exact-plan conversion helpers and public package
+boundaries instead of old direct/relay/pool route selection.
+
 ## Next Work Items
 
-Current item: Phase 4 Cut 4, legacy Runtime data-plane cleanup and GPU
-correctness gate.
+Current item: Phase 5 Cut 1, vLLM KV save/restore contract audit and real
+workload boundary.
 
 1. Shared schema layer.
    - Status: complete.
@@ -364,17 +373,24 @@ correctness gate.
      expiration, and rescheduling.
 
 12. Daemon-plan data plane.
-   - Status: current.
+   - Status: complete.
    - Cut 1 complete: audit and tighten worker/data-plane execution entry points
      so production paths execute only daemon-issued `ExecutionTicket` plans.
    - Cut 2 complete: extend worker-managed execution from one relay lease to
      daemon-ticketed direct plus multi-relay pooled plans.
    - Cut 3 complete: make staging cleanup and receipt semantics deterministic
      across H2D, D2H, range, direct, relay, pooled, and failure paths.
-   - Cut 4 current: remove, demote, or reroute the legacy `turbobus.runtime`
-     Runtime-local execution path and add the GPU correctness validation gate.
+   - Cut 4 complete: remove the legacy `turbobus.runtime` Runtime-local
+     execution path, remove old application-side route selector code, close
+     native extension local-planning bindings, and document the GPU correctness
+     validation gate.
    - Keep direct, relay, and pooled paths as scheduler outcomes and data-plane
      behaviors, not app-side controls.
+
+13. vLLM KV end-to-end workload.
+   - Status: current.
+   - Cut 1 current: audit the real vLLM KV save/restore boundary and implement
+     the first complete daemon-first workload slice without path controls.
 
 ## Phase 0 Acceptance Criteria
 
@@ -392,10 +408,10 @@ Phase 0 is complete:
 
 ## Latest Validation
 
-Phase 4 Cut 3 validation:
+Phase 4 Cut 4 validation:
 
-- `python -m unittest test.python.integration.test_worker_helper test.python.integration.test_client_worker_transfer test.python.integration.test_daemon_state`
-- `python -m py_compile turbobus\worker\helper.py turbobus\client_transfer.py turbobus\daemon\server.py test\python\integration\test_worker_helper.py test\python\integration\test_client_worker_transfer.py test\python\integration\test_daemon_state.py`
+- `python -m unittest test.python.unit.test_public_client_api test.python.unit.test_runtime_engine test.python.unit.test_backend_cuda test.python.unit.test_worker_cuda_executor test.python.e2e.test_verification test.python.integration.test_client_worker_transfer test.python.integration.test_worker_helper test.python.integration.test_daemon_state`
+- `python -m py_compile turbobus\runtime_engine.py turbobus\backends\cuda.py turbobus\client_transfer.py turbobus\worker\cuda_executor.py turbobus\verification.py test\python\unit\test_public_client_api.py test\python\unit\test_runtime_engine.py test\python\unit\test_backend_cuda.py test\python\unit\test_worker_cuda_executor.py test\python\e2e\test_verification.py test\python\integration\test_client_worker_transfer.py test\python\integration\test_worker_helper.py test\python\integration\test_daemon_state.py`
 - `git diff --check`
 
 Remaining risk:
@@ -407,20 +423,19 @@ Remaining risk:
   relay admission, delayed lease grants, plan expiration, and rescheduling in
   non-GPU control-plane tests. Production behavior still needs to be exercised
   on a real multi-GPU CUDA server under concurrent workload pressure.
-- Phase 4 Cut 3 added deterministic multi-relay lease and staging cleanup in
-  non-GPU tests. It still needs to be exercised on a real multi-GPU CUDA
-  server.
-- The legacy `turbobus.runtime` module still contains importable Runtime-local
-  execution code and must be removed, demoted to explicit legacy-internal
-  tests, or routed through daemon-issued tickets before Phase 4 is considered
-  complete.
-- Phase 4 still needs legacy `turbobus.runtime` removal, demotion, or
-  ticket-routing, plus GPU correctness coverage.
+- Phase 4 is complete in code and non-GPU tests, but daemon-ticketed direct,
+  relay, pooled, H2D, D2H, and range-offset correctness still need to be run
+  on a real multi-GPU CUDA server with the documented
+  `python -m turbobus.verification` commands.
+- Native C++/CUDA build checks were not run in the local Windows environment
+  because `cmake` and `nvcc` are not installed there.
+- Phase 5 now needs real vLLM KV cache save/restore integration beyond the
+  current daemon-first connector and adapter contract tests.
 
 Latest validation:
 
-- `python -m unittest test.python.integration.test_worker_helper test.python.integration.test_client_worker_transfer test.python.integration.test_daemon_state`
-- `python -m py_compile turbobus\\worker\\helper.py turbobus\\client_transfer.py turbobus\\daemon\\server.py test\\python\\integration\\test_worker_helper.py test\\python\\integration\\test_client_worker_transfer.py test\\python\\integration\\test_daemon_state.py`
+- `python -m unittest test.python.unit.test_public_client_api test.python.unit.test_runtime_engine test.python.unit.test_backend_cuda test.python.unit.test_worker_cuda_executor test.python.e2e.test_verification test.python.integration.test_client_worker_transfer test.python.integration.test_worker_helper test.python.integration.test_daemon_state`
+- `python -m py_compile turbobus\\runtime_engine.py turbobus\\backends\\cuda.py turbobus\\client_transfer.py turbobus\\worker\\cuda_executor.py turbobus\\verification.py test\\python\\unit\\test_public_client_api.py test\\python\\unit\\test_runtime_engine.py test\\python\\unit\\test_backend_cuda.py test\\python\\unit\\test_worker_cuda_executor.py test\\python\\e2e\\test_verification.py test\\python\\integration\\test_client_worker_transfer.py test\\python\\integration\\test_worker_helper.py test\\python\\integration\\test_daemon_state.py`
 - `git diff --check`
 
 ## Upcoming Phases
@@ -430,7 +445,7 @@ After Phase 0, proceed in order:
 1. Automatic topology discovery.
 2. Privileged daemon control plane. Complete.
 3. Cross-job dynamic scheduling. Complete.
-4. Daemon-plan data plane. Current.
-5. vLLM KV end-to-end workload.
+4. Daemon-plan data plane. Complete.
+5. vLLM KV end-to-end workload. Current.
 6. Model loading and training offload.
 7. Paper evaluation and hardening.
