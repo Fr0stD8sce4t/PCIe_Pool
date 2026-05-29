@@ -149,6 +149,7 @@ def summarize_load(samples: list[dict]) -> dict:
             "decision_ids": [],
             "topology_snapshot_ids": [],
             "ticket_ids": [],
+            "receipt_ids": [],
             "fallback_reasons": [],
         }
     return {
@@ -176,6 +177,13 @@ def summarize_load(samples: list[dict]) -> dict:
             {sample["topology_snapshot_id"] for sample in samples}
         ),
         "ticket_ids": sorted({sample["ticket_id"] for sample in samples}),
+        "receipt_ids": sorted(
+            {
+                str(sample["receipt"].get("receipt_id", ""))
+                for sample in samples
+                if sample["receipt"].get("receipt_id")
+            }
+        ),
         "fallback_reasons": sorted(
             {sample["fallback_reason"] for sample in samples if sample["fallback_reason"]}
         ),

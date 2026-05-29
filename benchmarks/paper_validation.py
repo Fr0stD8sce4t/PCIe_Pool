@@ -19,6 +19,36 @@ STATE_OFFLOAD_WORKLOAD_KINDS = {
     "training-offload": "training_state",
     "optimizer-offload": "optimizer_state",
 }
+PHASE6_REPORT_SCHEMA = "phase6_unified_v1"
+WORKLOAD_KIND_BY_WORKLOAD = {
+    "model-loading": "model_weights",
+    **STATE_OFFLOAD_WORKLOAD_KINDS,
+    "vllm-kv": "kv_cache",
+}
+REQUIRED_UNIFIED_METRIC_FIELDS = (
+    "report_schema",
+    "workload",
+    "policy",
+    "job_id",
+    "session_id",
+    "workload_kind",
+    "cpu_buffer_id",
+    "gpu_buffer_id",
+    "receipt_ids",
+    "decision_ids",
+    "topology_snapshot_ids",
+    "ticket_ids",
+    "transfer_bytes",
+    "bytes_completed",
+    "direct_bytes",
+    "relay_bytes",
+    "direct_chunks",
+    "relay_chunks",
+    "transfer_ms",
+    "performance_ms",
+    "fallback_reason",
+    "correctness_status",
+)
 
 
 def parse_csv(value: str) -> list[str]:
@@ -404,6 +434,26 @@ def join_values(values) -> str:
     return str(values)
 
 
+def join_metric_values(*values) -> str:
+    joined: list[str] = []
+    for value in values:
+        text = join_values(value)
+        if not text:
+            continue
+        joined.extend(item for item in str(text).split(",") if item)
+    return ",".join(joined)
+
+
+def fallback_reason_value(*values) -> str:
+    return join_metric_values(*values) or "none"
+
+
+def correctness_status(transfer_bytes: int, bytes_completed: int) -> str:
+    if int(transfer_bytes) == int(bytes_completed):
+        return "complete"
+    return "incomplete"
+
+
 def _gib_per_second_value(byte_count: int, elapsed_ms: float) -> float:
     if byte_count <= 0 or elapsed_ms <= 0:
         return 0.0
@@ -415,28 +465,38 @@ def collect_model_metrics(result: dict) -> list[dict[str, object]]:
     if not summary:
         return []
     config = result.get("config", {}) or {}
+    transfer_bytes = as_int(summary.get("bytes"))
+    bytes_completed = as_int(summary.get("bytes_completed"))
+    transfer_ms = as_float(summary.get("median_load_ms"))
     return [
         {
+            "report_schema": PHASE6_REPORT_SCHEMA,
             "workload": "model-loading",
             "policy": str(config.get("policy", "")),
             "job_id": str(config.get("job_id", "")),
             "session_id": str(config.get("session_id", "")),
+            "cpu_buffer_id": str(config.get("source_buffer_id", "")),
+            "gpu_buffer_id": str(config.get("destination_buffer_id", "")),
             "source_buffer_id": str(config.get("source_buffer_id", "")),
             "destination_buffer_id": str(config.get("destination_buffer_id", "")),
             "workload_kind": str(config.get("workload_kind", "")),
             "iterations": as_int(summary.get("iterations")),
-            "ttft_proxy_ms": as_float(summary.get("median_load_ms")),
+            "ttft_proxy_ms": transfer_ms,
+            "transfer_ms": transfer_ms,
+            "performance_ms": transfer_ms,
             "throughput_gib_s": as_float(summary.get("median_gib_per_second")),
-            "transfer_bytes": as_int(summary.get("bytes")),
-            "bytes_completed": as_int(summary.get("bytes_completed")),
+            "transfer_bytes": transfer_bytes,
+            "bytes_completed": bytes_completed,
             "direct_bytes": as_int(summary.get("direct_bytes")),
             "relay_bytes": as_int(summary.get("relay_bytes")),
             "direct_chunks": as_int(summary.get("direct_chunks")),
             "relay_chunks": as_int(summary.get("relay_chunks")),
+            "receipt_ids": join_values(summary.get("receipt_ids")),
             "decision_ids": join_values(summary.get("decision_ids")),
             "topology_snapshot_ids": join_values(summary.get("topology_snapshot_ids")),
             "ticket_ids": join_values(summary.get("ticket_ids")),
-            "fallback_reason": join_values(summary.get("fallback_reasons")),
+            "fallback_reason": fallback_reason_value(summary.get("fallback_reasons")),
+            "correctness_status": correctness_status(transfer_bytes, bytes_completed),
         }
     ]
 
@@ -460,26 +520,37 @@ def collect_training_metrics(
     relay_bytes = as_int(prefetch.get("relay_bytes")) + as_int(offload.get("relay_bytes"))
     direct_chunks = as_int(prefetch.get("direct_chunks")) + as_int(offload.get("direct_chunks"))
     relay_chunks = as_int(prefetch.get("relay_chunks")) + as_int(offload.get("relay_chunks"))
+    transfer_bytes = as_int(prefetch.get("bytes")) + as_int(offload.get("bytes"))
+    bytes_completed = as_int(prefetch.get("bytes_completed")) + as_int(offload.get("bytes_completed"))
+    transfer_ms = as_float(summary.get("median_transfer_ms"))
     return [
         {
+            "report_schema": PHASE6_REPORT_SCHEMA,
             "workload": workload,
             "policy": str(config.get("policy", "")),
             "job_id": str(config.get("job_id", "")),
             "session_id": str(config.get("session_id", "")),
             "cpu_buffer_id": str(config.get("cpu_buffer_id", "")),
             "gpu_buffer_id": str(config.get("gpu_buffer_id", "")),
+            "source_buffer_id": str(config.get("cpu_buffer_id", "")),
+            "destination_buffer_id": str(config.get("gpu_buffer_id", "")),
             "workload_kind": str(config.get("workload_kind", "")),
             "iterations": as_int(summary.get("iterations")),
             "iteration_ms": as_float(summary.get("median_iteration_ms")),
-            "transfer_ms": as_float(summary.get("median_transfer_ms")),
+            "transfer_ms": transfer_ms,
+            "performance_ms": transfer_ms,
             "compute_ms": as_float(summary.get("median_compute_ms")),
             "throughput_gib_s": as_float(summary.get("median_gib_per_second")),
-            "transfer_bytes": as_int(prefetch.get("bytes")) + as_int(offload.get("bytes")),
-            "bytes_completed": as_int(prefetch.get("bytes_completed")) + as_int(offload.get("bytes_completed")),
+            "transfer_bytes": transfer_bytes,
+            "bytes_completed": bytes_completed,
             "direct_bytes": direct_bytes,
             "relay_bytes": relay_bytes,
             "direct_chunks": direct_chunks,
             "relay_chunks": relay_chunks,
+            "receipt_ids": join_metric_values(
+                prefetch.get("receipt_ids"),
+                offload.get("receipt_ids"),
+            ),
             "decision_ids": join_values(
                 [*prefetch.get("decision_ids", ()), *offload.get("decision_ids", ())]
             ),
@@ -494,9 +565,12 @@ def collect_training_metrics(
             ),
             "prefetch_decision_ids": join_values(prefetch.get("decision_ids")),
             "offload_decision_ids": join_values(offload.get("decision_ids")),
-            "fallback_reason": join_values(
+            "prefetch_receipt_ids": join_values(prefetch.get("receipt_ids")),
+            "offload_receipt_ids": join_values(offload.get("receipt_ids")),
+            "fallback_reason": fallback_reason_value(
                 [*prefetch.get("fallback_reasons", ()), *offload.get("fallback_reasons", ())]
             ),
+            "correctness_status": correctness_status(transfer_bytes, bytes_completed),
         }
     ]
 
@@ -508,30 +582,39 @@ def collect_vllm_kv_metrics(summary: dict) -> list[dict[str, object]]:
     result = summary.get("vllm_kv_connector_result", {}) or {}
     if not save or not restore:
         return []
+    transfer_bytes = as_int(restore.get("bytes"))
+    bytes_completed = as_int(restore.get("bytes"))
+    transfer_ms = as_float(restore.get("transfer_ms"))
+    cpu_buffer_id = str(config.get("cpu_buffer_id", ""))
+    gpu_buffer_id = str(config.get("gpu_buffer_id", ""))
     return [
         {
+            "report_schema": PHASE6_REPORT_SCHEMA,
             "workload": "vllm-kv",
             "policy": "daemon-default",
+            "workload_kind": WORKLOAD_KIND_BY_WORKLOAD["vllm-kv"],
             "iterations": 1,
             "ttft_proxy_ms": as_float(restore.get("total_ms")),
-            "transfer_ms": as_float(restore.get("transfer_ms")),
+            "transfer_ms": transfer_ms,
+            "performance_ms": transfer_ms,
             "throughput_gib_s": _gib_per_second_value(
-                as_int(restore.get("bytes")),
-                as_float(restore.get("transfer_ms")),
+                transfer_bytes,
+                transfer_ms,
             ),
-            "transfer_bytes": as_int(restore.get("bytes")),
-            "bytes_completed": as_int(restore.get("bytes")),
+            "transfer_bytes": transfer_bytes,
+            "bytes_completed": bytes_completed,
             "direct_bytes": as_int(restore.get("direct_bytes")),
             "relay_bytes": as_int(restore.get("relay_bytes")),
             "direct_chunks": as_int(restore.get("direct_chunks")),
             "relay_chunks": as_int(restore.get("relay_chunks")),
+            "receipt_ids": join_metric_values(save.get("receipt_ids"), restore.get("receipt_ids")),
             "decision_ids": join_values(restore.get("decision_ids")),
             "topology_snapshot_ids": join_values(restore.get("topology_snapshot_ids")),
             "ticket_ids": join_values(restore.get("ticket_ids")),
             "save_decision_ids": join_values(save.get("decision_ids")),
             "save_topology_snapshot_ids": join_values(save.get("topology_snapshot_ids")),
             "save_ticket_ids": join_values(save.get("ticket_ids")),
-            "fallback_reason": join_values(restore.get("fallback_reason")),
+            "fallback_reason": fallback_reason_value(restore.get("fallback_reason")),
             "save_receipt_ids": join_values(save.get("receipt_ids")),
             "restore_receipt_ids": join_values(restore.get("receipt_ids")),
             "save_ms": as_float(save.get("elapsed_ms")),
@@ -545,8 +628,11 @@ def collect_vllm_kv_metrics(summary: dict) -> list[dict[str, object]]:
             "model": str(config.get("model", "")),
             "job_id": str(config.get("job_id", "")),
             "session_id": str(config.get("session_id", "")),
-            "cpu_buffer_id": str(config.get("cpu_buffer_id", "")),
-            "gpu_buffer_id": str(config.get("gpu_buffer_id", "")),
+            "cpu_buffer_id": cpu_buffer_id,
+            "gpu_buffer_id": gpu_buffer_id,
+            "source_buffer_id": cpu_buffer_id,
+            "destination_buffer_id": gpu_buffer_id,
+            "correctness_status": correctness_status(transfer_bytes, bytes_completed),
         }
     ]
 
@@ -621,7 +707,21 @@ def workload_validation_errors(data_path: Path, metrics: list[dict]) -> list[str
     ]
     if missing_trace:
         errors.append("missing_daemon_trace")
+    errors.extend(unified_report_validation_errors(metrics))
     return errors
+
+
+def unified_report_validation_errors(metrics: list[dict]) -> list[str]:
+    errors = []
+    for metric in metrics:
+        for field in REQUIRED_UNIFIED_METRIC_FIELDS:
+            if field not in metric or metric.get(field) in (None, ""):
+                errors.append(f"missing_{field}")
+        if int(metric.get("bytes_completed", 0) or 0) != int(metric.get("transfer_bytes", 0) or 0):
+            errors.append("bytes_not_fully_completed")
+        if metric.get("correctness_status") != "complete":
+            errors.append("invalid_correctness_status")
+    return sorted(set(errors), key=errors.index)
 
 
 def phase6_workload_validation_errors(workload: str, data_path: Path, metrics: list[dict]) -> list[str]:
@@ -802,19 +902,21 @@ def workload_failed(status: str) -> bool:
 def metric_line(metric: dict) -> str:
     ordered = [
         "workload",
+        "report_schema",
         "policy",
         "job_index",
         "job_id",
         "session_id",
         "workload_kind",
-        "cpu_buffer_id",
-        "gpu_buffer_id",
         "source_buffer_id",
         "destination_buffer_id",
+        "cpu_buffer_id",
+        "gpu_buffer_id",
         "iterations",
         "ttft_proxy_ms",
         "iteration_ms",
         "transfer_ms",
+        "performance_ms",
         "compute_ms",
         "throughput_gib_s",
         "transfer_bytes",
@@ -823,11 +925,14 @@ def metric_line(metric: dict) -> str:
         "relay_bytes",
         "direct_chunks",
         "relay_chunks",
+        "receipt_ids",
         "decision_ids",
         "topology_snapshot_ids",
         "ticket_ids",
         "prefetch_decision_ids",
+        "prefetch_receipt_ids",
         "offload_decision_ids",
+        "offload_receipt_ids",
         "save_decision_ids",
         "save_topology_snapshot_ids",
         "save_ticket_ids",
@@ -840,6 +945,7 @@ def metric_line(metric: dict) -> str:
         "prompt_tokens",
         "shared_prefix",
         "fallback_reason",
+        "correctness_status",
         "log_path",
     ]
     fields = ["paper_metric"]

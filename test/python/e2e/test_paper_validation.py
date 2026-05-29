@@ -153,6 +153,7 @@ class PaperValidationTest(unittest.TestCase):
                 "relay_bytes": 32,
                 "direct_chunks": 2,
                 "relay_chunks": 1,
+                "receipt_ids": ["model-receipt-1"],
                 "decision_ids": ["decision-1"],
                 "topology_snapshot_ids": ["topology-1"],
                 "ticket_ids": ["ticket-1"],
@@ -181,6 +182,7 @@ class PaperValidationTest(unittest.TestCase):
                     "relay_bytes": 32,
                     "direct_chunks": 2,
                     "relay_chunks": 1,
+                    "receipt_ids": ["prefetch-receipt"],
                     "decision_ids": ["prefetch-decision"],
                     "topology_snapshot_ids": ["topology-1"],
                     "ticket_ids": ["prefetch-ticket"],
@@ -193,6 +195,7 @@ class PaperValidationTest(unittest.TestCase):
                     "relay_bytes": 8,
                     "direct_chunks": 1,
                     "relay_chunks": 1,
+                    "receipt_ids": ["offload-receipt"],
                     "decision_ids": ["offload-decision"],
                     "topology_snapshot_ids": ["topology-1"],
                     "ticket_ids": ["offload-ticket"],
@@ -221,8 +224,12 @@ class PaperValidationTest(unittest.TestCase):
         self.assertEqual(model_metric["session_id"], "model-session")
         self.assertEqual(model_metric["source_buffer_id"], "cpu-buffer")
         self.assertEqual(model_metric["destination_buffer_id"], "gpu-buffer")
+        self.assertEqual(model_metric["report_schema"], "phase6_unified_v1")
         self.assertEqual(model_metric["workload_kind"], "model_weights")
+        self.assertEqual(model_metric["receipt_ids"], "model-receipt-1")
         self.assertEqual(model_metric["transfer_bytes"], 96)
+        self.assertEqual(model_metric["performance_ms"], 12.5)
+        self.assertEqual(model_metric["correctness_status"], "complete")
         self.assertEqual(model_metric["decision_ids"], "decision-1")
         self.assertEqual(model_metric["ticket_ids"], "ticket-1")
         self.assertEqual(training_metric["iteration_ms"], 20.0)
@@ -232,9 +239,13 @@ class PaperValidationTest(unittest.TestCase):
         self.assertEqual(training_metric["gpu_buffer_id"], "gpu-buffer")
         self.assertEqual(training_metric["workload"], "training-offload")
         self.assertEqual(training_metric["workload_kind"], "training_state")
+        self.assertEqual(training_metric["report_schema"], "phase6_unified_v1")
+        self.assertEqual(training_metric["receipt_ids"], "prefetch-receipt,offload-receipt")
         self.assertEqual(training_metric["transfer_bytes"], 120)
         self.assertEqual(training_metric["direct_bytes"], 80)
         self.assertEqual(training_metric["relay_chunks"], 2)
+        self.assertEqual(training_metric["performance_ms"], 15.0)
+        self.assertEqual(training_metric["correctness_status"], "complete")
         self.assertEqual(
             training_metric["decision_ids"],
             "prefetch-decision,offload-decision",
@@ -243,6 +254,7 @@ class PaperValidationTest(unittest.TestCase):
         self.assertEqual(optimizer_metric["workload"], "optimizer-offload")
         self.assertEqual(optimizer_metric["job_id"], "optimizer-job")
         self.assertEqual(optimizer_metric["workload_kind"], "optimizer_state")
+        self.assertEqual(optimizer_metric["receipt_ids"], "prefetch-receipt,offload-receipt")
 
     def test_collect_vllm_kv_metrics_from_connector_summary(self) -> None:
         summary = {
@@ -289,6 +301,9 @@ class PaperValidationTest(unittest.TestCase):
         metric = paper_validation.collect_vllm_kv_metrics(summary)[0]
 
         self.assertEqual(metric["workload"], "vllm-kv")
+        self.assertEqual(metric["report_schema"], "phase6_unified_v1")
+        self.assertEqual(metric["workload_kind"], "kv_cache")
+        self.assertEqual(metric["receipt_ids"], "save-r,restore-r")
         self.assertEqual(metric["transfer_bytes"], 128)
         self.assertEqual(metric["direct_bytes"], 96)
         self.assertEqual(metric["relay_bytes"], 32)
@@ -297,6 +312,7 @@ class PaperValidationTest(unittest.TestCase):
         self.assertEqual(metric["ticket_ids"], "restore-ticket")
         self.assertEqual(metric["save_ticket_ids"], "save-ticket")
         self.assertEqual(metric["fallback_reason"], "quota")
+        self.assertEqual(metric["correctness_status"], "complete")
         self.assertEqual(metric["save_layer_count"], 2)
         self.assertEqual(metric["restore_layers"], 2)
         self.assertEqual(metric["prompt_tokens"], 256)
@@ -346,14 +362,29 @@ class PaperValidationTest(unittest.TestCase):
                 [
                     {
                         "workload": "model-loading",
+                        "report_schema": "phase6_unified_v1",
+                        "policy": "daemon-default",
                         "decision_ids": "decision-1",
                         "topology_snapshot_ids": "topology-1",
                         "ticket_ids": "ticket-1",
+                        "receipt_ids": "",
                         "job_id": "job-1",
                         "session_id": "session-1",
+                        "cpu_buffer_id": "cpu-buffer",
+                        "gpu_buffer_id": "gpu-buffer",
                         "source_buffer_id": "",
                         "destination_buffer_id": "gpu-buffer",
                         "workload_kind": "generic",
+                        "transfer_bytes": 64,
+                        "bytes_completed": 32,
+                        "direct_bytes": 32,
+                        "relay_bytes": 0,
+                        "direct_chunks": 1,
+                        "relay_chunks": 0,
+                        "transfer_ms": 1.0,
+                        "performance_ms": 1.0,
+                        "fallback_reason": "none",
+                        "correctness_status": "incomplete",
                     }
                 ],
             )
@@ -363,14 +394,29 @@ class PaperValidationTest(unittest.TestCase):
                 [
                     {
                         "workload": "training-offload",
+                        "report_schema": "phase6_unified_v1",
+                        "policy": "daemon-default",
                         "decision_ids": "decision-1",
                         "topology_snapshot_ids": "topology-1",
                         "ticket_ids": "ticket-1",
+                        "receipt_ids": "",
                         "job_id": "job-1",
                         "session_id": "session-1",
                         "cpu_buffer_id": "cpu-buffer",
                         "gpu_buffer_id": "gpu-buffer",
                         "workload_kind": "model_weights",
+                        "source_buffer_id": "cpu-buffer",
+                        "destination_buffer_id": "gpu-buffer",
+                        "transfer_bytes": 64,
+                        "bytes_completed": 32,
+                        "direct_bytes": 32,
+                        "relay_bytes": 0,
+                        "direct_chunks": 1,
+                        "relay_chunks": 0,
+                        "transfer_ms": 1.0,
+                        "performance_ms": 1.0,
+                        "fallback_reason": "none",
+                        "correctness_status": "incomplete",
                     }
                 ],
             )
@@ -380,14 +426,29 @@ class PaperValidationTest(unittest.TestCase):
                 [
                     {
                         "workload": "optimizer-offload",
+                        "report_schema": "phase6_unified_v1",
+                        "policy": "daemon-default",
                         "decision_ids": "decision-1",
                         "topology_snapshot_ids": "topology-1",
                         "ticket_ids": "ticket-1",
+                        "receipt_ids": "",
                         "job_id": "job-1",
                         "session_id": "session-1",
                         "cpu_buffer_id": "cpu-buffer",
                         "gpu_buffer_id": "gpu-buffer",
                         "workload_kind": "training_state",
+                        "source_buffer_id": "cpu-buffer",
+                        "destination_buffer_id": "gpu-buffer",
+                        "transfer_bytes": 64,
+                        "bytes_completed": 32,
+                        "direct_bytes": 32,
+                        "relay_bytes": 0,
+                        "direct_chunks": 1,
+                        "relay_chunks": 0,
+                        "transfer_ms": 1.0,
+                        "performance_ms": 1.0,
+                        "fallback_reason": "none",
+                        "correctness_status": "incomplete",
                     }
                 ],
             )
@@ -413,19 +474,32 @@ class PaperValidationTest(unittest.TestCase):
             "model-loading",
             [
                 {
+                    "report_schema": "phase6_unified_v1",
                     "workload": "model-loading",
                     "policy": "daemon-default",
                     "job_id": "job-1",
                     "session_id": "session-1",
                     "source_buffer_id": "cpu-buffer",
                     "destination_buffer_id": "gpu-buffer",
+                    "cpu_buffer_id": "cpu-buffer",
+                    "gpu_buffer_id": "gpu-buffer",
                     "workload_kind": "model_weights",
                     "ttft_proxy_ms": 12.5,
+                    "transfer_ms": 12.5,
+                    "performance_ms": 12.5,
                     "throughput_gib_s": 8.0,
                     "transfer_bytes": 96,
+                    "bytes_completed": 96,
+                    "direct_bytes": 64,
+                    "relay_bytes": 32,
+                    "direct_chunks": 2,
+                    "relay_chunks": 1,
+                    "receipt_ids": "model-receipt-1",
                     "decision_ids": "decision-1",
                     "topology_snapshot_ids": "topology-1",
                     "ticket_ids": "ticket-1",
+                    "fallback_reason": "none",
+                    "correctness_status": "complete",
                 }
             ],
         )
@@ -436,7 +510,9 @@ class PaperValidationTest(unittest.TestCase):
         self.assertIn("session_id=session-1", summary)
         self.assertIn("policy=daemon-default", summary)
         self.assertIn("paper_metric workload=model-loading", summary)
+        self.assertIn("report_schema=phase6_unified_v1", summary)
         self.assertIn("workload_kind=model_weights", summary)
+        self.assertIn("receipt_ids=model-receipt-1", summary)
         self.assertIn("source_buffer_id=cpu-buffer", summary)
         self.assertIn("destination_buffer_id=gpu-buffer", summary)
         self.assertIn("decision_ids=decision-1", summary)
@@ -532,11 +608,17 @@ class PaperValidationTest(unittest.TestCase):
         )
         self.assertEqual(result["workloads"][0]["metrics"][0]["workload"], "training-offload")
         self.assertEqual(result["workloads"][1]["metrics"][0]["workload"], "optimizer-offload")
+        self.assertEqual(
+            [item["metrics"][0]["receipt_ids"] for item in result["workloads"]],
+            ["prefetch-receipt,offload-receipt", "prefetch-receipt,offload-receipt"],
+        )
         summary = paper_validation.compact_summary(result)
         self.assertIn("paper_metric workload=training-offload", summary)
         self.assertIn("paper_metric workload=optimizer-offload", summary)
+        self.assertIn("report_schema=phase6_unified_v1", summary)
         self.assertIn("workload_kind=training_state", summary)
         self.assertIn("workload_kind=optimizer_state", summary)
+        self.assertIn("receipt_ids=prefetch-receipt,offload-receipt", summary)
 
     def test_run_validation_collects_vllm_kv_log_and_writes_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -554,12 +636,16 @@ class PaperValidationTest(unittest.TestCase):
         workload = result["workloads"][0]
         self.assertEqual(workload["status"], "ok")
         self.assertEqual(workload["metrics"][0]["workload"], "vllm-kv")
+        self.assertEqual(workload["metrics"][0]["workload_kind"], "kv_cache")
+        self.assertEqual(workload["metrics"][0]["receipt_ids"], "save-r,restore-r")
         self.assertEqual(workload["metrics"][0]["decision_ids"], "restore-d")
         self.assertEqual(workload["metrics"][0]["save_decision_ids"], "save-d")
         self.assertEqual(workload["data"]["vllm_kv_connector_restore"]["decision_ids"], "restore-d")
         self.assertTrue(output_exists)
         summary = paper_validation.compact_summary(result)
         self.assertIn("paper_metric workload=vllm-kv", summary)
+        self.assertIn("workload_kind=kv_cache", summary)
+        self.assertIn("receipt_ids=save-r,restore-r", summary)
         self.assertIn("save_decision_ids=save-d", summary)
 
     def test_run_validation_collects_multi_job_vllm_kv_logs_and_writes_json(self) -> None:
@@ -756,6 +842,7 @@ def training_output(workload_kind: str) -> dict:
                 "relay_bytes": 32,
                 "direct_chunks": 1,
                 "relay_chunks": 1,
+                "receipt_ids": ["prefetch-receipt"],
                 "decision_ids": [f"{workload_kind}-prefetch-decision"],
                 "topology_snapshot_ids": ["topology-1"],
                 "ticket_ids": [f"{workload_kind}-prefetch-ticket"],
@@ -768,6 +855,7 @@ def training_output(workload_kind: str) -> dict:
                 "relay_bytes": 32,
                 "direct_chunks": 1,
                 "relay_chunks": 1,
+                "receipt_ids": ["offload-receipt"],
                 "decision_ids": [f"{workload_kind}-offload-decision"],
                 "topology_snapshot_ids": ["topology-1"],
                 "ticket_ids": [f"{workload_kind}-offload-ticket"],

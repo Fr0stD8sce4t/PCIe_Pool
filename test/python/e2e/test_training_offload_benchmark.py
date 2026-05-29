@@ -83,6 +83,20 @@ class TrainingOffloadBenchmarkTest(unittest.TestCase):
         self.assertEqual(result["summary"]["prefetch"]["direct_bytes"], 64)
         self.assertEqual(result["summary"]["offload"]["relay_bytes"], 64)
         self.assertEqual(
+            result["summary"]["prefetch"]["receipt_ids"],
+            [
+                "receipt-training-offload-run-1-measure-0-prefetch",
+                "receipt-training-offload-run-1-measure-1-prefetch",
+            ],
+        )
+        self.assertEqual(
+            result["summary"]["offload"]["receipt_ids"],
+            [
+                "receipt-training-offload-run-1-measure-0-offload",
+                "receipt-training-offload-run-1-measure-1-offload",
+            ],
+        )
+        self.assertEqual(
             result["summary"]["prefetch"]["decision_ids"],
             [
                 "decision-training-offload-run-1-measure-0-prefetch",
@@ -115,7 +129,9 @@ class TrainingOffloadBenchmarkTest(unittest.TestCase):
             "--iterations",
             "1",
             "--run-id",
-            "optimizer-run",
+            "run-1",
+            "--intent-prefix",
+            "optimizer-offload",
         )
         client = FakeClient()
 
@@ -126,6 +142,14 @@ class TrainingOffloadBenchmarkTest(unittest.TestCase):
         for intent in client.submitted:
             self.assertEqual(intent.workload_kind, WorkloadKind.OPTIMIZER_STATE)
             self.assertEqual(intent.policy_hints, {})
+        self.assertEqual(
+            result["summary"]["prefetch"]["receipt_ids"],
+            ["receipt-optimizer-offload-run-1-measure-0-prefetch"],
+        )
+        self.assertEqual(
+            result["summary"]["offload"]["receipt_ids"],
+            ["receipt-optimizer-offload-run-1-measure-0-offload"],
+        )
         summary = training_offload.compact_summary(result)
         self.assertIn("workload_kind=optimizer_state", summary)
         self.assertIn("training_prefetch_receipt", summary)

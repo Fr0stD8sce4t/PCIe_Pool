@@ -265,6 +265,7 @@ def empty_transfer_summary() -> dict:
         "decision_ids": [],
         "topology_snapshot_ids": [],
         "ticket_ids": [],
+        "receipt_ids": [],
         "fallback_reasons": [],
     }
 
@@ -295,6 +296,13 @@ def summarize_transfer_side(samples: list[dict], operation: str) -> dict:
             {sample[operation]["topology_snapshot_id"] for sample in samples}
         ),
         "ticket_ids": sorted({sample[operation]["ticket_id"] for sample in samples}),
+        "receipt_ids": sorted(
+            {
+                str(sample[operation]["receipt"].get("receipt_id", ""))
+                for sample in samples
+                if sample[operation]["receipt"].get("receipt_id")
+            }
+        ),
         "fallback_reasons": sorted(
             {
                 sample[operation]["fallback_reason"]

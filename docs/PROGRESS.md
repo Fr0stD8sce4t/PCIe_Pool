@@ -6,10 +6,9 @@ The active project plan has been reset to paper-parity execution.
 
 Phase 0 realignment, Phase 1 automatic topology discovery, Phase 2
 privileged daemon control plane, Phase 3 cross-job dynamic scheduling, Phase 4
-daemon-plan data plane, and Phase 5 vLLM KV end-to-end workload are complete.
-The next work is Phase 6, model loading and training offload, which extends
-the same daemon-first `TransferIntent` and `TransferReceipt` path beyond KV
-cache movement.
+daemon-plan data plane, Phase 5 vLLM KV end-to-end workload, and Phase 6 model
+loading and training offload are complete in the local daemon-first code path.
+The next work is Phase 7, paper evaluation and hardening.
 
 The active target architecture is:
 
@@ -20,8 +19,9 @@ The active target architecture is:
 - workers and data-plane backends execute exact ticketed plans;
 - completion returns TransferReceipt;
 - vLLM KV cache save/restore is the first completed full workload target;
-- model weight loading and training or optimizer state offload are the next
-  workload targets.
+- model weight loading and training or optimizer state offload now share the
+  same public transfer and report path;
+- paper evaluation and hardening are the next workload validation targets.
 
 ## Completed Planning Work
 
@@ -191,7 +191,7 @@ The active target architecture is:
 
 ## Active Phase
 
-Phase 6: Model Loading And Training Offload.
+Phase 7: Paper Evaluation And Hardening.
 
 Phase 1 is complete:
 
@@ -277,9 +277,17 @@ job/session/buffer/prefix identities to each job, aggregates per-job daemon
 trace output for fairness audits, and rejects missing per-job daemon trace
 without adding target GPU, relay GPU, mode, or direct/relay/pool controls.
 
+Phase 6 is complete. Model-loading, training-state offload, optimizer-state
+offload, and vLLM KV validation now share the same public client API and the
+same `phase6_unified_v1` correctness/performance report shape. Paper
+validation requires receipt ids, decision ids, topology snapshot ids, ticket
+ids, bytes, completion status, timing, path split, fallback reason, workload
+kind, job/session identity, and registered buffer identity for every workload.
+
 ## Next Work Items
 
-Current item: Phase 6 Cut 3, unified correctness and performance report.
+Current item: Phase 7 Cut 1, evaluation matrix and server validation command
+inventory.
 
 1. Shared schema layer.
    - Status: complete.
@@ -418,7 +426,7 @@ Current item: Phase 6 Cut 3, unified correctness and performance report.
      log path to the paper-validation JSON and summary.
 
 14. Model loading and training offload.
-   - Status: current.
+   - Status: complete.
    - Cut 1 complete: added `docs/PHASE6_WORKLOAD_BOUNDARY_INVENTORY.md`,
      confirmed model-loading and training-offload benchmarks and adapters use
      public `TransferIntent` and `TransferReceipt` paths, added explicit
@@ -432,10 +440,20 @@ Current item: Phase 6 Cut 3, unified correctness and performance report.
      validation to represent `workload_kind=training_state`; added focused
      scheduler tests proving `model_weights`, `training_state`, and
      `optimizer_state` reach policy metadata and request charge accounting.
-   - Current item: Phase 6 Cut 3, unified correctness and performance report.
-   - Next, make paper validation report vLLM KV, model loading,
-     training-state offload, and optimizer-state offload through one shared
-     correctness and performance shape.
+   - Cut 3 complete: added the `phase6_unified_v1` shared paper-validation
+     report schema across vLLM KV, model-loading, training-offload, and
+     optimizer-offload; added receipt-id summaries to model-loading and
+     training-offload benchmark outputs; and made validation reject missing
+     unified report fields, incomplete byte completion, or invalid correctness
+     status without adding physical path controls.
+
+15. Paper evaluation and hardening.
+   - Status: current.
+   - Current item: Phase 7 Cut 1, evaluation matrix and server validation
+     command inventory.
+   - Next, define the server evaluation matrix and exact commands for
+     baseline policy versus daemon-scheduled TurboBus runs on 2, 4, and 8 GPU
+     systems.
 
 ## Phase 0 Acceptance Criteria
 
@@ -452,6 +470,12 @@ Phase 0 is complete:
 - GPU tests are clearly marked and runnable on CUDA hardware.
 
 ## Latest Validation
+
+Phase 6 Cut 3 validation:
+
+- `python -m unittest test.python.e2e.test_paper_validation test.python.e2e.test_model_loading_benchmark test.python.e2e.test_training_offload_benchmark test.python.unit.test_daemon_scheduler`
+- `python -m py_compile benchmarks\paper_validation.py benchmarks\model_loading.py benchmarks\training_offload.py test\python\e2e\test_paper_validation.py test\python\e2e\test_model_loading_benchmark.py test\python\e2e\test_training_offload_benchmark.py`
+- `git diff --check`
 
 Phase 6 Cut 2 validation:
 
@@ -496,10 +520,10 @@ Remaining risk:
 - Phase 5 is complete in code and local non-GPU validation, but the single-job
   and multi-job vLLM KV paper-validation commands still need to be exercised on
   a CUDA server with vLLM installed and a TurboBus daemon running.
-- Phase 6 Cut 2 is complete. Unified correctness and performance reporting
-  across vLLM KV, model loading, training-state offload, and optimizer-state
-  offload still needs to be finished in Cut 3, and Phase 6 server validation
-  still needs to be exercised on a CUDA server with a running TurboBus daemon.
+- Phase 6 is complete in the local code and non-GPU validation path, but
+  model-loading, training-state offload, optimizer-state offload, and unified
+  paper-validation output still need to be exercised on a CUDA server with a
+  running TurboBus daemon.
 
 ## Upcoming Phases
 
@@ -510,5 +534,5 @@ After Phase 0, proceed in order:
 3. Cross-job dynamic scheduling. Complete.
 4. Daemon-plan data plane. Complete.
 5. vLLM KV end-to-end workload. Complete.
-6. Model loading and training offload. Current.
-7. Paper evaluation and hardening.
+6. Model loading and training offload. Complete.
+7. Paper evaluation and hardening. Current.

@@ -77,6 +77,10 @@ class ModelLoadingBenchmarkTest(unittest.TestCase):
         self.assertEqual(result["summary"]["direct_bytes"], 64)
         self.assertEqual(result["summary"]["relay_bytes"], 64)
         self.assertEqual(
+            result["summary"]["receipt_ids"],
+            ["receipt-model-load-run-1-measure-0", "receipt-model-load-run-1-measure-1"],
+        )
+        self.assertEqual(
             result["summary"]["decision_ids"],
             ["decision-model-load-run-1-measure-0", "decision-model-load-run-1-measure-1"],
         )

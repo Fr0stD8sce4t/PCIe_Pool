@@ -96,23 +96,29 @@ Scheduler policy input:
   config, metrics, and summary output are preserved without target GPU, relay
   GPU, mode, or pool controls.
 
-## Remaining Phase 6 Cuts
+## Completed In Cut 3
 
-Cut 3: unified correctness and performance report.
-
-- Add a shared paper-validation report shape across vLLM KV, model loading,
-  training state, and optimizer state.
-- Require receipt ids, decision ids, topology snapshot ids, ticket ids, bytes,
-  timing, path split, fallback reason, workload kind, job/session identity, and
-  registered buffer identity for every workload.
-- Keep paper validation as a consumer of public benchmark outputs, not a core
+- Added the shared `phase6_unified_v1` paper-validation report schema across
+  vLLM KV, model loading, training-state offload, and optimizer-state offload.
+- Required every workload metric to include receipt ids, decision ids,
+  topology snapshot ids, ticket ids, bytes, completion status, timing, path
+  split, fallback reason, workload kind, job/session identity, and registered
+  buffer identity.
+- Added receipt-id summaries to model-loading and training-offload benchmark
+  JSON outputs so paper validation can compare all workloads through public
+  benchmark evidence.
+- Made paper validation reject missing unified report fields, incomplete byte
+  completion, or invalid correctness status.
+- Kept paper validation as a consumer of public benchmark outputs, not a core
   scheduling API.
 
-Cut 4: Phase 6 server validation gate.
+## Phase 6 Completion
 
-- Document and test the CUDA-server command set for model loading,
-  training-state offload, and optimizer-state offload.
-- The commands must run through the public client API and a running TurboBus
-  daemon.
-- The validation output must be auditable from workload request to daemon
-  receipt.
+Phase 6 is complete in the local daemon-first code and non-GPU validation
+path. Model loading, training-state offload, optimizer-state offload, and vLLM
+KV now share the same public API evidence shape.
+
+The remaining CUDA-server work belongs to Phase 7 paper evaluation and
+hardening. It should exercise the unified report schema on real multi-GPU
+servers with a running TurboBus daemon, but it must not add application-side
+direct, relay, pooled, target GPU, or relay GPU controls.

@@ -12,7 +12,7 @@ new architecture rather than preserve application-side route selection.
 
 ## Immediate Functional Target
 
-Begin Phase 6: Model Loading And Training Offload.
+Begin Phase 7: Paper Evaluation And Hardening.
 
 Phase 0 is complete. The public examples and benchmarks now use daemon-first
 client APIs, and the old Runtime-shaped benchmark/example entry points have
@@ -25,19 +25,22 @@ with path capabilities, and fails production startup clearly when discovery
 cannot satisfy policy.
 
 Phase 2 daemon-owned resource authority, Phase 3 cross-job dynamic scheduling,
-Phase 4 daemon-plan data plane, and Phase 5 vLLM KV end-to-end workload are
-complete. The next target is Phase 6 model loading and training offload:
+Phase 4 daemon-plan data plane, Phase 5 vLLM KV end-to-end workload, and
+Phase 6 model loading and training offload are complete in the local
+daemon-first code path. The next target is Phase 7 paper evaluation and
+hardening:
 
-1. Convert model weight bucket loading into `TransferIntent`.
-2. Convert training or optimizer state offload into `TransferIntent` for H2D
-   and D2H directions.
-3. Include workload kind in scheduler policy.
-4. Unify correctness and performance reporting across vLLM KV, model loading,
-   and training offload.
+1. Define the server evaluation matrix for 2, 4, and 8 GPU systems.
+2. Run baseline policy versus daemon-scheduled TurboBus.
+3. Cover single-job, multi-job, fairness, relay contention, and interference
+   cases.
+4. Report p50 and p99 latency, throughput, PCIe utilization, relay impact,
+   bytes moved, path split, failure recovery, and isolation with daemon trace
+   ids.
 
 ## Current
 
-Phase 6: Model Loading And Training Offload.
+Phase 7: Paper Evaluation And Hardening.
 
 Phase 3 is complete. The daemon now keeps cross-job queue state, runtime
 resource state, weighted scheduling inputs, relay admission state, delayed
@@ -53,7 +56,12 @@ Phase 5 is complete. vLLM KV save and restore now use the daemon-first
 single-job and concurrent multi-job trace output without application-side
 physical path selection.
 
-Current item: Phase 6 Cut 3, unified correctness and performance report.
+Phase 6 is complete. Model loading, training-state offload, optimizer-state
+offload, and vLLM KV validation now share the same public client path and the
+same paper-validation correctness/performance report shape.
+
+Current item: Phase 7 Cut 1, evaluation matrix and server validation command
+inventory.
 
 ### Phase 3 Cut 1
 
@@ -330,9 +338,9 @@ Multi-job server command:
 python benchmarks/paper_validation.py --workloads vllm-kv --session-id vllm-kv-paper --job-id vllm-kv-paper --cpu-buffer-id vllm-kv-cpu-buffer --gpu-buffer-id vllm-kv-gpu-buffer --daemon-socket-path /tmp/turbobusd.sock --vllm-model <vllm-compatible-model> --vllm-job-count 2 --vllm-restore-blocks 8 --vllm-matched-tokens 128 --vllm-prompt-repeat 64 --vllm-enforce-eager --output-dir benchmarks/results/paper_validation_vllm_kv_multi_job --json-output benchmarks/results/paper_validation_vllm_kv_multi_job/result.json --summary-output benchmarks/results/paper_validation_vllm_kv_multi_job/summary.txt
 ```
 
-## Phase 6 Current Work
+## Phase 6 Completed Work
 
-Current item: Phase 6 Cut 3, unified correctness and performance report.
+Phase 6 is complete.
 
 ### Phase 6 Cut 1
 
@@ -408,7 +416,7 @@ Completed output:
 
 ### Phase 6 Cut 3
 
-Status: current.
+Status: complete.
 
 - Add a shared paper-validation report shape across vLLM KV, model loading,
   training state, and optimizer state.
@@ -418,13 +426,49 @@ Status: current.
 - Keep paper validation as a consumer of public benchmark outputs, not a core
   scheduling API.
 
+Completed output:
+
+- added the `phase6_unified_v1` paper-validation report schema across vLLM
+  KV, model-loading, training-offload, and optimizer-offload metrics;
+- made every workload metric carry receipt ids, decision ids, topology
+  snapshot ids, ticket ids, bytes, completion status, timing, path split,
+  fallback reason, workload kind, job/session identity, and registered buffer
+  identity;
+- added receipt-id summaries to model-loading and training-offload benchmark
+  JSON outputs so paper validation consumes public benchmark evidence rather
+  than core scheduler internals;
+- made paper validation reject incomplete unified reports or byte-completion
+  mismatches;
+- kept physical path selection out of benchmarks, adapters, and validation
+  commands.
+
+## Phase 7 Current Work
+
+Current item: Phase 7 Cut 1, evaluation matrix and server validation command
+inventory.
+
+### Phase 7 Cut 1
+
+Status: current.
+
+- Define the server evaluation matrix for 2, 4, and 8 GPU systems.
+- List the exact paper-validation commands for vLLM KV, model loading,
+  training-state offload, and optimizer-state offload on a running TurboBus
+  daemon.
+- Specify baseline policy versus daemon-scheduled TurboBus runs without
+  adding application-side physical path controls.
+- Require output traceability from workload request to daemon decision,
+  topology snapshot, execution ticket, transfer receipt, path split, timing,
+  and failure or fallback reason.
+- Keep Phase 7 planning and validation code as consumers of the public client
+  API and existing paper-validation report schema.
+
 Expected output:
 
-- one paper-validation JSON and summary shape can compare vLLM KV,
-  model-loading, training-offload, and optimizer-offload evidence;
-- each workload report is auditable from public workload request to daemon
-  receipt and scheduled path split;
-- no benchmark or adapter gains physical path selection.
+- a server-run command matrix that can reproduce Phase 7 experiments without
+  changing benchmark or adapter APIs;
+- clear pass/fail criteria for paper evaluation traces and metrics;
+- no Phase 7 implementation should start before this current cut is completed.
 
 ## Phase 0 Code Cuts
 
@@ -928,5 +972,5 @@ Proceed in this order:
 3. Cross-job dynamic scheduling. Complete.
 4. Daemon-plan data plane. Complete.
 5. vLLM KV end-to-end workload. Complete.
-6. Model loading and training offload. Current.
-7. Paper evaluation and hardening.
+6. Model loading and training offload. Complete.
+7. Paper evaluation and hardening. Current.
