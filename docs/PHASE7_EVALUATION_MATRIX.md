@@ -177,6 +177,23 @@ Every accepted paper-validation result must include:
 - vLLM multi-job runs with one metric per job and distinct job/session/buffer
   identities.
 
+## Result Checker
+
+After each paper-validation run, validate the result JSON or compact summary
+with the Phase 7 checker:
+
+```bash
+python benchmarks/phase7_result_check.py \
+  benchmarks/results/phase7/2gpu/turbobus-daemon/result.json \
+  --json-output benchmarks/results/phase7/2gpu/turbobus-daemon/check.json
+```
+
+The checker reads existing paper-validation output and reports machine-readable
+errors for missing receipt ids, decision ids, topology snapshot ids, ticket
+ids, path split, byte-completion mismatches, fallback or failure state, and
+multi-job identity problems. It does not create transfer plans and does not
+touch scheduler or data-plane modules.
+
 ## Pass/Fail Criteria
 
 A run passes only when:
@@ -184,6 +201,7 @@ A run passes only when:
 - every selected workload exits with status `ok`;
 - every workload has at least one `paper_metric` line;
 - no validation errors are present in the summary;
+- `benchmarks/phase7_result_check.py` returns exit code 0;
 - `bytes_completed` equals `transfer_bytes` for every metric;
 - every metric is traceable from workload request to receipt, scheduler
   decision, topology snapshot, execution ticket, and path split;

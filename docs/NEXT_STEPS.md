@@ -60,7 +60,7 @@ Phase 6 is complete. Model loading, training-state offload, optimizer-state
 offload, and vLLM KV validation now share the same public client path and the
 same paper-validation correctness/performance report shape.
 
-Current item: Phase 7 Cut 2, paper-validation result checker.
+Current item: Phase 7 Cut 3, baseline versus TurboBus comparison summary.
 
 ### Phase 3 Cut 1
 
@@ -443,7 +443,7 @@ Completed output:
 
 ## Phase 7 Current Work
 
-Current item: Phase 7 Cut 2, paper-validation result checker.
+Current item: Phase 7 Cut 3, baseline versus TurboBus comparison summary.
 
 ### Phase 7 Cut 1
 
@@ -476,7 +476,7 @@ Completed output:
 
 ### Phase 7 Cut 2
 
-Status: current.
+Status: complete.
 
 - Add a small result-checking command or helper for Phase 7 paper-validation
   outputs.
@@ -490,12 +490,38 @@ Status: current.
   `benchmarks/` or another experiment-facing path and must not become a
   scheduler API.
 
+Completed output:
+
+- added `benchmarks/phase7_result_check.py`, which consumes paper-validation
+  JSON or compact summary output and emits a machine-readable check report
+  with exit code 0 or 1;
+- validates `phase6_unified_v1` metrics for receipt ids, decision ids,
+  topology snapshot ids, ticket ids, bytes, path split, timing, fallback
+  reason, correctness status, workload kind, job/session identity, and buffer
+  identity;
+- reports multi-job vLLM identity problems such as repeated job, session, CPU
+  buffer, or GPU buffer ids;
+- updated the Phase 7 matrix to include the checker command;
+- kept the checker outside scheduler and data-plane modules and did not add
+  physical path controls.
+
+### Phase 7 Cut 3
+
+Status: current.
+
+- Add a comparison summary for Phase 7 result-checker-approved runs.
+- The summary should consume baseline-label and `turbobus-daemon` result JSON
+  files and report comparable workload metrics such as transfer time,
+  throughput, bytes moved, direct/relay path split, fallback reason, and
+  p50/p99 fields when repeated-run data is available.
+- Keep comparison logic in experiment-facing benchmark tooling, not scheduler,
+  daemon, worker, or adapter modules.
+
 Expected output:
 
-- server operators can verify Phase 7 result files after each run without
-  manually inspecting every `paper_metric` line;
-- the checker protects paper-evaluation traceability without adding physical
-  path controls.
+- server operators can compare baseline and TurboBus result files without
+  manually reading each paper-validation JSON;
+- comparisons preserve trace ids and do not imply app-side path selection.
 
 ## Phase 0 Code Cuts
 

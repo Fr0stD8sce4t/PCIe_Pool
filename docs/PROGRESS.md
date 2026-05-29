@@ -286,7 +286,7 @@ kind, job/session identity, and registered buffer identity for every workload.
 
 ## Next Work Items
 
-Current item: Phase 7 Cut 2, paper-validation result checker.
+Current item: Phase 7 Cut 3, baseline versus TurboBus comparison summary.
 
 1. Shared schema layer.
    - Status: complete.
@@ -456,9 +456,15 @@ Current item: Phase 7 Cut 2, paper-validation result checker.
      do not add application-side target GPU, relay GPU, mode, or path controls.
      Benchmark CLI entrypoints now run from the repository root without manual
      `PYTHONPATH` setup.
-   - Current item: Phase 7 Cut 2, paper-validation result checker.
-   - Next, add a result-checking command or helper that consumes existing
-     Phase 7 paper-validation output and validates the unified trace contract.
+   - Cut 2 complete: added `benchmarks/phase7_result_check.py`, a standalone
+     experiment-facing checker that consumes paper-validation JSON or compact
+     summary output, validates the `phase6_unified_v1` trace contract, reports
+     machine-readable errors for missing ids, path split, completion mismatch,
+     fallback/failure state, and multi-job identity problems, and exits nonzero
+     on failure without touching scheduler or data-plane modules.
+   - Current item: Phase 7 Cut 3, baseline versus TurboBus comparison summary.
+   - Next, add comparison tooling for checker-approved baseline-label and
+     `turbobus-daemon` paper-validation result files.
 
 ## Phase 0 Acceptance Criteria
 
@@ -475,6 +481,13 @@ Phase 0 is complete:
 - GPU tests are clearly marked and runnable on CUDA hardware.
 
 ## Latest Validation
+
+Phase 7 Cut 2 validation:
+
+- `python -m unittest test.python.e2e.test_phase7_result_check`
+- `python -m py_compile benchmarks\phase7_result_check.py test\python\e2e\test_phase7_result_check.py`
+- `python benchmarks\phase7_result_check.py --help`
+- `git diff --check`
 
 Phase 7 Cut 1 validation:
 
