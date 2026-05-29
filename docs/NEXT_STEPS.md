@@ -60,7 +60,7 @@ Phase 6 is complete. Model loading, training-state offload, optimizer-state
 offload, and vLLM KV validation now share the same public client path and the
 same paper-validation correctness/performance report shape.
 
-Current item: Phase 7 Cut 4, server-side utilization and interference evidence.
+Current item: Phase 7 Cut 5, Phase 7 run-bundle pass/fail gate.
 
 ### Phase 3 Cut 1
 
@@ -443,7 +443,7 @@ Completed output:
 
 ## Phase 7 Current Work
 
-Current item: Phase 7 Cut 4, server-side utilization and interference evidence.
+Current item: Phase 7 Cut 5, Phase 7 run-bundle pass/fail gate.
 
 ### Phase 7 Cut 1
 
@@ -538,7 +538,7 @@ Completed output:
 
 ### Phase 7 Cut 4
 
-Status: current.
+Status: complete.
 
 - Add experiment-facing evidence for server-side utilization, relay impact,
   contention, and interference using daemon profile, audit, or validation
@@ -559,6 +559,45 @@ Expected output:
   daemon profile logs;
 - Phase 7 can audit whether observed speedups or slowdowns came from
   daemon-owned scheduling, relay admission, contention, or fallback behavior.
+
+Completed output:
+
+- added `benchmarks/phase7_evidence.py`, which consumes an accepted
+  paper-validation result, a daemon `PROFILE` payload or live daemon socket,
+  and optional Phase 7 comparison JSON;
+- the evidence report reruns the Phase 7 result checker and attaches
+  runtime transfer records, active resource usage, relay quota state, relay
+  staging records, audit records, job runtime state, fallback reasons, and
+  failure reasons to each metric when those daemon-owned records are present;
+- missing daemon trace evidence is reported as a machine-readable error;
+- the tool stays in experiment-facing benchmark code and does not create
+  scheduler plans, issue execution tickets, or select direct, relay, or pooled
+  paths;
+- added focused e2e tests for profile/audit attachment, missing daemon
+  evidence, checker rejection, and CLI JSON output.
+
+### Phase 7 Cut 5
+
+Status: current.
+
+- Add a run-bundle pass/fail gate that consumes the Phase 7 artifacts for one
+  server class: paper-validation result JSON, result-checker reports,
+  baseline-versus-TurboBus comparison JSON, daemon evidence JSON, and the
+  correctness-gate command outcomes when available.
+- The gate should verify that the bundle contains the required workload set,
+  policy labels, trace ids, comparison output, daemon profile evidence, and
+  real-workload evidence without requiring operators to inspect each file by
+  hand.
+- Keep the gate in benchmark or validation tooling. It must not create
+  scheduler plans, call worker execution directly, or introduce workload-side
+  target GPU, relay GPU, direct, relay, pooled, or mode controls.
+
+Expected output:
+
+- server operators can decide whether a 2 GPU, 4 GPU, or 8 GPU Phase 7 run is
+  accepted from one machine-readable bundle report;
+- Phase 7 can move from individual artifact checks toward a complete
+  paper-evaluation acceptance gate.
 
 ## Phase 0 Code Cuts
 

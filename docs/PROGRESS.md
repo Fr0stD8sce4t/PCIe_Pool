@@ -286,7 +286,7 @@ kind, job/session identity, and registered buffer identity for every workload.
 
 ## Next Work Items
 
-Current item: Phase 7 Cut 4, server-side utilization and interference evidence.
+Current item: Phase 7 Cut 5, Phase 7 run-bundle pass/fail gate.
 
 1. Shared schema layer.
    - Status: complete.
@@ -470,11 +470,21 @@ Current item: Phase 7 Cut 4, server-side utilization and interference evidence.
      split, fallback reason, and repeated-run p50/p99 fields when raw samples
      are available. It states that path split comes from daemon transfer
      receipts and does not imply application-side path selection.
-   - Current item: Phase 7 Cut 4, server-side utilization and interference
-     evidence.
-   - Next, attach daemon-side resource utilization, relay impact, contention,
-     fairness, fallback, and interference evidence to accepted Phase 7 results
-     without adding workload-side path controls.
+   - Cut 4 complete: added `benchmarks/phase7_evidence.py`, a standalone
+     experiment-facing evidence tool that consumes accepted paper-validation
+     result files, daemon `PROFILE` payloads or a live daemon socket, and
+     optional Phase 7 comparison JSON. The report reruns the Phase 7 result
+     checker and attaches runtime transfer records, active resource usage,
+     relay quota state, relay staging records, audit records, job runtime
+     state, fallback reasons, and failure reasons to each metric when those
+     daemon-owned records are present. Missing daemon trace evidence is
+     reported as a machine-readable error, and the tool does not create
+     scheduler plans, issue execution tickets, or select physical paths.
+   - Current item: Phase 7 Cut 5, Phase 7 run-bundle pass/fail gate.
+   - Next, add a run-bundle gate that consumes result-checker reports,
+     baseline-versus-TurboBus comparison JSON, daemon evidence JSON, and
+     correctness-gate outcomes for one server class without adding
+     workload-side path controls.
 
 ## Phase 0 Acceptance Criteria
 
@@ -491,6 +501,13 @@ Phase 0 is complete:
 - GPU tests are clearly marked and runnable on CUDA hardware.
 
 ## Latest Validation
+
+Phase 7 Cut 4 validation:
+
+- `python -m unittest test.python.e2e.test_phase7_evidence`
+- `python -m py_compile benchmarks\phase7_evidence.py test\python\e2e\test_phase7_evidence.py`
+- `python benchmarks\phase7_evidence.py --help`
+- `git diff --check`
 
 Phase 7 Cut 3 validation:
 
@@ -568,6 +585,9 @@ Remaining risk:
   model-loading, training-state offload, optimizer-state offload, and unified
   paper-validation output still need to be exercised on a CUDA server with a
   running TurboBus daemon.
+- Phase 7 Cut 4 evidence tooling is covered by local synthetic profile tests,
+  but real daemon profile and audit evidence still needs to be captured on the
+  2 GPU, 4 GPU, and 8 GPU CUDA servers.
 
 ## Upcoming Phases
 

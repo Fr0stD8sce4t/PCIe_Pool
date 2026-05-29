@@ -213,6 +213,26 @@ direct/relay path split, fallback reason, trace ids, and p50/p99 fields when
 the workload result contains repeated-run samples. It does not select direct,
 relay, or pooled paths.
 
+## Daemon Evidence
+
+Attach daemon-side profile, audit, resource-state, relay-impact, and
+interference evidence to every accepted result:
+
+```bash
+python benchmarks/phase7_evidence.py \
+  --result benchmarks/results/phase7/2gpu/turbobus-daemon/result.json \
+  --comparison benchmarks/results/phase7/2gpu/comparison.json \
+  --daemon-socket-path /tmp/turbobusd.sock \
+  --json-output benchmarks/results/phase7/2gpu/turbobus-daemon/evidence.json
+```
+
+If the daemon profile was captured separately, pass it with `--profile` instead
+of `--daemon-socket-path`. The evidence report reruns the Phase 7 result
+checker, reads daemon `PROFILE` state, and connects workload metrics to runtime
+transfer records, audit records, relay quotas, active resource usage, staging
+records, job runtime state, fallback reasons, and failure reasons. It does not
+create transfer plans and does not select physical paths.
+
 ## Pass/Fail Criteria
 
 A run passes only when:
@@ -223,6 +243,8 @@ A run passes only when:
 - `benchmarks/phase7_result_check.py` returns exit code 0;
 - baseline and `turbobus-daemon` pairs compare successfully with
   `benchmarks/phase7_compare.py`;
+- daemon-side profile evidence is attached successfully with
+  `benchmarks/phase7_evidence.py`;
 - `bytes_completed` equals `transfer_bytes` for every metric;
 - every metric is traceable from workload request to receipt, scheduler
   decision, topology snapshot, execution ticket, and path split;
