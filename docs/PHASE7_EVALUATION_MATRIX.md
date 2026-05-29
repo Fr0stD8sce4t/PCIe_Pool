@@ -194,6 +194,25 @@ ids, path split, byte-completion mismatches, fallback or failure state, and
 multi-job identity problems. It does not create transfer plans and does not
 touch scheduler or data-plane modules.
 
+## Comparison Summary
+
+After both the baseline-label run and the `turbobus-daemon` run pass the
+Phase 7 checker, compare their result JSON files:
+
+```bash
+python benchmarks/phase7_compare.py \
+  --baseline benchmarks/results/phase7/2gpu/paper-baseline/result.json \
+  --turbobus benchmarks/results/phase7/2gpu/turbobus-daemon/result.json \
+  --json-output benchmarks/results/phase7/2gpu/comparison.json
+```
+
+Repeat the same comparison for the 4 GPU and 8 GPU output directories. The
+comparison reads existing paper-validation output, reruns the Phase 7 checker
+for both inputs, and reports transfer time, throughput, bytes moved,
+direct/relay path split, fallback reason, trace ids, and p50/p99 fields when
+the workload result contains repeated-run samples. It does not select direct,
+relay, or pooled paths.
+
 ## Pass/Fail Criteria
 
 A run passes only when:
@@ -202,6 +221,8 @@ A run passes only when:
 - every workload has at least one `paper_metric` line;
 - no validation errors are present in the summary;
 - `benchmarks/phase7_result_check.py` returns exit code 0;
+- baseline and `turbobus-daemon` pairs compare successfully with
+  `benchmarks/phase7_compare.py`;
 - `bytes_completed` equals `transfer_bytes` for every metric;
 - every metric is traceable from workload request to receipt, scheduler
   decision, topology snapshot, execution ticket, and path split;

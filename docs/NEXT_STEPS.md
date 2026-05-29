@@ -60,7 +60,7 @@ Phase 6 is complete. Model loading, training-state offload, optimizer-state
 offload, and vLLM KV validation now share the same public client path and the
 same paper-validation correctness/performance report shape.
 
-Current item: Phase 7 Cut 3, baseline versus TurboBus comparison summary.
+Current item: Phase 7 Cut 4, server-side utilization and interference evidence.
 
 ### Phase 3 Cut 1
 
@@ -443,7 +443,7 @@ Completed output:
 
 ## Phase 7 Current Work
 
-Current item: Phase 7 Cut 3, baseline versus TurboBus comparison summary.
+Current item: Phase 7 Cut 4, server-side utilization and interference evidence.
 
 ### Phase 7 Cut 1
 
@@ -507,7 +507,7 @@ Completed output:
 
 ### Phase 7 Cut 3
 
-Status: current.
+Status: complete.
 
 - Add a comparison summary for Phase 7 result-checker-approved runs.
 - The summary should consume baseline-label and `turbobus-daemon` result JSON
@@ -522,6 +522,43 @@ Expected output:
 - server operators can compare baseline and TurboBus result files without
   manually reading each paper-validation JSON;
 - comparisons preserve trace ids and do not imply app-side path selection.
+
+Completed output:
+
+- added `benchmarks/phase7_compare.py`, which consumes checker-approved
+  baseline-label and `turbobus-daemon` paper-validation result files;
+- comparison output preserves receipt ids, decision ids, topology snapshot
+  ids, ticket ids, workload identity, bytes, timing, throughput, path split,
+  fallback reason, and repeated-run p50/p99 fields when raw samples are
+  available;
+- comparison output states that path split is read from daemon transfer
+  receipts and does not create or select transfer paths;
+- added focused e2e tests for valid comparisons, checker rejection, missing
+  workload matches, and CLI JSON output.
+
+### Phase 7 Cut 4
+
+Status: current.
+
+- Add experiment-facing evidence for server-side utilization, relay impact,
+  contention, and interference using daemon profile, audit, or validation
+  output that already exists.
+- The evidence should connect each accepted workload result to daemon-owned
+  resource state such as active H2D/D2H/P2P usage, relay staging, relay lease
+  use, audit records, fairness state, and failure or fallback reasons.
+- Keep the tooling in benchmark or validation code. Do not move comparison or
+  utilization logic into scheduler, daemon, worker, data-plane, or adapter
+  modules unless the Phase 7 evidence exposes a real missing production field.
+- Do not introduce workload-side target GPU, relay GPU, direct, relay, pooled,
+  or mode controls.
+
+Expected output:
+
+- server operators can attach daemon-side utilization and interference
+  evidence to Phase 7 checker and comparison outputs without manually reading
+  daemon profile logs;
+- Phase 7 can audit whether observed speedups or slowdowns came from
+  daemon-owned scheduling, relay admission, contention, or fallback behavior.
 
 ## Phase 0 Code Cuts
 

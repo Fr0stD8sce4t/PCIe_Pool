@@ -286,7 +286,7 @@ kind, job/session identity, and registered buffer identity for every workload.
 
 ## Next Work Items
 
-Current item: Phase 7 Cut 3, baseline versus TurboBus comparison summary.
+Current item: Phase 7 Cut 4, server-side utilization and interference evidence.
 
 1. Shared schema layer.
    - Status: complete.
@@ -462,9 +462,19 @@ Current item: Phase 7 Cut 3, baseline versus TurboBus comparison summary.
      machine-readable errors for missing ids, path split, completion mismatch,
      fallback/failure state, and multi-job identity problems, and exits nonzero
      on failure without touching scheduler or data-plane modules.
-   - Current item: Phase 7 Cut 3, baseline versus TurboBus comparison summary.
-   - Next, add comparison tooling for checker-approved baseline-label and
-     `turbobus-daemon` paper-validation result files.
+   - Cut 3 complete: added `benchmarks/phase7_compare.py`, a standalone
+     experiment-facing comparison tool for checker-approved baseline-label and
+     `turbobus-daemon` paper-validation result files. The report preserves
+     receipt ids, decision ids, topology snapshot ids, ticket ids, workload
+     identity, transfer time, throughput, bytes moved, direct/relay path
+     split, fallback reason, and repeated-run p50/p99 fields when raw samples
+     are available. It states that path split comes from daemon transfer
+     receipts and does not imply application-side path selection.
+   - Current item: Phase 7 Cut 4, server-side utilization and interference
+     evidence.
+   - Next, attach daemon-side resource utilization, relay impact, contention,
+     fairness, fallback, and interference evidence to accepted Phase 7 results
+     without adding workload-side path controls.
 
 ## Phase 0 Acceptance Criteria
 
@@ -481,6 +491,13 @@ Phase 0 is complete:
 - GPU tests are clearly marked and runnable on CUDA hardware.
 
 ## Latest Validation
+
+Phase 7 Cut 3 validation:
+
+- `python -m unittest test.python.e2e.test_phase7_compare`
+- `python -m py_compile benchmarks\phase7_compare.py test\python\e2e\test_phase7_compare.py`
+- `python benchmarks\phase7_compare.py --help`
+- `git diff --check`
 
 Phase 7 Cut 2 validation:
 
