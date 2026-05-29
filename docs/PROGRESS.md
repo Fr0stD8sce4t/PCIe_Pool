@@ -502,6 +502,15 @@ Current item: Phase 7 Cut 7, real-server execution and artifact ingestion.
      explicit gaps and next commands.
    - Current item: Phase 7 Cut 7, real-server execution and artifact
      ingestion.
+   - Cut 7 Substage 7.1 complete: added
+     `benchmarks/phase7_ingest_artifacts.py`, a standalone experiment-facing
+     manifest ingestion command. It updates one server-class entry at a time,
+     requires accepted bundle-gate entries to be explicit real server
+     artifacts, requires blocked or missing entries to carry a
+     hardware/environment gap and next command, reruns the acceptance inventory
+     after writing the manifest, and can write `acceptance-inventory.json`
+     without creating scheduler plans, issuing execution tickets, running
+     worker data movement, or selecting physical paths.
    - Next, run or ingest real Phase 7 server artifacts, update the acceptance
      manifest for each 2 GPU, 4 GPU, and 8 GPU server class, and produce
      `benchmarks/results/phase7/acceptance-inventory.json`.
@@ -521,6 +530,13 @@ Phase 0 is complete:
 - GPU tests are clearly marked and runnable on CUDA hardware.
 
 ## Latest Validation
+
+Phase 7 Cut 7 Substage 7.1 validation:
+
+- `python -m unittest test.python.e2e.test_phase7_ingest_artifacts`
+- `python -m py_compile benchmarks\phase7_ingest_artifacts.py test\python\e2e\test_phase7_ingest_artifacts.py`
+- `python benchmarks\phase7_ingest_artifacts.py --help`
+- `git diff --check`
 
 Phase 7 Cut 6 validation:
 
@@ -629,6 +645,9 @@ Remaining risk:
 - Phase 7 Cut 6 acceptance inventory is covered by local synthetic artifact
   tests, but the actual `acceptance-inventory.json` still needs to be produced
   from real 2 GPU, 4 GPU, and 8 GPU server manifests and bundle-gate outputs.
+- Phase 7 Cut 7 Substage 7.1 manifest ingestion is covered by local synthetic
+  artifact tests, but real accepted entries still need to be ingested from
+  actual server bundle-gate outputs.
 
 ## Upcoming Phases
 

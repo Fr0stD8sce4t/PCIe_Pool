@@ -256,6 +256,39 @@ have not been converted into JSON yet; omitted correctness is reported as a
 warning, not silently accepted. Repeat the same command shape for 4 GPU and
 8 GPU runs by changing paths and `--server-class`.
 
+## Artifact Ingestion
+
+Use the ingestion helper to update the acceptance manifest from each real
+server bundle. Accepted entries must be marked as real server artifacts:
+
+```bash
+python benchmarks/phase7_ingest_artifacts.py \
+  --manifest benchmarks/results/phase7/acceptance-manifest.json \
+  --server-class 2gpu \
+  --status accepted \
+  --bundle-gate benchmarks/results/phase7/2gpu/bundle-gate.json \
+  --real-artifacts \
+  --inventory-output benchmarks/results/phase7/acceptance-inventory.json
+```
+
+For an unavailable server class or missing prerequisite, record the explicit
+gap and the command needed to close it:
+
+```bash
+python benchmarks/phase7_ingest_artifacts.py \
+  --manifest benchmarks/results/phase7/acceptance-manifest.json \
+  --server-class 4gpu \
+  --status blocked \
+  --block-reason "4 GPU CUDA server is not currently available" \
+  --environment-gap hardware_unavailable \
+  --next-command "run the Phase 7 matrix, bundle gate, and artifact ingestion on a 4 GPU CUDA server" \
+  --allow-incomplete-inventory
+```
+
+The ingestion helper writes the manifest and reruns the acceptance inventory
+over existing artifacts. It does not run workloads, create transfer plans,
+issue execution tickets, or select physical paths.
+
 ## Acceptance Inventory
 
 After each server class has either an accepted bundle gate or a recorded

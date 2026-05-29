@@ -661,6 +661,39 @@ Completed output:
 
 Status: current.
 
+Substage 7.1: artifact ingestion manifest updater.
+
+Status: complete.
+
+- Add a command that ingests one server class at a time into the Phase 7
+  acceptance manifest.
+- Accepted entries must point at an existing bundle-gate JSON and must be
+  explicitly marked as real server artifacts.
+- Blocked or missing entries must carry an explicit hardware/environment gap
+  and next operator command.
+- The command must rerun the acceptance inventory after writing the manifest
+  and optionally write `acceptance-inventory.json`.
+- Keep this as experiment-facing benchmark tooling only; do not add workload
+  route controls or core benchmark APIs.
+
+Completed output:
+
+- added `benchmarks/phase7_ingest_artifacts.py`, which updates
+  `acceptance-manifest.json` for one server class, validates accepted
+  bundle-gate inputs, validates blocked/missing gap fields, and reruns
+  `phase7_acceptance_inventory.py`;
+- the ingest tool can write `acceptance-inventory.json` and can explicitly
+  allow incomplete inventory while operators are still collecting remaining
+  server classes;
+- added focused e2e tests for accepted bundle ingestion, missing real-artifact
+  flags, malformed blocked entries, incremental incomplete manifests, and CLI
+  JSON output;
+- updated the Phase 7 matrix with accepted and blocked ingestion commands.
+
+Substage 7.2: real server bundle ingestion.
+
+Status: current.
+
 - Run or ingest real server artifacts for the required 2 GPU, 4 GPU, and
   8 GPU server classes using the matrix, checker, comparison, evidence,
   bundle-gate, and acceptance-inventory tools.
