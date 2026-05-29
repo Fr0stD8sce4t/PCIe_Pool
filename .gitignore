@@ -58,6 +58,7 @@ env/
 # Editor and OS files
 .idea/
 .vscode/
+.codegraph/
 *.swp
 *.swo
 .DS_Store
