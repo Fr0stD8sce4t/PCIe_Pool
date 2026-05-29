@@ -690,7 +690,37 @@ Completed output:
   JSON output;
 - updated the Phase 7 matrix with accepted and blocked ingestion commands.
 
-Substage 7.2: real server bundle ingestion.
+Substage 7.2: server run chain command.
+
+Status: complete.
+
+- Add one server-side command that runs the existing Phase 7 artifact chain
+  for one server class.
+- The command should run baseline-label paper validation, TurboBus paper
+  validation, result checks, comparison, daemon evidence, bundle gate, and
+  acceptance manifest ingestion in order.
+- It must keep policy labels as experiment metadata and must not expose
+  workload-side target GPU, relay GPU, direct, relay, pooled, or mode controls.
+- It must support dry-run command-plan output for local validation without
+  pretending to produce real CUDA/vLLM artifacts.
+
+Completed output:
+
+- added `benchmarks/phase7_server_run.py`, which builds and optionally
+  executes the full server-class artifact chain:
+  `paper_validation.py`, `phase7_result_check.py`, `phase7_compare.py`,
+  `phase7_evidence.py`, `phase7_bundle_gate.py`, and
+  `phase7_ingest_artifacts.py`;
+- dry-run output records every command and expected artifact path without
+  running workloads;
+- the generated workload commands submit public daemon-first workload requests
+  and do not include target GPU, relay GPU, direct/relay/pool, or mode
+  controls;
+- added focused e2e tests for command-plan shape, saved-profile evidence,
+  complete-inventory behavior, CLI dry-run output, and required vLLM model
+  validation.
+
+Substage 7.3: real server artifact execution and ingestion.
 
 Status: current.
 

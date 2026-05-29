@@ -511,6 +511,15 @@ Current item: Phase 7 Cut 7, real-server execution and artifact ingestion.
      after writing the manifest, and can write `acceptance-inventory.json`
      without creating scheduler plans, issuing execution tickets, running
      worker data movement, or selecting physical paths.
+   - Cut 7 Substage 7.2 complete: added
+     `benchmarks/phase7_server_run.py`, a server-side Phase 7 artifact-chain
+     command that runs baseline-label paper validation, TurboBus paper
+     validation, result checks, comparison, daemon evidence, bundle gate, and
+     acceptance manifest ingestion for one server class. Its dry-run mode
+     emits the full command plan and expected artifact paths for local
+     validation, and the generated workload commands do not include
+     application-side target GPU, relay GPU, direct/relay/pool, or mode
+     controls.
    - Next, run or ingest real Phase 7 server artifacts, update the acceptance
      manifest for each 2 GPU, 4 GPU, and 8 GPU server class, and produce
      `benchmarks/results/phase7/acceptance-inventory.json`.
@@ -536,6 +545,13 @@ Phase 7 Cut 7 Substage 7.1 validation:
 - `python -m unittest test.python.e2e.test_phase7_ingest_artifacts`
 - `python -m py_compile benchmarks\phase7_ingest_artifacts.py test\python\e2e\test_phase7_ingest_artifacts.py`
 - `python benchmarks\phase7_ingest_artifacts.py --help`
+- `git diff --check`
+
+Phase 7 Cut 7 Substage 7.2 validation:
+
+- `python -m unittest test.python.e2e.test_phase7_server_run`
+- `python -m py_compile benchmarks\phase7_server_run.py test\python\e2e\test_phase7_server_run.py`
+- `python benchmarks\phase7_server_run.py --help`
 - `git diff --check`
 
 Phase 7 Cut 6 validation:
@@ -648,6 +664,9 @@ Remaining risk:
 - Phase 7 Cut 7 Substage 7.1 manifest ingestion is covered by local synthetic
   artifact tests, but real accepted entries still need to be ingested from
   actual server bundle-gate outputs.
+- Phase 7 Cut 7 Substage 7.2 server-run chain planning is covered by local
+  dry-run tests, but the command still needs to be executed on real 2 GPU,
+  4 GPU, and 8 GPU CUDA/vLLM servers.
 
 ## Upcoming Phases
 

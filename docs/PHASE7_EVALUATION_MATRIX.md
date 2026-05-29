@@ -256,6 +256,34 @@ have not been converted into JSON yet; omitted correctness is reported as a
 warning, not silently accepted. Repeat the same command shape for 4 GPU and
 8 GPU runs by changing paths and `--server-class`.
 
+## Server Run Chain
+
+After daemon startup and buffer registration, a server operator can run the
+full artifact chain for one server class with:
+
+```bash
+python benchmarks/phase7_server_run.py \
+  --server-class 2gpu \
+  --daemon-socket-path /tmp/turbobusd.sock \
+  --vllm-model <vllm-compatible-model> \
+  --vllm-enforce-eager
+```
+
+The command runs baseline-label paper validation, `turbobus-daemon` paper
+validation, result checks, comparison, daemon evidence, bundle gate, and
+acceptance manifest ingestion in order. Use `--dry-run --plan-output
+benchmarks/results/phase7/2gpu/run-plan.json` to inspect the command plan
+without running workloads.
+
+Repeat the same command shape for 4 GPU and 8 GPU systems by changing
+`--server-class`. The generated workload commands use registered buffer ids,
+policy labels, and the daemon socket; they do not include workload-side target
+GPU, relay GPU, direct, relay, pooled, or mode controls.
+
+While collecting one server class before the other required classes are
+recorded, pass `--allow-incomplete-inventory`. Omit that flag for the final
+Phase 7 acceptance run so missing server classes still fail the inventory.
+
 ## Artifact Ingestion
 
 Use the ingestion helper to update the acceptance manifest from each real
