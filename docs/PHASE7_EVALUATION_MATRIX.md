@@ -256,6 +256,58 @@ have not been converted into JSON yet; omitted correctness is reported as a
 warning, not silently accepted. Repeat the same command shape for 4 GPU and
 8 GPU runs by changing paths and `--server-class`.
 
+## Acceptance Inventory
+
+After each server class has either an accepted bundle gate or a recorded
+hardware/environment gap, write an acceptance manifest and build the final
+Phase 7 inventory:
+
+```json
+{
+  "server_classes": [
+    {
+      "server_class": "2gpu",
+      "status": "accepted",
+      "real_artifacts": true,
+      "bundle_gate": "2gpu/bundle-gate.json"
+    },
+    {
+      "server_class": "4gpu",
+      "status": "blocked",
+      "block_reason": "4 GPU CUDA server is not available",
+      "environment_gaps": ["hardware_unavailable"],
+      "next_commands": [
+        "run paper_validation, phase7_result_check, phase7_compare, phase7_evidence, and phase7_bundle_gate on a 4 GPU CUDA server"
+      ]
+    },
+    {
+      "server_class": "8gpu",
+      "status": "blocked",
+      "block_reason": "8 GPU server is missing native CUDA/vLLM prerequisites",
+      "environment_gaps": ["native_cuda_or_vllm_missing"],
+      "next_commands": [
+        "install native CUDA extension and vLLM, then run the 8 GPU Phase 7 bundle gate sequence"
+      ]
+    }
+  ]
+}
+```
+
+Store the manifest beside the server artifacts, for example
+`benchmarks/results/phase7/acceptance-manifest.json`, then run:
+
+```bash
+python benchmarks/phase7_acceptance_inventory.py \
+  --manifest benchmarks/results/phase7/acceptance-manifest.json \
+  --json-output benchmarks/results/phase7/acceptance-inventory.json
+```
+
+The inventory reads existing result-check, comparison, daemon-evidence,
+bundle-gate, and correctness artifacts only. It fails if no accepted
+real-server bundle contains the vLLM KV workload, or if any required server
+class is missing without an explicit hardware/environment gap and next
+commands.
+
 ## Pass/Fail Criteria
 
 A run passes only when:
@@ -269,6 +321,8 @@ A run passes only when:
 - daemon-side profile evidence is attached successfully with
   `benchmarks/phase7_evidence.py`;
 - the server-class artifact set passes `benchmarks/phase7_bundle_gate.py`;
+- `benchmarks/phase7_acceptance_inventory.py` reports at least one accepted
+  real-server vLLM KV bundle and explicit gaps for missing server classes;
 - `bytes_completed` equals `transfer_bytes` for every metric;
 - every metric is traceable from workload request to receipt, scheduler
   decision, topology snapshot, execution ticket, and path split;

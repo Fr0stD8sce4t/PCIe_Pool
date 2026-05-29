@@ -286,7 +286,7 @@ kind, job/session identity, and registered buffer identity for every workload.
 
 ## Next Work Items
 
-Current item: Phase 7 Cut 6, server-run artifact collection and final acceptance audit.
+Current item: Phase 7 Cut 7, real-server execution and artifact ingestion.
 
 1. Shared schema layer.
    - Status: complete.
@@ -491,11 +491,20 @@ Current item: Phase 7 Cut 6, server-run artifact collection and final acceptance
      presence. It reports omitted correctness artifacts as warnings and does
      not create scheduler plans, issue execution tickets, run worker data
      movement, or select physical paths.
-   - Current item: Phase 7 Cut 6, server-run artifact collection and final
-     acceptance audit.
-   - Next, collect or define the final server-run artifact layout for 2 GPU,
-     4 GPU, and 8 GPU systems and record which bundles are accepted versus
-     blocked by real hardware or environment gaps.
+   - Cut 6 complete: added `benchmarks/phase7_acceptance_inventory.py`, a
+     standalone experiment-facing acceptance inventory that consumes a
+     server-class manifest and existing bundle-gate outputs for 2 GPU, 4 GPU,
+     and 8 GPU systems. It records accepted real-server bundles, explicit
+     hardware/environment gaps, next operator commands, and remaining
+     server-only risks. It fails when no accepted real-artifact bundle contains
+     vLLM KV, when accepted entries are not marked as real artifacts, when
+     bundle gates are missing or failed, or when missing server classes lack
+     explicit gaps and next commands.
+   - Current item: Phase 7 Cut 7, real-server execution and artifact
+     ingestion.
+   - Next, run or ingest real Phase 7 server artifacts, update the acceptance
+     manifest for each 2 GPU, 4 GPU, and 8 GPU server class, and produce
+     `benchmarks/results/phase7/acceptance-inventory.json`.
 
 ## Phase 0 Acceptance Criteria
 
@@ -512,6 +521,13 @@ Phase 0 is complete:
 - GPU tests are clearly marked and runnable on CUDA hardware.
 
 ## Latest Validation
+
+Phase 7 Cut 6 validation:
+
+- `python -m unittest test.python.e2e.test_phase7_acceptance_inventory`
+- `python -m py_compile benchmarks\phase7_acceptance_inventory.py test\python\e2e\test_phase7_acceptance_inventory.py`
+- `python benchmarks\phase7_acceptance_inventory.py --help`
+- `git diff --check`
 
 Phase 7 Cut 5 validation:
 
@@ -610,6 +626,9 @@ Remaining risk:
   but actual accepted bundle reports still need to be produced from real
   paper-validation, comparison, evidence, and correctness artifacts on CUDA
   servers.
+- Phase 7 Cut 6 acceptance inventory is covered by local synthetic artifact
+  tests, but the actual `acceptance-inventory.json` still needs to be produced
+  from real 2 GPU, 4 GPU, and 8 GPU server manifests and bundle-gate outputs.
 
 ## Upcoming Phases
 

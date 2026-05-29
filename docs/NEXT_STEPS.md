@@ -60,7 +60,7 @@ Phase 6 is complete. Model loading, training-state offload, optimizer-state
 offload, and vLLM KV validation now share the same public client path and the
 same paper-validation correctness/performance report shape.
 
-Current item: Phase 7 Cut 6, server-run artifact collection and final acceptance audit.
+Current item: Phase 7 Cut 7, real-server execution and artifact ingestion.
 
 ### Phase 3 Cut 1
 
@@ -443,7 +443,7 @@ Completed output:
 
 ## Phase 7 Current Work
 
-Current item: Phase 7 Cut 6, server-run artifact collection and final acceptance audit.
+Current item: Phase 7 Cut 7, real-server execution and artifact ingestion.
 
 ### Phase 7 Cut 1
 
@@ -619,7 +619,7 @@ Completed output:
 
 ### Phase 7 Cut 6
 
-Status: current.
+Status: complete.
 
 - Collect or define the final Phase 7 server-run artifact layout for 2 GPU,
   4 GPU, and 8 GPU systems, using the existing matrix, checker, comparison,
@@ -639,6 +639,51 @@ Expected output:
   missing real-server evidence, and remaining server-only risks;
 - the project can distinguish completed local tooling from unverified
   hardware experiment results without drifting back to MVP-style demos.
+
+Completed output:
+
+- added `benchmarks/phase7_acceptance_inventory.py`, which consumes a
+  server-class manifest and existing Phase 7 bundle-gate outputs for the
+  required 2 GPU, 4 GPU, and 8 GPU classes;
+- the inventory records accepted real-server bundles, blocked or missing
+  server classes, hardware/environment gaps, remaining server-only risks, and
+  next operator commands in one machine-readable report;
+- the inventory fails when no accepted real-artifact bundle contains the vLLM
+  KV workload, when an accepted bundle lacks `real_artifacts=true`, when a
+  bundle gate is missing or failed, or when a missing server class lacks an
+  explicit gap and next commands;
+- updated the Phase 7 evaluation matrix with the acceptance manifest shape and
+  `phase7_acceptance_inventory.py` command;
+- added focused e2e tests for accepted plus blocked server classes, missing
+  server entries, missing gaps, missing vLLM KV evidence, and CLI JSON output.
+
+### Phase 7 Cut 7
+
+Status: current.
+
+- Run or ingest real server artifacts for the required 2 GPU, 4 GPU, and
+  8 GPU server classes using the matrix, checker, comparison, evidence,
+  bundle-gate, and acceptance-inventory tools.
+- For each available server, collect real `paper-baseline` and
+  `turbobus-daemon` paper-validation results, checker reports, comparison
+  JSON, daemon evidence JSON, correctness JSON when available, and
+  bundle-gate JSON.
+- For each unavailable server class or missing native/CUDA/vLLM prerequisite,
+  update the acceptance manifest with an explicit hardware/environment gap and
+  the exact next server command needed to close it.
+- Stop Phase 7 only after the acceptance inventory has at least one accepted
+  real LLM framework bundle and all missing server classes are explicitly
+  recorded as hardware or environment gaps.
+- Do not add workload route controls or benchmark APIs to core modules.
+
+Expected output:
+
+- `benchmarks/results/phase7/acceptance-inventory.json` distinguishes accepted
+  real artifacts from blocked hardware or environment gaps;
+- Phase 7 pass/fail status is based on real server evidence rather than local
+  synthetic tooling tests;
+- remaining risks are limited to explicitly recorded server availability,
+  native build, CUDA, daemon, or vLLM prerequisites.
 
 ## Phase 0 Code Cuts
 
