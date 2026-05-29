@@ -60,8 +60,7 @@ Phase 6 is complete. Model loading, training-state offload, optimizer-state
 offload, and vLLM KV validation now share the same public client path and the
 same paper-validation correctness/performance report shape.
 
-Current item: Phase 7 Cut 1, evaluation matrix and server validation command
-inventory.
+Current item: Phase 7 Cut 2, paper-validation result checker.
 
 ### Phase 3 Cut 1
 
@@ -444,12 +443,11 @@ Completed output:
 
 ## Phase 7 Current Work
 
-Current item: Phase 7 Cut 1, evaluation matrix and server validation command
-inventory.
+Current item: Phase 7 Cut 2, paper-validation result checker.
 
 ### Phase 7 Cut 1
 
-Status: current.
+Status: complete.
 
 - Define the server evaluation matrix for 2, 4, and 8 GPU systems.
 - List the exact paper-validation commands for vLLM KV, model loading,
@@ -463,12 +461,41 @@ Status: current.
 - Keep Phase 7 planning and validation code as consumers of the public client
   API and existing paper-validation report schema.
 
+Completed output:
+
+- added `docs/PHASE7_EVALUATION_MATRIX.md` with daemon startup, 2 GPU/4 GPU/8
+  GPU experiment axes, single-job baseline and TurboBus commands, multi-job
+  vLLM KV fairness commands, correctness-gate commands, required trace fields,
+  and pass/fail criteria;
+- kept baseline and TurboBus comparison as benchmark policy labels and
+  preserved daemon-owned path selection;
+- fixed benchmark script import paths so documented commands can run from the
+  repository root without requiring manual `PYTHONPATH` setup;
+- added a focused CLI entrypoint test for the paper-validation,
+  model-loading, and training-offload benchmark scripts.
+
+### Phase 7 Cut 2
+
+Status: current.
+
+- Add a small result-checking command or helper for Phase 7 paper-validation
+  outputs.
+- The checker must consume existing paper-validation JSON or summary output
+  and validate the `phase6_unified_v1` trace contract across selected
+  workloads.
+- It must report missing receipt ids, decision ids, topology snapshot ids,
+  ticket ids, path split, completion mismatch, fallback/failure state, and
+  multi-job identity problems in machine-readable form.
+- Keep it outside core scheduling and data-plane modules; it may live under
+  `benchmarks/` or another experiment-facing path and must not become a
+  scheduler API.
+
 Expected output:
 
-- a server-run command matrix that can reproduce Phase 7 experiments without
-  changing benchmark or adapter APIs;
-- clear pass/fail criteria for paper evaluation traces and metrics;
-- no Phase 7 implementation should start before this current cut is completed.
+- server operators can verify Phase 7 result files after each run without
+  manually inspecting every `paper_metric` line;
+- the checker protects paper-evaluation traceability without adding physical
+  path controls.
 
 ## Phase 0 Code Cuts
 

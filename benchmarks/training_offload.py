@@ -4,8 +4,13 @@ import argparse
 import json
 from pathlib import Path
 import statistics
+import sys
 import time
 import uuid
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from turbobus import TurboBusClient, WorkloadKind
 from daemon_support import (

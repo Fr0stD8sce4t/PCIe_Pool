@@ -286,8 +286,7 @@ kind, job/session identity, and registered buffer identity for every workload.
 
 ## Next Work Items
 
-Current item: Phase 7 Cut 1, evaluation matrix and server validation command
-inventory.
+Current item: Phase 7 Cut 2, paper-validation result checker.
 
 1. Shared schema layer.
    - Status: complete.
@@ -449,11 +448,17 @@ inventory.
 
 15. Paper evaluation and hardening.
    - Status: current.
-   - Current item: Phase 7 Cut 1, evaluation matrix and server validation
-     command inventory.
-   - Next, define the server evaluation matrix and exact commands for
-     baseline policy versus daemon-scheduled TurboBus runs on 2, 4, and 8 GPU
-     systems.
+   - Cut 1 complete: added `docs/PHASE7_EVALUATION_MATRIX.md` with daemon
+     startup, 2 GPU/4 GPU/8 GPU experiment axes, single-job baseline and
+     TurboBus paper-validation commands, multi-job vLLM KV fairness commands,
+     correctness-gate commands, required trace fields, and pass/fail criteria.
+     The commands use registered buffer ids and benchmark policy labels; they
+     do not add application-side target GPU, relay GPU, mode, or path controls.
+     Benchmark CLI entrypoints now run from the repository root without manual
+     `PYTHONPATH` setup.
+   - Current item: Phase 7 Cut 2, paper-validation result checker.
+   - Next, add a result-checking command or helper that consumes existing
+     Phase 7 paper-validation output and validates the unified trace contract.
 
 ## Phase 0 Acceptance Criteria
 
@@ -470,6 +475,15 @@ Phase 0 is complete:
 - GPU tests are clearly marked and runnable on CUDA hardware.
 
 ## Latest Validation
+
+Phase 7 Cut 1 validation:
+
+- `python -m unittest test.python.e2e.test_benchmark_cli_entrypoints`
+- `python -m py_compile benchmarks\paper_validation.py benchmarks\model_loading.py benchmarks\training_offload.py test\python\e2e\test_benchmark_cli_entrypoints.py`
+- `python benchmarks\paper_validation.py --help`
+- `python benchmarks\model_loading.py --help`
+- `python benchmarks\training_offload.py --help`
+- `git diff --check`
 
 Phase 6 Cut 3 validation:
 
