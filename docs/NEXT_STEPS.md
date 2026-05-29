@@ -60,7 +60,7 @@ Phase 6 is complete. Model loading, training-state offload, optimizer-state
 offload, and vLLM KV validation now share the same public client path and the
 same paper-validation correctness/performance report shape.
 
-Current item: Phase 7 Cut 5, Phase 7 run-bundle pass/fail gate.
+Current item: Phase 7 Cut 6, server-run artifact collection and final acceptance audit.
 
 ### Phase 3 Cut 1
 
@@ -443,7 +443,7 @@ Completed output:
 
 ## Phase 7 Current Work
 
-Current item: Phase 7 Cut 5, Phase 7 run-bundle pass/fail gate.
+Current item: Phase 7 Cut 6, server-run artifact collection and final acceptance audit.
 
 ### Phase 7 Cut 1
 
@@ -578,7 +578,7 @@ Completed output:
 
 ### Phase 7 Cut 5
 
-Status: current.
+Status: complete.
 
 - Add a run-bundle pass/fail gate that consumes the Phase 7 artifacts for one
   server class: paper-validation result JSON, result-checker reports,
@@ -598,6 +598,47 @@ Expected output:
   accepted from one machine-readable bundle report;
 - Phase 7 can move from individual artifact checks toward a complete
   paper-evaluation acceptance gate.
+
+Completed output:
+
+- added `benchmarks/phase7_bundle_gate.py`, which consumes one server-class
+  bundle made from baseline and `turbobus-daemon` paper-validation results,
+  optional saved checker reports, comparison JSON, one or more daemon evidence
+  JSON files, and optional correctness-gate JSON;
+- the gate recomputes Phase 7 result checks from the source result files,
+  validates provided checker reports when present, enforces required workload
+  membership, policy labels, comparison coverage, daemon evidence coverage,
+  and vLLM KV real-workload presence;
+- correctness-gate artifacts are consumed when available and omitted
+  correctness is reported as a warning instead of silently disappearing;
+- the gate is experiment-facing benchmark tooling only. It does not create
+  scheduler plans, issue execution tickets, run worker data movement, or
+  select physical paths;
+- added focused e2e tests for complete bundles, missing vLLM workload,
+  stale checker reports, bad evidence, and CLI JSON output.
+
+### Phase 7 Cut 6
+
+Status: current.
+
+- Collect or define the final Phase 7 server-run artifact layout for 2 GPU,
+  4 GPU, and 8 GPU systems, using the existing matrix, checker, comparison,
+  evidence, and bundle-gate outputs.
+- Record which server classes have real artifacts, which are blocked by
+  unavailable hardware or missing native/CUDA/vLLM prerequisites, and which
+  commands operators must run next to close the evidence gap.
+- Do not mark Phase 7 complete until at least one real LLM framework path is
+  represented by accepted bundle-gate output and every missing server class is
+  recorded as an explicit hardware/environment gap.
+- Keep this work in benchmark/docs/evaluation artifacts. Do not add workload
+  route controls or core-module benchmark APIs.
+
+Expected output:
+
+- Phase 7 has a single acceptance inventory showing accepted bundles,
+  missing real-server evidence, and remaining server-only risks;
+- the project can distinguish completed local tooling from unverified
+  hardware experiment results without drifting back to MVP-style demos.
 
 ## Phase 0 Code Cuts
 

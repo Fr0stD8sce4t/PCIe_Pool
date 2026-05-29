@@ -233,6 +233,29 @@ transfer records, audit records, relay quotas, active resource usage, staging
 records, job runtime state, fallback reasons, and failure reasons. It does not
 create transfer plans and does not select physical paths.
 
+## Bundle Gate
+
+After the checker, comparison, evidence, and correctness artifacts are
+available for one server class, run the bundle gate:
+
+```bash
+python benchmarks/phase7_bundle_gate.py \
+  --server-class 2gpu \
+  --baseline-result benchmarks/results/phase7/2gpu/paper-baseline/result.json \
+  --turbobus-result benchmarks/results/phase7/2gpu/turbobus-daemon/result.json \
+  --baseline-check benchmarks/results/phase7/2gpu/paper-baseline/check.json \
+  --turbobus-check benchmarks/results/phase7/2gpu/turbobus-daemon/check.json \
+  --comparison benchmarks/results/phase7/2gpu/comparison.json \
+  --evidence benchmarks/results/phase7/2gpu/turbobus-daemon/evidence.json \
+  --correctness benchmarks/results/phase7/2gpu/correctness.json \
+  --json-output benchmarks/results/phase7/2gpu/bundle-gate.json
+```
+
+The `--correctness` artifact is optional when the server correctness commands
+have not been converted into JSON yet; omitted correctness is reported as a
+warning, not silently accepted. Repeat the same command shape for 4 GPU and
+8 GPU runs by changing paths and `--server-class`.
+
 ## Pass/Fail Criteria
 
 A run passes only when:
@@ -245,6 +268,7 @@ A run passes only when:
   `benchmarks/phase7_compare.py`;
 - daemon-side profile evidence is attached successfully with
   `benchmarks/phase7_evidence.py`;
+- the server-class artifact set passes `benchmarks/phase7_bundle_gate.py`;
 - `bytes_completed` equals `transfer_bytes` for every metric;
 - every metric is traceable from workload request to receipt, scheduler
   decision, topology snapshot, execution ticket, and path split;

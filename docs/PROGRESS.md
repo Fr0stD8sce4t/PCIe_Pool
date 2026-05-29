@@ -286,7 +286,7 @@ kind, job/session identity, and registered buffer identity for every workload.
 
 ## Next Work Items
 
-Current item: Phase 7 Cut 5, Phase 7 run-bundle pass/fail gate.
+Current item: Phase 7 Cut 6, server-run artifact collection and final acceptance audit.
 
 1. Shared schema layer.
    - Status: complete.
@@ -480,11 +480,22 @@ Current item: Phase 7 Cut 5, Phase 7 run-bundle pass/fail gate.
      daemon-owned records are present. Missing daemon trace evidence is
      reported as a machine-readable error, and the tool does not create
      scheduler plans, issue execution tickets, or select physical paths.
-   - Current item: Phase 7 Cut 5, Phase 7 run-bundle pass/fail gate.
-   - Next, add a run-bundle gate that consumes result-checker reports,
-     baseline-versus-TurboBus comparison JSON, daemon evidence JSON, and
-     correctness-gate outcomes for one server class without adding
-     workload-side path controls.
+   - Cut 5 complete: added `benchmarks/phase7_bundle_gate.py`, a standalone
+     experiment-facing run-bundle gate that consumes baseline and
+     `turbobus-daemon` paper-validation results, optional saved checker
+     reports, comparison JSON, one or more daemon evidence JSON files, and
+     optional correctness-gate JSON for one server class. The gate recomputes
+     result checks from source result files, validates provided checker reports
+     when present, enforces required workload membership, policy labels,
+     comparison coverage, daemon evidence coverage, and vLLM KV real-workload
+     presence. It reports omitted correctness artifacts as warnings and does
+     not create scheduler plans, issue execution tickets, run worker data
+     movement, or select physical paths.
+   - Current item: Phase 7 Cut 6, server-run artifact collection and final
+     acceptance audit.
+   - Next, collect or define the final server-run artifact layout for 2 GPU,
+     4 GPU, and 8 GPU systems and record which bundles are accepted versus
+     blocked by real hardware or environment gaps.
 
 ## Phase 0 Acceptance Criteria
 
@@ -501,6 +512,13 @@ Phase 0 is complete:
 - GPU tests are clearly marked and runnable on CUDA hardware.
 
 ## Latest Validation
+
+Phase 7 Cut 5 validation:
+
+- `python -m unittest test.python.e2e.test_phase7_bundle_gate`
+- `python -m py_compile benchmarks\phase7_bundle_gate.py test\python\e2e\test_phase7_bundle_gate.py`
+- `python benchmarks\phase7_bundle_gate.py --help`
+- `git diff --check`
 
 Phase 7 Cut 4 validation:
 
@@ -588,6 +606,10 @@ Remaining risk:
 - Phase 7 Cut 4 evidence tooling is covered by local synthetic profile tests,
   but real daemon profile and audit evidence still needs to be captured on the
   2 GPU, 4 GPU, and 8 GPU CUDA servers.
+- Phase 7 Cut 5 bundle gating is covered by local synthetic artifact tests,
+  but actual accepted bundle reports still need to be produced from real
+  paper-validation, comparison, evidence, and correctness artifacts on CUDA
+  servers.
 
 ## Upcoming Phases
 
