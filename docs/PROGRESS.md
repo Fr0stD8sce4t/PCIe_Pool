@@ -279,8 +279,7 @@ without adding target GPU, relay GPU, mode, or direct/relay/pool controls.
 
 ## Next Work Items
 
-Current item: Phase 6 Cut 2, workload-kind policy and optimizer-state
-coverage.
+Current item: Phase 6 Cut 3, unified correctness and performance report.
 
 1. Shared schema layer.
    - Status: complete.
@@ -427,11 +426,16 @@ coverage.
      paper validation report and validate Phase 6 workload identity,
      registered buffer identity, and workload kind without adding physical path
      controls.
-   - Current item: Phase 6 Cut 2, workload-kind policy and optimizer-state
-     coverage.
-   - Next, add focused scheduler and paper-validation tests showing
-     `model_weights`, `training_state`, and `optimizer_state` reach scheduling
-     policy metadata and report as distinct Phase 6 workload kinds.
+   - Cut 2 complete: added first-class `optimizer-offload` paper-validation
+     coverage that runs through the public training-offload benchmark path with
+     fixed `workload_kind=optimizer_state`; fixed `training-offload` paper
+     validation to represent `workload_kind=training_state`; added focused
+     scheduler tests proving `model_weights`, `training_state`, and
+     `optimizer_state` reach policy metadata and request charge accounting.
+   - Current item: Phase 6 Cut 3, unified correctness and performance report.
+   - Next, make paper validation report vLLM KV, model loading,
+     training-state offload, and optimizer-state offload through one shared
+     correctness and performance shape.
 
 ## Phase 0 Acceptance Criteria
 
@@ -448,6 +452,12 @@ Phase 0 is complete:
 - GPU tests are clearly marked and runnable on CUDA hardware.
 
 ## Latest Validation
+
+Phase 6 Cut 2 validation:
+
+- `python -m unittest test.python.e2e.test_paper_validation test.python.e2e.test_training_offload_benchmark test.python.unit.test_daemon_scheduler`
+- `python -m py_compile benchmarks\paper_validation.py benchmarks\training_offload.py test\python\e2e\test_paper_validation.py test\python\e2e\test_training_offload_benchmark.py test\python\unit\test_daemon_scheduler.py turbobus\scheduler\daemon.py`
+- `git diff --check`
 
 Phase 6 Cut 1 validation:
 
@@ -486,10 +496,10 @@ Remaining risk:
 - Phase 5 is complete in code and local non-GPU validation, but the single-job
   and multi-job vLLM KV paper-validation commands still need to be exercised on
   a CUDA server with vLLM installed and a TurboBus daemon running.
-- Phase 6 Cut 1 is complete. Optimizer-state offload still needs first-class
-  scheduler and paper-validation coverage in Cut 2, and Phase 6 server
-  validation still needs to be exercised on a CUDA server with a running
-  TurboBus daemon.
+- Phase 6 Cut 2 is complete. Unified correctness and performance reporting
+  across vLLM KV, model loading, training-state offload, and optimizer-state
+  offload still needs to be finished in Cut 3, and Phase 6 server validation
+  still needs to be exercised on a CUDA server with a running TurboBus daemon.
 
 ## Upcoming Phases
 

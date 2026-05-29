@@ -30,7 +30,6 @@ def make_args(**overrides):
         "active_buckets": None,
         "bucket_bytes": 8,
         "storage_layout": "packed",
-        "training_workload_kind": "training_state",
         "compute_delay_ms": 0.0,
         "keep_going": False,
         "output_dir": "benchmarks/results/paper_validation",
@@ -62,7 +61,7 @@ class PaperValidationTest(unittest.TestCase):
     def test_selected_workloads_expands_daemon_first_targets(self) -> None:
         self.assertEqual(
             paper_validation.selected_workloads("all"),
-            ["model-loading", "training-offload", "vllm-kv"],
+            ["model-loading", "training-offload", "optimizer-offload", "vllm-kv"],
         )
         self.assertEqual(
             paper_validation.selected_workloads("model-loading,vllm-kv"),
@@ -75,19 +74,28 @@ class PaperValidationTest(unittest.TestCase):
         args = make_args()
         with tempfile.TemporaryDirectory() as tmpdir:
             paths = paper_validation.output_paths(Path(tmpdir), "model-loading")
+            optimizer_paths = paper_validation.output_paths(Path(tmpdir), "optimizer-offload")
             vllm_paths = paper_validation.output_paths(Path(tmpdir), "vllm-kv")
             model = paper_validation.build_model_loading_command(args, paths)
             training = paper_validation.build_training_offload_command(args, paths)
+            optimizer = paper_validation.build_optimizer_offload_command(args, optimizer_paths)
             vllm = paper_validation.build_vllm_kv_command(args, vllm_paths)
 
         self.assertIn(str(BENCHMARKS / "model_loading.py"), model)
         self.assertIn(str(BENCHMARKS / "training_offload.py"), training)
+        self.assertIn(str(BENCHMARKS / "training_offload.py"), optimizer)
         self.assertIn(str(BENCHMARKS.parent / "examples" / "vllm_turbobus_kv_connector.py"), vllm)
         self.assertIn("--session-id", model)
         self.assertIn("--source-buffer-id", model)
         self.assertIn("--destination-buffer-id", model)
         self.assertIn("--cpu-buffer-id", training)
         self.assertIn("--gpu-buffer-id", training)
+        self.assertIn("--cpu-buffer-id", optimizer)
+        self.assertIn("--gpu-buffer-id", optimizer)
+        self.assertEqual(value_after(training, "--workload-kind"), "training_state")
+        self.assertEqual(value_after(optimizer, "--workload-kind"), "optimizer_state")
+        self.assertEqual(value_after(training, "--intent-prefix"), "training-offload")
+        self.assertEqual(value_after(optimizer, "--intent-prefix"), "optimizer-offload")
         self.assertIn("--cpu-buffer-id", vllm)
         self.assertIn("--gpu-buffer-id", vllm)
         self.assertIn("--restore-enabled", vllm)
@@ -97,6 +105,7 @@ class PaperValidationTest(unittest.TestCase):
         forbidden = {"--target-gpu", "--relay-gpus", "--mode", "--modes", "--min-pool-bytes"}
         self.assertTrue(forbidden.isdisjoint(model))
         self.assertTrue(forbidden.isdisjoint(training))
+        self.assertTrue(forbidden.isdisjoint(optimizer))
         self.assertTrue(forbidden.isdisjoint(vllm))
 
     def test_build_multi_job_vllm_commands_use_distinct_identity_without_physical_paths(self) -> None:
@@ -157,7 +166,7 @@ class PaperValidationTest(unittest.TestCase):
                 "session_id": "training-session",
                 "cpu_buffer_id": "cpu-buffer",
                 "gpu_buffer_id": "gpu-buffer",
-                "workload_kind": "optimizer_state",
+                "workload_kind": "training_state",
             },
             "summary": {
                 "iterations": 2,
@@ -191,9 +200,21 @@ class PaperValidationTest(unittest.TestCase):
                 },
             },
         }
+        optimizer = {
+            **training,
+            "config": {
+                **training["config"],
+                "job_id": "optimizer-job",
+                "workload_kind": "optimizer_state",
+            },
+        }
 
         model_metric = paper_validation.collect_model_metrics(model)[0]
         training_metric = paper_validation.collect_training_metrics(training)[0]
+        optimizer_metric = paper_validation.collect_training_metrics(
+            optimizer,
+            workload="optimizer-offload",
+        )[0]
 
         self.assertEqual(model_metric["ttft_proxy_ms"], 12.5)
         self.assertEqual(model_metric["job_id"], "model-job")
@@ -209,7 +230,8 @@ class PaperValidationTest(unittest.TestCase):
         self.assertEqual(training_metric["session_id"], "training-session")
         self.assertEqual(training_metric["cpu_buffer_id"], "cpu-buffer")
         self.assertEqual(training_metric["gpu_buffer_id"], "gpu-buffer")
-        self.assertEqual(training_metric["workload_kind"], "optimizer_state")
+        self.assertEqual(training_metric["workload"], "training-offload")
+        self.assertEqual(training_metric["workload_kind"], "training_state")
         self.assertEqual(training_metric["transfer_bytes"], 120)
         self.assertEqual(training_metric["direct_bytes"], 80)
         self.assertEqual(training_metric["relay_chunks"], 2)
@@ -218,6 +240,9 @@ class PaperValidationTest(unittest.TestCase):
             "prefetch-decision,offload-decision",
         )
         self.assertEqual(training_metric["fallback_reason"], "quota")
+        self.assertEqual(optimizer_metric["workload"], "optimizer-offload")
+        self.assertEqual(optimizer_metric["job_id"], "optimizer-job")
+        self.assertEqual(optimizer_metric["workload_kind"], "optimizer_state")
 
     def test_collect_vllm_kv_metrics_from_connector_summary(self) -> None:
         summary = {
@@ -349,10 +374,28 @@ class PaperValidationTest(unittest.TestCase):
                     }
                 ],
             )
+            optimizer_errors = paper_validation.phase6_workload_validation_errors(
+                "optimizer-offload",
+                data_path,
+                [
+                    {
+                        "workload": "optimizer-offload",
+                        "decision_ids": "decision-1",
+                        "topology_snapshot_ids": "topology-1",
+                        "ticket_ids": "ticket-1",
+                        "job_id": "job-1",
+                        "session_id": "session-1",
+                        "cpu_buffer_id": "cpu-buffer",
+                        "gpu_buffer_id": "gpu-buffer",
+                        "workload_kind": "training_state",
+                    }
+                ],
+            )
 
         self.assertIn("missing_source_buffer_id", model_errors)
         self.assertIn("invalid_model_loading_workload_kind", model_errors)
-        self.assertIn("invalid_training_workload_kind", training_errors)
+        self.assertIn("invalid_training_offload_workload_kind", training_errors)
+        self.assertIn("invalid_optimizer_offload_workload_kind", optimizer_errors)
 
     def test_collect_vllm_kv_metrics_reads_connector_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -418,7 +461,7 @@ class PaperValidationTest(unittest.TestCase):
             ):
                 result = paper_validation.run_validation(args)
 
-        self.assertEqual([item["status"] for item in result["workloads"]], ["dry-run"] * 3)
+        self.assertEqual([item["status"] for item in result["workloads"]], ["dry-run"] * 4)
         self.assertTrue(all(item["returncode"] == 0 for item in result["workloads"]))
         self.assertTrue(all(item["metrics"] == [] for item in result["workloads"]))
         self.assertEqual(result["workloads"][0]["data"], {})
@@ -457,6 +500,43 @@ class PaperValidationTest(unittest.TestCase):
             "validation_errors=missing_output_file,missing_paper_metrics",
             paper_validation.compact_summary(result),
         )
+
+    def test_run_validation_reports_training_and_optimizer_as_distinct_workloads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = make_args(
+                output_dir=tmpdir,
+                workloads="training-offload,optimizer-offload",
+                keep_going=True,
+            )
+
+            def fake_run(command):
+                workload_kind = value_after(command, "--workload-kind")
+                output_path = Path(value_after(command, "--json-output"))
+                output_path.write_text(
+                    json.dumps(training_output(workload_kind)),
+                    encoding="utf-8",
+                )
+                return paper_validation.subprocess.CompletedProcess(command, 0, "", "")
+
+            with mock.patch.object(paper_validation, "run_command", side_effect=fake_run):
+                result = paper_validation.run_validation(args)
+
+        self.assertEqual(
+            [item["workload"] for item in result["workloads"]],
+            ["training-offload", "optimizer-offload"],
+        )
+        self.assertEqual([item["status"] for item in result["workloads"]], ["ok", "ok"])
+        self.assertEqual(
+            [item["metrics"][0]["workload_kind"] for item in result["workloads"]],
+            ["training_state", "optimizer_state"],
+        )
+        self.assertEqual(result["workloads"][0]["metrics"][0]["workload"], "training-offload")
+        self.assertEqual(result["workloads"][1]["metrics"][0]["workload"], "optimizer-offload")
+        summary = paper_validation.compact_summary(result)
+        self.assertIn("paper_metric workload=training-offload", summary)
+        self.assertIn("paper_metric workload=optimizer-offload", summary)
+        self.assertIn("workload_kind=training_state", summary)
+        self.assertIn("workload_kind=optimizer_state", summary)
 
     def test_run_validation_collects_vllm_kv_log_and_writes_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -651,6 +731,50 @@ if __name__ == "__main__":
 
 def value_after(command: list[str], option: str) -> str:
     return command[command.index(option) + 1]
+
+
+def training_output(workload_kind: str) -> dict:
+    return {
+        "config": {
+            "policy": "daemon-default",
+            "job_id": "job-1",
+            "session_id": "session-1",
+            "cpu_buffer_id": "cpu-buffer",
+            "gpu_buffer_id": "gpu-buffer",
+            "workload_kind": workload_kind,
+        },
+        "summary": {
+            "iterations": 1,
+            "median_iteration_ms": 10.0,
+            "median_transfer_ms": 8.0,
+            "median_compute_ms": 2.0,
+            "median_gib_per_second": 1.0,
+            "prefetch": {
+                "bytes": 64,
+                "bytes_completed": 64,
+                "direct_bytes": 32,
+                "relay_bytes": 32,
+                "direct_chunks": 1,
+                "relay_chunks": 1,
+                "decision_ids": [f"{workload_kind}-prefetch-decision"],
+                "topology_snapshot_ids": ["topology-1"],
+                "ticket_ids": [f"{workload_kind}-prefetch-ticket"],
+                "fallback_reasons": [],
+            },
+            "offload": {
+                "bytes": 64,
+                "bytes_completed": 64,
+                "direct_bytes": 32,
+                "relay_bytes": 32,
+                "direct_chunks": 1,
+                "relay_chunks": 1,
+                "decision_ids": [f"{workload_kind}-offload-decision"],
+                "topology_snapshot_ids": ["topology-1"],
+                "ticket_ids": [f"{workload_kind}-offload-ticket"],
+                "fallback_reasons": [],
+            },
+        },
+    }
 
 
 def vllm_log_text(

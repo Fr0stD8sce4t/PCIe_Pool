@@ -104,6 +104,33 @@ class TrainingOffloadBenchmarkTest(unittest.TestCase):
         self.assertIn("prefetch_decision_id=decision-training-offload-run-1-measure-0-prefetch", summary)
         self.assertIn("offload_ticket_id=ticket-training-offload-run-1-measure-0-offload", summary)
 
+    def test_optimizer_state_workload_kind_is_preserved(self) -> None:
+        args = make_args(
+            "--workload-kind",
+            "optimizer_state",
+            "--bucket-count",
+            "1",
+            "--bucket-bytes",
+            "96",
+            "--iterations",
+            "1",
+            "--run-id",
+            "optimizer-run",
+        )
+        client = FakeClient()
+
+        result = training_offload.run_benchmark(args, client=client)
+
+        self.assertEqual(result["config"]["workload_kind"], "optimizer_state")
+        self.assertTrue(client.submitted)
+        for intent in client.submitted:
+            self.assertEqual(intent.workload_kind, WorkloadKind.OPTIMIZER_STATE)
+            self.assertEqual(intent.policy_hints, {})
+        summary = training_offload.compact_summary(result)
+        self.assertIn("workload_kind=optimizer_state", summary)
+        self.assertIn("training_prefetch_receipt", summary)
+        self.assertIn("training_offload_receipt", summary)
+
     def test_json_output_is_serializable_receipt_trace(self) -> None:
         args = make_args(
             "--bucket-count",

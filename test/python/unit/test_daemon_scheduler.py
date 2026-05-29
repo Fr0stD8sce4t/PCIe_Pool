@@ -211,6 +211,32 @@ class DaemonSchedulerTest(unittest.TestCase):
             policy["fairness_threshold_bytes"],
         )
 
+    def test_workload_kind_reaches_policy_metadata_with_charge_multiplier(self) -> None:
+        cases = (
+            (WorkloadKind.MODEL_WEIGHTS, 64.0),
+            (WorkloadKind.TRAINING_STATE, 80.0),
+            (WorkloadKind.OPTIMIZER_STATE, 80.0),
+        )
+        for workload_kind, expected_charge in cases:
+            with self.subTest(workload_kind=workload_kind.value):
+                scheduler = self.make_scheduler()
+                decision = scheduler.plan_transfer(
+                    session=self.make_session(),
+                    profile_entry=profile_entry(),
+                    relay_quotas={1: RelayQuota(relay_gpu=1, max_inflight_chunks=8)},
+                    total_bytes=64,
+                    chunk_bytes=16,
+                    mode=TransferMode.POOL,
+                    direction="h2d",
+                    workload_kind=workload_kind,
+                    priority=0,
+                    job_id=f"job-{workload_kind.value}",
+                )
+
+                policy = decision.metadata["policy"]
+                self.assertEqual(policy["workload_kind"], workload_kind.value)
+                self.assertEqual(policy["request_charge_bytes"], expected_charge)
+
     def test_missing_profile_returns_direct_fallback(self) -> None:
         scheduler = self.make_scheduler()
         session = self.make_session()

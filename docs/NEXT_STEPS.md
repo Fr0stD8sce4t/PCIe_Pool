@@ -53,7 +53,7 @@ Phase 5 is complete. vLLM KV save and restore now use the daemon-first
 single-job and concurrent multi-job trace output without application-side
 physical path selection.
 
-Current item: Phase 6 Cut 2, workload-kind policy and optimizer-state coverage.
+Current item: Phase 6 Cut 3, unified correctness and performance report.
 
 ### Phase 3 Cut 1
 
@@ -332,7 +332,7 @@ python benchmarks/paper_validation.py --workloads vllm-kv --session-id vllm-kv-p
 
 ## Phase 6 Current Work
 
-Current item: Phase 6 Cut 2, workload-kind policy and optimizer-state coverage.
+Current item: Phase 6 Cut 3, unified correctness and performance report.
 
 ### Phase 6 Cut 1
 
@@ -371,7 +371,7 @@ Completed output:
 
 ### Phase 6 Cut 2
 
-Status: current.
+Status: complete.
 
 - Add focused scheduler and paper-validation tests showing `model_weights`,
   `training_state`, and `optimizer_state` reach scheduling policy metadata.
@@ -388,6 +388,43 @@ Expected output:
   optimizer-state workload-kind evidence;
 - scheduler policy metadata exposes workload kind without letting applications
   choose physical paths.
+
+Completed output:
+
+- added `optimizer-offload` as a first-class paper-validation workload that
+  runs `benchmarks/training_offload.py` through the public client API with
+  fixed `workload_kind=optimizer_state`;
+- fixed `training-offload` paper validation to represent
+  `workload_kind=training_state` rather than using optimizer state as a
+  training-offload parameter variant;
+- gave training-state and optimizer-state paper-validation runs distinct
+  intent prefixes and output files while keeping physical paths controlled by
+  daemon scheduling;
+- added scheduler tests proving `model_weights`, `training_state`, and
+  `optimizer_state` reach policy metadata with the expected request charge;
+- added benchmark and paper-validation tests proving optimizer-state intent,
+  config, metrics, and summary output are preserved without target GPU, relay
+  GPU, mode, or pool controls.
+
+### Phase 6 Cut 3
+
+Status: current.
+
+- Add a shared paper-validation report shape across vLLM KV, model loading,
+  training state, and optimizer state.
+- Require receipt ids, decision ids, topology snapshot ids, ticket ids, bytes,
+  timing, path split, fallback reason, workload kind, job/session identity, and
+  registered buffer identity for every workload.
+- Keep paper validation as a consumer of public benchmark outputs, not a core
+  scheduling API.
+
+Expected output:
+
+- one paper-validation JSON and summary shape can compare vLLM KV,
+  model-loading, training-offload, and optimizer-offload evidence;
+- each workload report is auditable from public workload request to daemon
+  receipt and scheduled path split;
+- no benchmark or adapter gains physical path selection.
 
 ## Phase 0 Code Cuts
 

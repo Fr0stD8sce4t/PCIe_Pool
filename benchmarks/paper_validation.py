@@ -14,7 +14,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 BENCHMARKS = REPO_ROOT / "benchmarks"
 EXAMPLES = REPO_ROOT / "examples"
 
-WORKLOADS = ("model-loading", "training-offload", "vllm-kv")
+WORKLOADS = ("model-loading", "training-offload", "optimizer-offload", "vllm-kv")
+STATE_OFFLOAD_WORKLOAD_KINDS = {
+    "training-offload": "training_state",
+    "optimizer-offload": "optimizer_state",
+}
 
 
 def parse_csv(value: str) -> list[str]:
@@ -146,7 +150,20 @@ def build_model_loading_command(args, paths: dict[str, Path]) -> list[str]:
     return command
 
 
-def build_training_offload_command(args, paths: dict[str, Path]) -> list[str]:
+def state_offload_workload_kind(workload: str) -> str:
+    try:
+        return STATE_OFFLOAD_WORKLOAD_KINDS[workload]
+    except KeyError as exc:
+        raise ValueError(f"unsupported state offload workload: {workload}") from exc
+
+
+def build_training_offload_command(
+    args,
+    paths: dict[str, Path],
+    *,
+    workload: str = "training-offload",
+) -> list[str]:
+    workload_kind = state_offload_workload_kind(workload)
     command = [
         sys.executable,
         str(BENCHMARKS / "training_offload.py"),
@@ -159,7 +176,7 @@ def build_training_offload_command(args, paths: dict[str, Path]) -> list[str]:
         "--gpu-buffer-id",
         args.gpu_buffer_id,
         "--workload-kind",
-        args.training_workload_kind,
+        workload_kind,
         "--bucket-count",
         str(args.bucket_count),
         "--bucket-bytes",
@@ -178,6 +195,8 @@ def build_training_offload_command(args, paths: dict[str, Path]) -> list[str]:
         args.policy,
         "--run-id",
         args.run_id,
+        "--intent-prefix",
+        workload,
         "--json-output",
         str(paths["json"]),
         "--summary-output",
@@ -188,6 +207,10 @@ def build_training_offload_command(args, paths: dict[str, Path]) -> list[str]:
         command.extend(["--active-buckets", str(args.active_buckets)])
     command.extend(daemon_command_args(args))
     return command
+
+
+def build_optimizer_offload_command(args, paths: dict[str, Path]) -> list[str]:
+    return build_training_offload_command(args, paths, workload="optimizer-offload")
 
 
 def build_vllm_kv_command(args, paths: dict[str, Path]) -> list[str]:
@@ -250,7 +273,9 @@ def build_workload_command(args, workload: str, paths: dict[str, Path]) -> list[
     if workload == "model-loading":
         return build_model_loading_command(args, paths)
     if workload == "training-offload":
-        return build_training_offload_command(args, paths)
+        return build_training_offload_command(args, paths, workload=workload)
+    if workload == "optimizer-offload":
+        return build_optimizer_offload_command(args, paths)
     if workload == "vllm-kv":
         return build_vllm_kv_command(args, paths)
     raise ValueError(f"unsupported workload: {workload}")
@@ -420,7 +445,11 @@ def transfer_side_summary(summary: dict, side: str) -> dict:
     return summary.get(side, {}) or {}
 
 
-def collect_training_metrics(result: dict) -> list[dict[str, object]]:
+def collect_training_metrics(
+    result: dict,
+    *,
+    workload: str = "training-offload",
+) -> list[dict[str, object]]:
     summary = result.get("summary", {}) or {}
     if not summary:
         return []
@@ -433,7 +462,7 @@ def collect_training_metrics(result: dict) -> list[dict[str, object]]:
     relay_chunks = as_int(prefetch.get("relay_chunks")) + as_int(offload.get("relay_chunks"))
     return [
         {
-            "workload": "training-offload",
+            "workload": workload,
             "policy": str(config.get("policy", "")),
             "job_id": str(config.get("job_id", "")),
             "session_id": str(config.get("session_id", "")),
@@ -537,8 +566,8 @@ def collect_workload_metrics(workload: str, paths: dict[str, Path]) -> tuple[obj
     data = read_json(paths["json"], {})
     if workload == "model-loading":
         return data, collect_model_metrics(data)
-    if workload == "training-offload":
-        return data, collect_training_metrics(data)
+    if workload in STATE_OFFLOAD_WORKLOAD_KINDS:
+        return data, collect_training_metrics(data, workload=workload)
     if workload == "vllm-kv":
         if not data:
             data = parse_vllm_kv_summary(paths["log"])
@@ -601,7 +630,7 @@ def phase6_workload_validation_errors(workload: str, data_path: Path, metrics: l
         return errors
     expected_kind = {
         "model-loading": "model_weights",
-        "training-offload": None,
+        **STATE_OFFLOAD_WORKLOAD_KINDS,
     }.get(workload)
     for metric in metrics:
         for field in ("job_id", "session_id", "workload_kind"):
@@ -611,12 +640,10 @@ def phase6_workload_validation_errors(workload: str, data_path: Path, metrics: l
             for field in ("source_buffer_id", "destination_buffer_id"):
                 if not metric.get(field):
                     errors.append(f"missing_{field}")
-        if workload == "training-offload":
+        if workload in STATE_OFFLOAD_WORKLOAD_KINDS:
             for field in ("cpu_buffer_id", "gpu_buffer_id"):
                 if not metric.get(field):
                     errors.append(f"missing_{field}")
-            if metric.get("workload_kind") not in ("training_state", "optimizer_state"):
-                errors.append("invalid_training_workload_kind")
         if expected_kind is not None and metric.get("workload_kind") != expected_kind:
             errors.append(f"invalid_{workload.replace('-', '_')}_workload_kind")
     return sorted(set(errors), key=errors.index)
@@ -969,7 +996,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--workloads",
         default="all",
-        help="Comma-separated: all, model-loading, training-offload, vllm-kv",
+        help="Comma-separated: all, model-loading, training-offload, optimizer-offload, vllm-kv",
     )
     parser.add_argument("--session-id", required=True)
     parser.add_argument("--job-id", default="paper-validation")
@@ -984,11 +1011,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--active-buckets", type=int)
     parser.add_argument("--bucket-bytes", type=int, default=32 * 1024 * 1024)
     parser.add_argument("--storage-layout", choices=["packed", "separate"], default="packed")
-    parser.add_argument(
-        "--training-workload-kind",
-        choices=["training_state", "optimizer_state"],
-        default="training_state",
-    )
     parser.add_argument("--compute-delay-ms", type=float, default=0.0)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--keep-going", action="store_true")

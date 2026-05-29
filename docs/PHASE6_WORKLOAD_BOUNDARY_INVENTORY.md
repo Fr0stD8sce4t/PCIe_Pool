@@ -80,16 +80,23 @@ Scheduler policy input:
 - Made paper validation reject missing Phase 6 workload identity or workload
   kind fields for model-loading and training-offload.
 
+## Completed In Cut 2
+
+- Added `optimizer-offload` as a first-class paper-validation workload that
+  invokes `benchmarks/training_offload.py` through the public client API with
+  fixed `workload_kind=optimizer_state`.
+- Fixed `training-offload` paper validation to represent
+  `workload_kind=training_state` instead of letting optimizer state appear as a
+  training-offload alias.
+- Added distinct intent prefixes and output files for training-state and
+  optimizer-state validation runs.
+- Added focused scheduler coverage showing `model_weights`, `training_state`,
+  and `optimizer_state` reach policy metadata and request charge accounting.
+- Added benchmark and paper-validation tests showing optimizer-state intent,
+  config, metrics, and summary output are preserved without target GPU, relay
+  GPU, mode, or pool controls.
+
 ## Remaining Phase 6 Cuts
-
-Cut 2: workload-kind policy and optimizer-state coverage.
-
-- Add focused scheduler and paper-validation tests showing `model_weights`,
-  `training_state`, and `optimizer_state` reach scheduling policy metadata.
-- Ensure optimizer-state benchmark runs are validated as first-class Phase 6
-  outputs, not as a training-state alias.
-- Keep workload kind as scheduler input only; do not add path selection to
-  adapters or benchmarks.
 
 Cut 3: unified correctness and performance report.
 
