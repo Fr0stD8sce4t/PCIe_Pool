@@ -40,7 +40,7 @@ example entry points.
 | Current tests | What they exercise today | Phase 0 target |
 | --- | --- | --- |
 | `test/python/test_runtime_handle.py` | Local runtime mode resolution, daemon fallback, runtime facade details | Replace public-path tests with daemon-first client API tests; keep exact-plan backend behavior as internal data-plane tests. |
-| `test/python/test_transfer.py` | `TransferRequest` and `TransferMode` shaped request validation | Replace or extend with `TransferIntent` validation. |
+| `test/python/test_transfer.py` | `TransferRequest` and `TransferMode` shaped request validation | Removed after daemon-first `TransferIntent` schema coverage replaced this old route-shaped test surface. |
 | `test/python/test_schema.py` | Existing daemon, buffer, lease, and worker request shapes | Add schema tests for `BufferHandle`, `TransferIntent`, `TopologySnapshot`, `SchedulingDecision`, `ExecutionTicket`, and `TransferReceipt`. |
 | `test/python/test_daemon_state.py` | Daemon sessions, static relay configuration, profiles, reservations, leases, worker authorization | Split into control-plane integration tests and scheduler/ticket unit tests. Synthetic topology must be explicit fixture data. |
 | `test/python/test_daemon_socket.py` | Socket protocol using relay-shaped session and profile calls | Rewrite around intent/decision/ticket protocol. |

@@ -520,6 +520,14 @@ Current item: Phase 7 Cut 7, real-server execution and artifact ingestion.
      validation, and the generated workload commands do not include
      application-side target GPU, relay GPU, direct/relay/pool, or mode
      controls.
+   - Cut 7 Substage 7.2a complete: removed old MVP test entries that preserved
+     application-side route selection. `test/python/unit/test_transfer.py` is
+     gone because it only validated `TransferRequest` mode-shaped payloads, and
+     `test/cpp/bench_pool_bandwidth.cu` plus its CMake target are gone because
+     it was a manual direct/relay/pool benchmark under the test tree.
+     Scheduler, worker, backend, and verification tests that protect daemon
+     decisions, `ExecutionTicket` enforcement, exact-plan execution, and
+     receipt traceability remain.
    - Next, run or ingest real Phase 7 server artifacts, update the acceptance
      manifest for each 2 GPU, 4 GPU, and 8 GPU server class, and produce
      `benchmarks/results/phase7/acceptance-inventory.json`.
@@ -539,6 +547,12 @@ Phase 0 is complete:
 - GPU tests are clearly marked and runnable on CUDA hardware.
 
 ## Latest Validation
+
+Phase 7 Cut 7 Substage 7.2a validation:
+
+- `python -m unittest test.python.unit.test_contract_schema test.python.unit.test_public_client_api test.python.unit.test_daemon_scheduler`
+- `python -m compileall turbobus test`
+- `git diff --check`
 
 Phase 7 Cut 7 Substage 7.1 validation:
 

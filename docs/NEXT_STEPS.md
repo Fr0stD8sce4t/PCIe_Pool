@@ -720,6 +720,27 @@ Completed output:
   complete-inventory behavior, CLI dry-run output, and required vLLM model
   validation.
 
+Substage 7.2a: MVP test cleanup.
+
+Status: complete.
+
+- Remove tests and test-build targets that only preserve the old MVP
+  application-side route-selection surface.
+- Keep scheduler, worker, backend, and verification tests that protect
+  daemon-owned decisions, `ExecutionTicket` enforcement, exact-plan data-plane
+  execution, and receipt traceability.
+- Do not add temporary server experiment checks under `test/`; put Phase 7
+  run artifacts under `benchmarks/results/phase7/`.
+
+Completed output:
+
+- removed `test/python/unit/test_transfer.py`, which only validated the old
+  `TransferRequest` request shape with direct, relay, and pool mode fields;
+- removed `test/cpp/bench_pool_bandwidth.cu` and its CMake target because it
+  was a manual direct/relay/pool comparison benchmark under the test tree;
+- retained internal planner and native executor tests that still protect
+  daemon-scheduler planning primitives or ticketed data-plane behavior.
+
 Substage 7.3: real server artifact execution and ingestion.
 
 Status: current.

@@ -26,6 +26,3 @@ target_link_libraries(test_profiler PRIVATE turbobus_core)
 
 add_executable(test_p2p_matrix test_p2p_matrix.cu)
 target_link_libraries(test_p2p_matrix PRIVATE turbobus_core)
-
-add_executable(bench_pool_bandwidth bench_pool_bandwidth.cu)
-target_link_libraries(bench_pool_bandwidth PRIVATE turbobus_core)
